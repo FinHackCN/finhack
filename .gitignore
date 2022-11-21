@@ -1,0 +1,8 @@
+config/*.conf
+cache/
+data/
+__pycache__/
+*.swp
+nohup.out
+factors/namespace/
+*.zip
