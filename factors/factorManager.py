@@ -1,18 +1,32 @@
 import os
 import re
+import time
+import sys
+import datetime
+import hashlib
+import threading
+import pandas as pd
+import numpy as np
+import traceback
 from library.mydb import mydb
+from pandarallel import pandarallel
+sys.path.append("..")
+
+from concurrent.futures import ThreadPoolExecutor,ProcessPoolExecutor, wait, ALL_COMPLETED
+
 
 class factorManager:
+    #获取因子列表
     def getFactorsList(valid=True):
         factorslist=[]
         path = os.path.dirname(__file__)+"/../data/single_factors"
-        ignore=['close','vol','volume','open','low','high','pct_chg','amount','pre_close','vwap']
+        ignore=['close','vol','volume','open','low','high','pct_chg','amount','pre_close','vwap','stop','lh']
         for subfile in os.listdir(path):
             if not '__' in subfile and not subfile.replace('.csv','') in ignore:
                 factorslist.append(subfile.replace('.csv',''))
                 
         if valid==True:
-            flist=mydb.selectToDf('select * from factors_list','finhack')
+            flist=mydb.selectToDf('select * from factors_list where check_type=11','finhack')
             for factor in factorslist:
                 if 'alpha' in factor:
                     factor_name=factor
@@ -24,10 +38,34 @@ class factorManager:
                 
                 if len(check_type)==0 or check_type[0]!=11:
                     factorslist.remove(factor)
-            
-                
         return factorslist
     
+    
+    
+    #获取因子数据
+    def getFactors(factor_list,stock_list=''):
+        #print(factor_list)
+        mypath=os.path.dirname(os.path.dirname(__file__))
+        data_path=mypath+'/data/single_factors/'
+        df_factor=pd.DataFrame()
+        for factor in factor_list:
+            factor=factor.replace('$','')
+            if os.path.isfile(data_path+factor+'.csv'):
+                df=pd.read_csv(data_path+factor+'.csv',names=['ts_code','trade_date',factor], dtype={'ts_code': str,'trade_date': str, factor: np.float64},low_memory=False)
+                #df=df.set_index(['ts_code','trade_date'])
+                
+                df=df.sort_values(['ts_code','trade_date'])
+                df=df.set_index(['ts_code','trade_date'])
+                #df[factor]= df[factor].astype('float16')
+             
+                if df_factor.empty:
+                    df_factor=df
+                else:
+                    df_factor[factor]=df[factor]
+                    del df
+            else:
+                print(data_path+factor+'.csv not found')
+        return df_factor    
     
     
     #获取alpha列表的列表

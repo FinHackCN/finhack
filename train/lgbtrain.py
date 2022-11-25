@@ -1,21 +1,25 @@
-from library.factor import factor
+from factors.factorManager import factorManager
 import pandas as pd
 import numpy as np
 import math
 from library.mydb import mydb
 import hashlib
 import lightgbm as lgb
+from math import e
 class lgbtrain:
-    def run(start_date='20000101',valid_date="20080101",end_date='20100101',features=['MEDPRICE_0','circMv_0','CMO_0','RSI_0','pe_0','MACD_0'],label='close',shift=10):
-        df=factor.getFactors(factor_list=features+[label])
+    def run(start_date='20000101',valid_date="20080101",end_date='20100101',features=[],label='close',shift=10):
+        features=[
+            'TANH_0','CCI_0','buyLgAmount_0','NATR_0','WILLR_0','MACDHISTFIX_0','buyMdVol_0','CMO_0','RSI_0','SQRT_0','LN_0'
+            ]
+        df=factorManager.getFactors(factor_list=features+[label])
         df.reset_index(inplace=True)
         df['trade_date']= df['trade_date'].astype('string')
 
+        #df['label']=df[label]/df.groupby('ts_code')[label].shift(1*shift)
         
+        df['label']=df.groupby('ts_code')[label].apply(lambda x: x.shift(-1*shift)/x)
         
-        df['label']=df.groupby('ts_code')[label].shift(-1*shift)/df[label]
-        
-        
+        print(df)
         
         df_train=df[df.trade_date>=start_date]
         df_train=df[df.trade_date<valid_date]        
@@ -68,7 +72,7 @@ class lgbtrain:
                 'boosting_type': 'gbdt',
                 'max_depth': 7,
                 'num_leaves': 64,  # 叶子节点数
-                'n_estimators':1000,
+                #'n_estimators':1000,
                 'learning_rate': 0.1,  # 学习速率
                 'feature_fraction': 0.9,  # 建树的特征选择比例colsample_bytree
                 'bagging_fraction': 0.9,  # 建树的样本采样比例subsample
@@ -86,8 +90,8 @@ class lgbtrain:
                         num_boost_round=1000,
                         valid_sets=data_valid,
                         early_stopping_rounds=5,
-                        obj=lgbtrain.custom_obj,
-                        feval=lgbtrain.custom_eval,  
+                        fobj=lgbtrain.custom_obj,
+                        feval=lgbtrain.custom_eval
                         
                         )
         

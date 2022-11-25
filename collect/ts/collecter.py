@@ -33,6 +33,7 @@ class tsCollecter:
         
     def getAll(self):
         #tsCB.cb_share(pro=self.pro,db=self.db)
+        #tsAStockIndex.index_daily(pro=self.pro,db=self.db)
         self.getAStockBasic()
         self.getAStockPrice()
         self.getAStockFinance()
@@ -190,9 +191,9 @@ class tsCollecter:
         pass
 
     def getUStock(self):
-        tsUStock.us_basic(self.pro,self.db)
-        self.mTread(tsUStock,'us_tradecal')
-        self.mTread(tsUStock,'us_daily')
+        # tsUStock.us_basic(self.pro,self.db)
+        # self.mTread(tsUStock,'us_tradecal')
+        # self.mTread(tsUStock,'us_daily')
         pass
 
     def getHStock(self):
@@ -206,7 +207,7 @@ class tsCollecter:
         self.mTread(tsCB,'cb_issue')
         self.mTread(tsCB,'cb_call')
         self.mTread(tsCB,'cb_daily')
-        #elf.mTread(tsCB,'cb_price_chg')
+        self.mTread(tsCB,'cb_price_chg')
         pass    
     
     def getFX(self):
