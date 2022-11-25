@@ -193,11 +193,13 @@ class tsSHelper:
         tables = cursor.fetchall()
         tables_list = re.findall('(\'.*?\')',str(tables))
         tables_list = [re.sub("'",'',each)for each in tables_list]
+        #tables_list=[table]
         lastdate="20000101"
         data=[lastdate];
         sql=""
         try:
             if table in tables_list:
+                
                 if ts_code!="":
                     if filed=="":#有代码无日期字段，直接删掉代码对应记录
                         sql="delete  from "+table+" where ts_code=\""+ts_code+"\""
@@ -208,17 +210,19 @@ class tsSHelper:
                         data = cursor.fetchone()
                         if data['res']!=None:
                             lastdate=data['res']
-                            cursor.execute("delete  from "+table+" where "+filed+"=\""+data['res']+"\" and ts_code=\""+ts_code+"\"")
+                            sql="delete  from "+table+" where "+filed+"=\""+data['res']+"\" and ts_code=\""+ts_code+"\""
+                            print(sql)
+                            cursor.execute(sql)
                     db.commit()
                 else:#没代码，找出最大字段
                     sql="select max("+filed+")  as res from "+table
                     cursor.execute(sql)
                     data = cursor.fetchone()
-                if data['res']!=None:
-                    sql="delete  from "+table+" where "+filed+"=\""+data['res']+"\""
-                    cursor.execute(sql)
-                    db.commit()
-                    lastdate=data['res']
+                    if data['res']!=None:
+                        sql="delete  from "+table+" where "+filed+"=\""+data['res']+"\""
+                        cursor.execute(sql)
+                        db.commit()
+                        lastdate=data['res']
             else:
                 pass
         except Exception as e:

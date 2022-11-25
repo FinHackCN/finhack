@@ -17,13 +17,13 @@ warnings.simplefilter(action='ignore', category=pd.errors.PerformanceWarning)
 import gc
 import objgraph
 
-class BoundThreadPoolExecutor(ProcessPoolExecutor):
-    """
-    对ThreadPoolExecutor 进行重写，给队列设置边界
-    """
-    def __init__(self, qsize: int = None, *args, **kwargs):
-        super(BoundThreadPoolExecutor, self).__init__(*args, **kwargs)
-        self._work_queue = queue.Queue(qsize)
+# class BoundThreadPoolExecutor(ProcessPoolExecutor):
+#     """
+#     对ThreadPoolExecutor 进行重写，给队列设置边界
+#     """
+#     def __init__(self, qsize: int = None, *args, **kwargs):
+#         super(BoundThreadPoolExecutor, self).__init__(*args, **kwargs)
+#         self._work_queue = queue.Queue(qsize)
 
 class indicatorCompute():
     def computeList(list_name,factor_list,c_list=[],db='tushare'):
@@ -56,65 +56,11 @@ class indicatorCompute():
                 for ts_code in code_list:
                     mytask=pool.submit(indicatorCompute.computeListByStock,ts_code,list_name,'',factor_list,c_list)
                     #tasklist.append(mytask)
-            wait(tasklist, return_when=ALL_COMPLETED)
-            pool.shutdown()
             print(list_name+' computed')
         
         mypath=os.path.dirname(os.path.dirname(__file__))
-        os.system('mv '+mypath+'/data/single_factors_tmp1/* '+mypath+'/data/single_factors_tmp2')
+        os.system('mv '+mypath+'/data/single_factors_tmp1/* '+mypath+'/data/single_factors_tmp2/')
             
-            
-        # indicatorCompute.singleSave('000001.SZ',list_name,factor_list)
-        # code_list.remove('000001.SZ')
-            
-        # with ProcessPoolExecutor(max_workers=20) as pool:
-        #     mypath=os.path.dirname(os.path.dirname(__file__))
-        #     for ts_code in code_list:
-        #         ctors_path=mypath+"/data/code_factors/"+list_name+'_'+ts_code
-        #         #print(code_factors_path)
-        #         if os.path.exists(code_factors_path):
-        #             mytask=pool.submit(indicatorCompute.singleSave,ts_code,list_name,factor_list)
-        #             tasklist.append(mytask)
-        #     wait(tasklist, return_when=ALL_COMPLETED)
-        #     print(list_name+' saved')
-        
-        
-    # def singleSave(ts_code,list_name,factor_list):
-    #     mypath=os.path.dirname(os.path.dirname(__file__))
-    #     code_list=AStock.getStockCodeList('tushare')
-    #     print(ts_code+' saving')
-        
-    #     for factor_name in factor_list:
-    #         factor=factor_name.split('_')
-    #         if len(factor)==1:
-    #             factor_name=factor_name+"_0" 
-    #         code_factors_path=mypath+"/data/code_factors/"+list_name+'_'+ts_code
-    #         single_factors_path=mypath+"/data/single_factors_tmp/"+ts_code+factor_name+'.pkl'
-            
-    #         #store = pd.HDFStore()
-    #         if True:        
-    #             #print(ts_code+'-------')
-    #             df=pd.read_pickle(code_factors_path)
-    #             df=pd.DataFrame(df,columns=['ts_code','trade_date',factor_name])
-    #             df.to_pickle(single_factors_path)
-    #             # # if ts_code=='000001.SZ':
-    #             # #     #df.to_csv(single_factors_path,mode='w',encoding='utf-8',header=True,index=False)
-    #             # #     store.put('name_of_frame', ohlcv_candle, format='t', append=True, data_columns=True)
-    #             # # else:
-    #             # #     df.to_csv(single_factors_path,mode='a',encoding='utf-8',header=False,index=False)
-    #             # try:
-    #             #     df.to_hdf(single_factors_path,key=factor_name, append=True, mode='a', format='table')
-                    
-    #             # except Exception as e:
-    #             #     print(df)
-    #             #     print(str(e))
-    #             #     #exit()
-    #             #     print(factor_name+' error')
- 
-    #             #store.put('factor', df, format='t', append=True, data_columns=True)
-    #     return True
-            
-                        
             
             
     
@@ -252,7 +198,7 @@ class indicatorCompute():
             #objgraph.show_most_common_types(limit=50)
             if check:
                 print('check:'+ts_code)
-                print(df_factor)
+                #print(df_factor)
                 return df_factor
             else:
                 
@@ -269,42 +215,6 @@ class indicatorCompute():
 
 
 
-
-    # #计算全部股票的单个因子
-    # def computeFactorAllStock(factor_name,df_price,where='',db='tushare'):
-    #     indicators,func_name,code,return_fileds=indicatorCompute.getFactorInfo(factor_name)
-    #     if indicators==False:
-    #         return df_price
-        
-    #     df_result=df_price.copy()
-    #     pattern = re.compile(r"df\[\'(\w*?)\'\]")   # 查找数字
-    #     flist = pattern.findall(code)
-    #     rlist=return_fileds
-        
-    #     #计算因子引用，先计算其它因子
-    #     flist=list(set(flist) - set(rlist))
-    #     for f in flist:
-    #         if not f in df_price.columns:
-    #             #print("depend factor:"+f)
-    #             df_price=indicatorCompute.computeFactorByStock(ts_code,f,df_price,db)
-                
-    #     factor=factor_name.split('_')
-    #     module = getattr(import_module('factors.indicators.'+indicators), indicators)
-    #     func=getattr(module,func_name,lambda x,y:x)
-
-    #     shift="0"
-    #     if len(factor)>1:
-    #         shift=factor[-1]
-
-    #     #给计算因子的函数传后面_分割的参数
-    #     for i in range(1,len(factor)):
-    #         factor[i]=int(factor[i])
-
-
-    #     df=func(df_price,factor)
-    #     print(df)
-        
-        
         
 
     #计算单个股票单个因子
@@ -386,10 +296,6 @@ class indicatorCompute():
         factor_list=mydb.selectToList('select * from factor_list','factors')
         return factor_list
 
-
-
-
-
     
     @lru_cache(None)
     def getFactorInfo(factor_name):
@@ -440,78 +346,6 @@ class indicatorCompute():
 
 
 
-
-    # def computeAlpha():
-    #     pass
-    
-    # #计算全部因子，取消该函数
-    # def computeAll(db):
-    #     pandarallel.initialize(nb_workers=28,progress_bar=True,use_memory_fs=True)
-    #     mydb.exec("drop table if exists factors_all_tmp",'factors')
-    #     df_code= AStock.getStockCodeList(db)
-    #     order = np.random.permutation(df_code.shape[0])
-    #     df_code = df_code.take(order)
-    #     df_all=df_code.parallel_apply(indicatorCompute.computeListByStock,axis=1)
-    #     #df_all=df_code.apply(indicatorCompute.computeListByStock,axis=1)
-    #     indicatorCompute.putData('factors_all','factors_all_tmp','factors')
-
-    # #计算所有横向指标，忘了是干啥的了，估计没啥用
-    # def computeTC(list_name='all',condition='',factor_list=None,pure=False,df_price=pd.DataFrame(),db='tushare'):
-    #     df_price_all=AStock.getAllPrice()
-    #     factor_list2=[]
-    #     for row in factor_list.copy():
-    #         factor_name=row            
-    #         indicators,func_name,code,return_fileds=indicatorCompute.getFactorInfo(factor_name)
-    #         if "#TC" in code:
-    #             df_tc_all=indicatorCompute.computeFactorAllStock(factor_name,df_price_all,condition='',db='tushare')
-    #         print(df_tc_all)
-    #     exit()
-
-
-    #刷新全部因子，根据indicators中的文件
-    # def refreshAllFactorList():
-    #     return_fileds=[]
-    #     path = os.path.dirname(__file__)+"/indicators/"
-    #     for subfile in os.listdir(path):
-    #         if not '__' in subfile:
-    #             indicators=subfile.split('.py')
-    #             indicators=indicators[0]
-    #             function_name=''
-    #             code=''
-                
-    #             find=False
-    #             with open(path+subfile) as filecontent:
-    #                 for line in filecontent:
-    #                     #提取当前函数名
-    #                     if('def ' in line):
-    #                         function_name=line.split('def ')
-    #                         function_name=function_name[1]
-    #                         function_name=function_name.split('(')
-    #                         function_name=function_name[0]
-    #                         function_name=function_name.strip()
-    #                         code=line
-    #                     else:
-    #                         code=code+"\n"+line
-    #                     left=line.split('=')
-    #                     left=left[0]
-                        
-    #                     pattern = re.compile(r"df\[\'([A-Za-z0-9_\-]*?)\'\]")   # 查找数字
-    #                     flist = pattern.findall(left)
-    #                     return_fileds=return_fileds+flist
-                     
-    #     #print(return_fileds)   
-    #     path = os.path.dirname(__file__)+"/factorlist/"
-    #     with open(path+'all','w') as file_object:
-    #         file_object.write("\n".join(return_fileds))        
-    #     return return_fileds
-        
-
-    #遍历indicators文件，查找计算这个因子的函数名称，返回indicators,func_name,code,return_fileds
-    #indicators，对应的命名空间，也就是py文件
-    #func_name那么，对应的函数名
-    #code 对应代码
-    #return_fileds 返回字段，在code的return df[] 中遍历
-    
     
     #替换临时表为目标表，同时设置索引
     # def putData(table,tmptable,todb='false',db='factors'):

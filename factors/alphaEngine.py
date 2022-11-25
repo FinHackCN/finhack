@@ -12,7 +12,7 @@ from functools import reduce
 import os
 import traceback
 import re
-from library.factor import factor
+from factors.factorManager import factorManager
 np.seterr(all='ignore',over='ignore',divide='ignore') 
 import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning) 
@@ -511,13 +511,17 @@ class alphaEngine():
             return True
             df=pd.read_csv(data_path)
             print('alpha diff_date')
-            exit()
+            #exit()
             return df
         
 
     
         if df.empty:
-            df=factor.getFactors(factor_list=col_list)
+            df=factorManager.getFactors(factor_list=col_list)
+            
+            
+            
+        df=df.fillna(0)
         
         
         todolist=['indneutralize','cap','filter','self','banchmarkindex']
@@ -558,9 +562,11 @@ class alphaEngine():
                 formula=ternary_trans(formula)
                 
             
+            #print(df)
             formula=formula.replace("\n"," ")
 
-            print(name+"计算公式:"+formula)
+            if not  check:
+                print(name+"计算公式:"+formula)
             res=eval(formula)
             
             # print(res)
@@ -571,7 +577,7 @@ class alphaEngine():
             if check:
                 return res
             else:
-                res.to_csv(data_path)
+                res.to_csv(data_path,header=None)
                 del df
                 del res
             #return True

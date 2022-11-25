@@ -15,6 +15,7 @@ import warnings
 from factors.factorManager import factorManager
 from factors.alphaEngine import alphaEngine
 from factors.indicatorCompute import indicatorCompute
+from concurrent.futures import ThreadPoolExecutor,ProcessPoolExecutor, wait, ALL_COMPLETED
 
 warnings.simplefilter(action='ignore', category=pd.errors.PerformanceWarning)
 
@@ -33,7 +34,9 @@ class preCheck():
         print("checkAllFactors---Start---")
         preCheck.beforeCheck()
         check_list=preCheck.checkIndicatorsChange()
-        preCheck.checkIndicatorsType(check_list)
+        
+        if len(check_list)>0:
+            preCheck.checkIndicatorsType(check_list)
         preCheck.checkAlphas()
         preCheck.afterCheck()    
         print("checkAllFactors--End---")
@@ -107,9 +110,11 @@ class preCheck():
                                         check_list.append(factor_name)
                                     break                              
         
-        uncheck=mydb.selectToDf("select factor_name from finhack.factors_list where check_type=0",'tushare')
+        uncheck=mydb.selectToDf("select factor_name from finhack.factors_list where factor_name not like 'alpha%'  and check_type=0",'tushare')
 
         print("检测因子函数变动---End---")
+        
+        
         
         if uncheck.empty:
             return check_list
@@ -132,13 +137,15 @@ class preCheck():
             return True
         ts_code='000001.sz'
         print('检查指标计算类型---Start---')
-        df_all=AStock.getStockDailyPrice([ts_code],where='',startdate='20150619',enddate='20200805',fq='hfq')
+        print("check_list:"+str(check_list))
+        df_all=AStock.getStockDailyPriceByCode(ts_code,where='',startdate='20150619',enddate='20200805',fq='hfq')
 
         
-        df_250=AStock.getStockDailyPrice([ts_code],where='',startdate='20180619',enddate='20200805',fq='hfq')
+        df_250=AStock.getStockDailyPriceByCode(ts_code,where='',startdate='20180619',enddate='20200805',fq='hfq')
         df_250e=df_250.copy()
         
-        
+ 
+       
         daterange=df_250e['trade_date'].tolist()        
 
         
@@ -284,84 +291,93 @@ class preCheck():
     
     #检测某个alpha是否有效
     def checkAlpha(listname,alphaname,alpha):
-        ftype=preCheck.getFactorCheckType(factor_name=alphaname, indicators=listname, func_name=alphaname, code=alpha, return_fileds=[alphaname])
-        if int(ftype)<10:
-            check_stock=['000001.SZ','000002.SZ','000004.SZ','000005.SZ','000006.SZ','000007.SZ','000008.SZ','000009.SZ','000010.SZ','000011.SZ']
-            price_all=AStock.getStockDailyPrice(check_stock,where='',startdate='20150619',enddate='20200805',fq='hfq')
-            price_all=price_all.set_index(['ts_code','trade_date'])
-            price_250=AStock.getStockDailyPrice(check_stock,where='',startdate='20180619',enddate='20200805',fq='hfq')
-            price_250a=price_250.set_index(['ts_code','trade_date'])
-            factorsAll=alphaEngine.calc(alpha,price_all,alphaname,True)
-            if factorsAll.empty:
-                ftype=77
-            elif not '000001.SZ' in factorsAll.index:
-                ftype=78
-            else:
-                factorsAll=factorsAll.loc['000001.SZ']
-                factorsAll=factorsAll.tail(250)
-                factorsAll=factorsAll.reset_index(drop=True) 
-                factorsAll=factorsAll.fillna(0)                
-                factors250=alphaEngine.calc(alpha,price_250a,alphaname,True)
-                factors250=factors250.loc['000001.SZ']
-                factors250=factors250.reset_index(drop=True) 
-                factors250=factors250.tail(250)
-                factors250=factors250.fillna(0)
-                daterange=price_250a.loc['000001.SZ'].index.tolist()
-                e250=[]
-                for date in daterange:
-                    df_tmp=price_250[(price_250.trade_date>=daterange[0]) & (price_250.trade_date<=date)].copy()
-                    df_tmp=df_tmp.set_index(['ts_code','trade_date'])
-                    factor_tmp=alphaEngine.calc(alpha,df_tmp,alphaname,True)
-                    
-                    if not '000001.SZ' in factor_tmp.index:
-                        #print(factor_tmp)
-                        #exit()
+        try:
+            #
+            ftype=preCheck.getFactorCheckType(factor_name=alphaname, indicators=listname, func_name=alphaname, code=alpha, return_fileds=[alphaname])
+            if int(ftype)<10:
+                print("checking "+alphaname)
+                check_stock=['000001.SZ','000002.SZ','000004.SZ','000005.SZ','000006.SZ','000007.SZ','000008.SZ','000009.SZ','000010.SZ','000011.SZ']
+                price_all=AStock.getStockDailyPrice(check_stock,where='',startdate='20150619',enddate='20200805',fq='hfq')
+                price_all=price_all.set_index(['ts_code','trade_date'])
+                price_250=AStock.getStockDailyPrice(check_stock,where='',startdate='20180619',enddate='20200805',fq='hfq')
+                price_250a=price_250.set_index(['ts_code','trade_date'])
+                factorsAll=alphaEngine.calc(alpha,price_all,alphaname,True)
+               
+                if factorsAll.empty:
+                    ftype=77
+                elif not '000001.SZ' in factorsAll.index:
+                    ftype=78
+                else:
+                    factorsAll=factorsAll.loc['000001.SZ']
+                    factorsAll=factorsAll.tail(250)
+                    factorsAll=factorsAll.reset_index(drop=True) 
+                    factorsAll=factorsAll.fillna(0)                
+                    factors250=alphaEngine.calc(alpha,price_250a,alphaname,True)
+                    factors250=factors250.loc['000001.SZ']
+                    factors250=factors250.reset_index(drop=True) 
+                    factors250=factors250.tail(250)
+                    factors250=factors250.fillna(0)
+                    daterange=price_250a.loc['000001.SZ'].index.tolist()
+                    e250=[]
+                    for date in daterange:
+                        #print(date+"-"+alphaname)
+                        df_tmp=price_250[(price_250.trade_date>=daterange[0]) & (price_250.trade_date<=date)].copy()
+                        df_tmp=df_tmp.set_index(['ts_code','trade_date'])
+                        factor_tmp=alphaEngine.calc(alpha,df_tmp,alphaname,True)
+                        
+                        if not '000001.SZ' in factor_tmp.index:
+                            #print(factor_tmp)
+                            #exit()
+                            pass
+                        else:
+                            factor_tmp=factor_tmp.loc['000001.SZ']
+                            e250.append(factor_tmp.tail(1))
+                    if(e250==[]):
+                        print('----------------------')
                         pass
+                    #print(alphaname+' status:1--------------')
+                    factors250e=pd.concat(e250,ignore_index=False)
+                    factors250e=factors250e.tail(250)
+                    factors250e=factors250e.reset_index(drop=True) 
+                    factors250e=factors250e.fillna(0)
+                    if factors250.tolist()==factors250e.tolist():
+                        ftype='d' #direct
                     else:
-                        factor_tmp=factor_tmp.loc['000001.SZ']
-                        e250.append(factor_tmp.tail(1))
-                if(e250==[]):
-                    print('----------------------')
-                    pass
-                factors250e=pd.concat(e250,ignore_index=False)
-                factors250e=factors250e.tail(250)
-                factors250e=factors250e.reset_index(drop=True) 
-                factors250e=factors250e.fillna(0)
-                if factors250.tolist()==factors250e.tolist():
-                    ftype='d' #direct
-                else:
-                    ftype='e' #each
-                if factors250.tolist()==factors250e.tolist():
-                    ftype=ftype+'s' #small
-                else:
-                    ftype=ftype+'a' #all
+                        ftype='e' #each
+                    if factors250.tolist()==factors250e.tolist():
+                        ftype=ftype+'s' #small
+                    else:
+                        ftype=ftype+'a' #all
+                        
                     
-                
-
-                desc=factorsAll.describe()
-                if factorsAll.isnull().all():
-                    ftype=ftype+'2' 
-                elif 'unique' in desc.keys():
-                    if  desc['unique']==1:
-                        ftype=ftype+'5'   
+                    #print(alphaname+' status:2--------------')
+                    desc=factorsAll.describe()
+                    if factorsAll.isnull().all():
+                        ftype=ftype+'2'  #第二位为2，全是null     
+                    elif 'unique' in desc.keys():
+                        if  desc['unique']==1:
+                            ftype=ftype+'5'   #第二位为5，全是一个值    
+                        else:
+                            ftype=ftype+'1' #第二位为1，正常
+                    elif desc['max']==desc['min']:
+                        if desc['max']==0:
+                            ftype=ftype+'4' #第二位为4，全是0   
+                        else:
+                            ftype=ftype+'6' #第二位为4，全是一个值
                     else:
-                        ftype=ftype+'1'
-                elif desc['max']==desc['min']:
-                    if desc['max']==0:
-                        ftype=ftype+'4' 
-                    else:
-                        ftype=ftype+'6'
-                else:
-                    ftype=ftype+'1'  
-                ftype=ftype.replace("ds","1")
-                ftype=ftype.replace("da","2")
-                ftype=ftype.replace("es","3")
-                ftype=ftype.replace("ea","4")
-            print("------{%s}-----" % ftype)
-            updatesql="update finhack.factors_list set check_type=%s,status='acvivate' where factor_name='%s'"  % (ftype,alphaname)
-            mydb.exec(updatesql,'finhack')   
-        if ftype==41:
-            pass
+                        ftype=ftype+'1'  #第二位为1，正常
+                    #print(alphaname+' status:3--------------')
+                    ftype=ftype.replace("ds","1") #可以直接计算df250
+                    ftype=ftype.replace("da","2") #需要直接计算dfall
+                    ftype=ftype.replace("es","3") #需要逐行计算df250
+                    ftype=ftype.replace("ea","4") #需要逐行计算dfall
+                print("------{%s,%s}-----" % (ftype,alphaname))
+                updatesql="update finhack.factors_list set check_type=%s,status='acvivate' where factor_name='%s'"  % (ftype,alphaname)
+                mydb.exec(updatesql,'finhack')   
+            if ftype==41:
+                pass
+        except Exception as e:
+            print(str(e))
         #后面的代码用来debug
             # check_stock=['000001.SZ','000002.SZ','000004.SZ','000005.SZ','000006.SZ','000007.SZ','000008.SZ','000009.SZ','000010.SZ','000011.SZ']
             # price_all=AStock.getStockDailyPrice(check_stock,where='',startdate='20150619',enddate='20200805',fq='hfq')
@@ -413,19 +429,24 @@ class preCheck():
                 
                 
     def checkAlphas():
+        print('checkAlphas')
         # print(len(price_500)/10)
         alphalists=factorManager.getAlphaLists()
         for listname in alphalists:
             alphas=factorManager.getAlphaList(listname)
             i=0
-            for alpha in alphas:
-                i=i+1
-                alphaname=listname+'_'+str(i)
-                
-                #print(alphaname+":"+alpha)
-                preCheck.checkAlpha(listname=listname,alphaname=alphaname,alpha=alpha)
-                
-
+            tasklist=[]
+            with ProcessPoolExecutor(max_workers=24) as pool:
+                for alpha in alphas:
+                    i=i+1
+                    alphaname=listname+'_'+str(i)
+                    
+                    #print(alphaname+":"+alpha)
+                    #preCheck.checkAlpha(listname=listname,alphaname=alphaname,alpha=alpha)
+                    task=pool.submit(preCheck.checkAlpha,listname,alphaname,alpha)
+                    tasklist.append(task)
+            wait(tasklist, return_when=ALL_COMPLETED)
+            print('---------------')
                 
  
         #print('","'.join(check_stock))
