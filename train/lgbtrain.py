@@ -6,48 +6,59 @@ from library.mydb import mydb
 import hashlib
 import lightgbm as lgb
 from math import e
+import traceback
 class lgbtrain:
-    def run(start_date='20000101',valid_date="20080101",end_date='20100101',features=[],label='close',shift=10):
-        features=[
-            'TANH_0','CCI_0','buyLgAmount_0','NATR_0','WILLR_0','MACDHISTFIX_0','buyMdVol_0','CMO_0','RSI_0','SQRT_0','LN_0'
-            ]
-        df=factorManager.getFactors(factor_list=features+[label])
-        df.reset_index(inplace=True)
-        df['trade_date']= df['trade_date'].astype('string')
-
-        #df['label']=df[label]/df.groupby('ts_code')[label].shift(1*shift)
-        
-        df['label']=df.groupby('ts_code')[label].apply(lambda x: x.shift(-1*shift)/x)
-        
-        print(df)
-        
-        df_train=df[df.trade_date>=start_date]
-        df_train=df[df.trade_date<valid_date]        
-        
-        df_valid=df[df.trade_date>=valid_date]
-        df_valid=df[df.trade_date<end_date]  
-
-        df_pred=df[df.trade_date>=end_date]
-        
-        df_train=df_train.drop('trade_date', axis=1)   
-        df_valid=df_valid.drop('trade_date', axis=1)  
-        
-        df_train=df_train.drop('ts_code', axis=1)   
-        df_valid=df_valid.drop('ts_code', axis=1)  
-        
-        
-        y_train=df_train['label']
-        x_train=df_train.drop('label', axis=1)
-        x_train=x_train.drop('close', axis=1)
-        y_valid=df_valid['label']
-        x_valid=df_valid.drop('label', axis=1)  
-        x_valid=x_valid.drop('close', axis=1)  
-        data_train = lgb.Dataset(x_train, y_train)
-        data_valid = lgb.Dataset(x_valid, y_valid)        
-        
-        lgbtrain.train(data_train,data_valid)
-        lgbtrain.pred(df_pred)
-
+    def run(start_date='20000101',valid_date="20080101",end_date='20100101',features=[],label='close',shift=10,param={}):
+        try:
+            features=[
+                'TANH_0','CCI_0','buyLgAmount_0','NATR_0','WILLR_0','MACDHISTFIX_0','buyMdVol_0','CMO_0','RSI_0','SQRT_0','LN_0'
+                ]
+            
+            hashstr=start_date+"-"+valid_date+"-"+end_date+"-"+",".join(features)+","+label+","+str(shift)+","+str(param)
+            md5=hashlib.md5(hashstr.encode(encoding='utf-8')).hexdigest()
+                
+            print(md5)
+            exit()
+                
+            df=factorManager.getFactors(factor_list=features+[label])
+            df.reset_index(inplace=True)
+            df['trade_date']= df['trade_date'].astype('string')
+    
+            #df['label']=df[label]/df.groupby('ts_code')[label].shift(1*shift)
+            
+            df['label']=df.groupby('ts_code')[label].apply(lambda x: x.shift(-1*shift)/x)
+            
+            print(df)
+            
+            df_train=df[df.trade_date>=start_date]
+            df_train=df[df.trade_date<valid_date]        
+            
+            df_valid=df[df.trade_date>=valid_date]
+            df_valid=df[df.trade_date<end_date]  
+    
+            df_pred=df[df.trade_date>=end_date]
+            
+            df_train=df_train.drop('trade_date', axis=1)   
+            df_valid=df_valid.drop('trade_date', axis=1)  
+            
+            df_train=df_train.drop('ts_code', axis=1)   
+            df_valid=df_valid.drop('ts_code', axis=1)  
+            
+            
+            y_train=df_train['label']
+            x_train=df_train.drop('label', axis=1)
+            x_train=x_train.drop('close', axis=1)
+            y_valid=df_valid['label']
+            x_valid=df_valid.drop('label', axis=1)  
+            x_valid=x_valid.drop('close', axis=1)  
+            data_train = lgb.Dataset(x_train, y_train)
+            data_valid = lgb.Dataset(x_valid, y_valid)        
+            
+            lgbtrain.train(data_train,data_valid)
+            lgbtrain.pred(df_pred)
+        except Exception as e:
+            print("error:"+str(e))
+            print("err exception is %s" % traceback.format_exc())
 
 
     def custom_obj(y_pred,y_true): #损失函数

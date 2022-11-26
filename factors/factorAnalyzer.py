@@ -15,12 +15,9 @@ class factorAnalyzer():
             has=mydb.selectToDf('select hash from factors_analysis where BINARY  hash="%s"' % (md5),'finhack')
             
             
-            
             #有值且不替换
             if(not has.empty and not relace):  
                 return True
-            
-            
             
             if df.empty:
                 df=factorManager.getFactors(factor_list=['close',factor_name])
@@ -36,7 +33,16 @@ class factorAnalyzer():
             IR_list=[]
             
             print("factor_name:"+factor_name)
-            print(df)
+            
+            df=df.dropna()
+  
+            desc=df[factor_name].describe()
+            
+            if desc['mean']==desc['max']:
+                if factor_name!='alpha':
+                    updatesql="update finhack.factors_list set check_type=%s,status='acvivate' where factor_name='%s'"  % ('14',factor_name)
+                    mydb.exec(updatesql,'finhack')  
+                return False
     
             for day in days:
                 df['return']=df.groupby('ts_code',group_keys=False)['close'].apply(lambda x: x.shift(-1*day)/x)
@@ -77,7 +83,7 @@ class factorAnalyzer():
     
         except Exception as e:
             print(factor_name+" error:"+str(e))
-            print("err exception is %s" % traceback.format_exc())
+            #print("err exception is %s" % traceback.format_exc())
     
     def ICIR(df,factor_name,period=120):
         grouped=df.groupby('ts_code')

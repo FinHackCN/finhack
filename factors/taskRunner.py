@@ -33,7 +33,7 @@ class taskRunner:
                 if os.path.exists(mypath+"/lists/factorlist/"+factor_list_name):
                     with open(mypath+"/lists/factorlist/"+factor_list_name, 'r', encoding='utf-8') as f:
                         factor_list=[_.rstrip('\n') for _ in f.readlines()]
-                    indicatorCompute.computeList(list_name=factor_list_name,factor_list=factor_list,c_list=c_list)
+                    #indicatorCompute.computeList(list_name=factor_list_name,factor_list=factor_list,c_list=c_list)
             os.system('mv '+mypath+'/data/single_factors_tmp2/* '+mypath+'/data/single_factors/')
          
             #alpha列表
@@ -43,12 +43,12 @@ class taskRunner:
                         factor_list=[_.rstrip('\n') for _ in f.readlines()]
                         i=0
                         
-                        # for factor in factor_list: 
-                        #     i=i+1
-                        #     alpha_name=factor_list_name+'_'+str(i).zfill(3)                            
-                        #     df=alphaEngine.calc(factor,pd.DataFrame(),alpha_name)
-                        #     print(df)
-                        #     exit()
+                        for factor in factor_list: 
+                            i=i+1
+                            alpha_name=factor_list_name+'_'+str(i).zfill(3)                            
+                            df=alphaEngine.calc(factor,pd.DataFrame(),alpha_name)
+                            print(df)
+                            exit()
                         
                         with ProcessPoolExecutor(max_workers=8) as pool:
                             for factor in factor_list:   
