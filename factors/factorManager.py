@@ -19,14 +19,19 @@ class factorManager:
     #获取因子列表
     def getFactorsList(valid=True):
         factorslist=[]
+        result=[]
         path = os.path.dirname(__file__)+"/../data/single_factors"
         ignore=['close','vol','volume','open','low','high','pct_chg','amount','pre_close','vwap','stop','lh']
         for subfile in os.listdir(path):
             if not '__' in subfile and not subfile.replace('.csv','') in ignore:
                 factorslist.append(subfile.replace('.csv',''))
                 
+ 
+                
         if valid==True:
             flist=mydb.selectToDf('select * from factors_list where check_type=11','finhack')
+ 
+            
             for factor in factorslist:
                 if 'alpha' in factor:
                     factor_name=factor
@@ -34,16 +39,20 @@ class factorManager:
                 else:
                     factor_name=factor.split('_')[0]
                 factor_df=flist[flist.factor_name==factor_name]
-                check_type=factor_df['check_type'].values
-                
-                if len(check_type)==0 or check_type[0]!=11:
-                    factorslist.remove(factor)
+                if factor_df.empty:
+                    continue
+                else:
+                    check_type=factor_df['check_type'].values
+                    if len(check_type)==0 or check_type[0]!=11:
+                        continue
+                result.append(factor)
+            factorslist=result
         return factorslist
     
     
     
     #获取因子数据
-    def getFactors(factor_list,stock_list=''):
+    def getFactors(factor_list,stock_list='',start_date='',end_date=''):
         #print(factor_list)
         mypath=os.path.dirname(os.path.dirname(__file__))
         data_path=mypath+'/data/single_factors/'

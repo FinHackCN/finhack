@@ -37,7 +37,7 @@ class preCheck():
         
         if len(check_list)>0:
             preCheck.checkIndicatorsType(check_list)
-        preCheck.checkAlphas()
+        #preCheck.checkAlphas()  当前Alphas应该不会存在未来函数，跳过检测
         preCheck.afterCheck()    
         print("checkAllFactors--End---")
         return check_list
@@ -301,7 +301,8 @@ class preCheck():
                 price_all=price_all.set_index(['ts_code','trade_date'])
                 price_250=AStock.getStockDailyPrice(check_stock,where='',startdate='20180619',enddate='20200805',fq='hfq')
                 price_250a=price_250.set_index(['ts_code','trade_date'])
-                factorsAll=alphaEngine.calc(alpha,price_all,alphaname,True)
+                factorsAll=alphaEngine.calc(formula=alpha,df=price_all,name=alphaname,check=True)
+                print(factorsAll)
                
                 if factorsAll.empty:
                     ftype=77
@@ -377,52 +378,9 @@ class preCheck():
             if ftype==41:
                 pass
         except Exception as e:
-            print(str(e))
-        #后面的代码用来debug
-            # check_stock=['000001.SZ','000002.SZ','000004.SZ','000005.SZ','000006.SZ','000007.SZ','000008.SZ','000009.SZ','000010.SZ','000011.SZ']
-            # price_all=AStock.getStockDailyPrice(check_stock,where='',startdate='20150619',enddate='20200805',fq='hfq')
-            # price_all=price_all.set_index(['ts_code','trade_date'])
-            # price_250=AStock.getStockDailyPrice(check_stock,where='',startdate='20180619',enddate='20200805',fq='hfq')
-            # price_250a=price_250.set_index(['ts_code','trade_date'])
-            # factorsAll=alphaEngine.calc(price_all,alpha,alphaname)
-            # if factorsAll.empty:
-            #     ftype=77
-            # elif not '000001.SZ' in factorsAll.index:
-            #     ftype=78
-            # else:
-            #     factorsAll=factorsAll.loc['000001.SZ']
-            #     factorsAll=factorsAll.tail(250)
-            #     factorsAll=factorsAll.reset_index(drop=True) 
-            #     factorsAll=factorsAll.fillna(0)                
-            #     factors250=alphaEngine.calc(price_250a,alpha,alphaname)
-            #     factors250=factors250.loc['000001.SZ']
-            #     factors250=factors250.reset_index(drop=True) 
-            #     factors250=factors250.tail(250)
-            #     factors250=factors250.fillna(0)
-            #     daterange=price_250a.loc['000001.SZ'].index.tolist()
-            #     e250=[]
-            #     for date in daterange:
-            #         df_tmp=price_250[(price_250.trade_date>=daterange[0]) & (price_250.trade_date<=date)].copy()
-            #         df_tmp=df_tmp.set_index(['ts_code','trade_date'])
-            #         factor_tmp=alphaEngine.calc(df_tmp,alpha,alphaname)
-                    
-            #         if not '000001.SZ' in factor_tmp.index:
-            #             #print(factor_tmp)
-            #             #exit()
-            #             pass
-            #         else:
-            #             factor_tmp=factor_tmp.loc['000001.SZ']
-            #             e250.append(factor_tmp.tail(1))
-            #     if(e250==[]):
-            #         print('----------------------')
-            #         pass
-            #     factors250e=pd.concat(e250,ignore_index=False)
-            #     factors250e=factors250e.tail(250)
-            #     factors250e=factors250e.reset_index(drop=True) 
-            #     factors250e=factors250e.fillna(0)
-            #     print(factors250e)
-            #     print(factors250)
-            #     exit()
+            print("precheck error:",str(e))
+ 
+
             
                 
                 
@@ -430,7 +388,6 @@ class preCheck():
                 
     def checkAlphas():
         print('checkAlphas')
-        # print(len(price_500)/10)
         alphalists=factorManager.getAlphaLists()
         for listname in alphalists:
             alphas=factorManager.getAlphaList(listname)
@@ -439,7 +396,7 @@ class preCheck():
             with ProcessPoolExecutor(max_workers=24) as pool:
                 for alpha in alphas:
                     i=i+1
-                    alphaname=listname+'_'+str(i)
+                    alphaname=listname+'_'+str(i).zfill(3)
                     
                     #print(alphaname+":"+alpha)
                     #preCheck.checkAlpha(listname=listname,alphaname=alphaname,alpha=alpha)
@@ -449,26 +406,3 @@ class preCheck():
             print('---------------')
                 
  
-        #print('","'.join(check_stock))
-    
-        
-        
-    # def checkAllFactors():
-    #     path = os.path.dirname(__file__)+"/factorlist/"
-    #     with open(path+'all') as file:
-    #         factor_list=file.read().splitlines()
-            
-    #     for factor in factor_list:
-    #         print(factor)
-            
-    #     trade_date=mydb.selectToDf('select trade_date from astock_price_daily wher    e ts_code="000001.sz"','tushare')
-    #     trade_date=trade_date['trade_date'].tolist()[-500:]
-        
-    #     for dt in trade_date[100:]:
-    #         #print(trade_date[0])
-    #         #print(dt)
-    #         df=indicatorCompute.computeListByStock('002624.sz',list_name='test',condition=" and trade_date>"+str(trade_date[0])+" and trade_date<"+str(dt),pure=False)
-    #         #print(df)
-        
-        
-    #     print(trade_date)

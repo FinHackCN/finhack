@@ -12,6 +12,7 @@ from functools import reduce
 import os
 import traceback
 import re
+import datetime
 from factors.factorManager import factorManager
 np.seterr(all='ignore',over='ignore',divide='ignore') 
 import warnings
@@ -26,29 +27,8 @@ class RewriteNode(ast.NodeTransformer):
         body=ast.unparse(node.body)
         orelse=ast.unparse(node.orelse)
         newnode=ast.parse("where(%s,%s,%s)" % (test,body,orelse)).body[0]
-        #newnode=ast.Call(ast.Name(id='where'),args=[test,body,orelse], keywords=[])
-        #print("where(%s,%s,%s)" % (test,body,orelse))
-        #print(newnode)
         return newnode
-        
-    # #hook一下，便与调试
-    # def visit_BinOp(self,node):
-    #     if isinstance(node.op, ast.BitAnd):
-    #         newnode=ast.Call(ast.Name(id='bitAnd'),args=[node.left,node.right], keywords=[])
-    #         return newnode
-    #     elif isinstance(node.op, ast.BitOr):
-    #         newnode=ast.Call(ast.Name(id='bitOr'),args=[node.left,node.right], keywords=[])
-    #         return newnode
-    #     return node
 
-
-# def bitAnd(x,y):
-#     return x & y
-
-# def bitOr(x,y):
-#     return x | y
-
- 
 
 def ternary_trans(formula):
     if not '?' in formula:
@@ -60,10 +40,7 @@ def ternary_trans(formula):
     for node in ast.walk(tree):
         ast.fix_missing_locations(RewriteNode().visit(node)) 
     formula=ast.unparse(tree)
- 
-
 #    print("\n转义公式:"+formula+"\n")
-
     return formula
 
 
@@ -479,51 +456,38 @@ def sumif(df, window, condition):
     
 
 class alphaEngine():
-    # def calc2(df,formula,name="alpha"):
-    #     print(name+"原公式:"+formula+"\n")
-    #     fields=['$open','$high','$low','$close','$amount','$volume','$vwap','$returns']
-    #     for field in fields:
-    #         formula=formula.replace(field,"df['%s']" % (field[1:])) 
-            
-    #     if '?' in formula:
-    #         formula=ternary_trans(formula)            
-    #     print(name+"计算公式:"+formula)
-    #     res=eval(formula)      
-    #     print(res)
-        
-        
-        
-    
     def calc(formula='',df=pd.DataFrame(),name="alpha",check=False):
-        #print('calc '+name)
+        #根据 $符号匹配列名
         col_list = []
         col_list = re.findall(r'(?:\$)[a-zA-Z0-9_]+', formula)
         col_list=list(set(col_list))
         
-        
+        #缓存路径
         mypath=os.path.dirname(os.path.dirname(__file__))
         data_path=mypath+'/data/single_factors/'+name+'.csv'   
+        diff_date=0
+        max_date=''
         
-        
- 
-        
-        if os.path.exists(data_path):
-            return True
-            df=pd.read_csv(data_path)
-            print('alpha diff_date')
-            #exit()
-            return df
-        
+        if os.path.exists(data_path) and check==False:
+            df_old=pd.read_csv(data_path, header=None, names=['ts_code','trade_date','alpha'])
+            max_date=df_old['trade_date'].max()
+            today=time.strftime("%Y%m%d",time.localtime())
+            diff_date=int(today)-int(max_date)
 
-    
+
         if df.empty:
             df=factorManager.getFactors(factor_list=col_list)
             
-            
-            
+        
+        if diff_date>0 and diff_date<100:
+            dt=datetime.datetime.strptime(str(max_date),'%Y%m%d')
+            start_date=dt-datetime.timedelta(days=700)
+            start_date=start_date.strftime('%Y%m%d')
+            df=df.reset_index()
+            df=df[df.trade_date>=start_date]
+            df=df.set_index(['ts_code','trade_date'])
+
         df=df.fillna(0)
-        
-        
         todolist=['indneutralize','cap','filter','self','banchmarkindex']
         for todo in todolist:
             if todo in formula:
@@ -535,15 +499,10 @@ class alphaEngine():
         formula=formula.replace("$hd"," $high-delay($high,1) ")
         formula=formula.replace("$ld"," delay($low,1)-$low ")    
 
- 
 
-        # print("\n\n----------------------------")    
-        # print(name+"原公式:"+formula+"\n")
-        
         try:
             pd.options.display.max_rows = 100
             t1=time.time()
-            #formula=formula.lower()
             formula=formula.replace("||"," | ")
             formula=formula.replace("&&"," & ")
             formula=formula.replace("^"," ** ")
@@ -552,7 +511,7 @@ class alphaEngine():
             for field in fields:
                 formula=formula.replace(field,"df['%s']" % (field[1:]))
     
-            #print(col_list)
+
             for col in col_list:
                 formula=formula.replace(col,"df['%s']" % (col[1:]))
                 df[col[1:]]=df[col[1:]].astype(float)
@@ -569,18 +528,22 @@ class alphaEngine():
                 print(name+"计算公式:"+formula)
             res=eval(formula)
             
-            # print(res)
-            # print(res.describe())            
-            # print(time.time()-t1)
-            # print("\n\n")
-            #res.to_pickle(cache_path)
             if check:
                 return res
             else:
-                res.to_csv(data_path,header=None)
+                
+                if diff_date>0 and diff_date<100:
+                    res=res.reset_index()
+                    res=res[res.trade_date>str(max_date)]
+                    res=res.set_index(['ts_code','trade_date'])        
+                    if not res.empty:
+                        res.to_csv(data_path,mode='a',header=False)
+                    exit()
+                else:
+                    res.to_csv(data_path,header=None)
                 del df
                 del res
-            #return True
+
         except Exception as e:
             todolist=[]#['identically-labeled']
             for todo in todolist:
@@ -593,6 +556,5 @@ class alphaEngine():
             if(len(df)>100):
                 print("%s error:%s" % (name,str(e))) 
                 print("err exception is %s" % traceback.format_exc())
-            #exit()
             return pd.DataFrame()
         pass

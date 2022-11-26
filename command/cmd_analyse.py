@@ -19,19 +19,19 @@ factors=factorManager.getFactorsList()
 # factors=['alpha101_001']
 
 
-# for factor in factors:
-#     factorAnalyzer.analys(factor)
+for factor in factors:
+    factorAnalyzer.analys(factor)
    
 
 
-with ProcessPoolExecutor(max_workers=10) as pool:
-    tasklist=[]
-    for factor in factors:
-        mytask=pool.submit(factorAnalyzer.analys,factor)
-        tasklist.append(mytask)
-    wait(tasklist, return_when=ALL_COMPLETED)
+# with ProcessPoolExecutor(max_workers=24) as pool:
+#     tasklist=[]
+#     for factor in factors:
+#         mytask=pool.submit(factorAnalyzer.analys,factor)
+#         tasklist.append(mytask)
+#     wait(tasklist, return_when=ALL_COMPLETED)
  
  
-    print(time.time()-t1)
+#     print(time.time()-t1)
 
 

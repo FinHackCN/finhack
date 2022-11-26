@@ -6,3 +6,4 @@ __pycache__/
 nohup.out
 factors/namespace/
 *.zip
+research/.ipynb_checkpoints/
