@@ -25,49 +25,51 @@ import factors.alphaEngine as alphaFunc
 
 t1=time.time()
 
+startdate='20160619'
+enddate='20160619'
 
-hs300=AStock.getIndexMember(index='000300.SH',trade_date='20220104')
-df_25=AStock.getStockDailyPrice(hs300[0:25],where='',startdate='20160619',enddate='20200805',fq='hfq')
-df_300=AStock.getStockDailyPrice(hs300,where='',fq='hfq')
-mypath=os.path.dirname(os.path.dirname(__file__))
-cache_path_25=mypath+"/cache/factors/mining_factor_df_25"
-cache_path_300=mypath+"/cache/factors/mining_factor_df_300"
-if os.path.isfile(cache_path_25):
-    df_all_25=pd.read_pickle(cache_path_25)
-else:
+hs300=AStock.getIndexMember(index='000300.SH',trade_date='')
 
-    factor_list=['buySmVol_0','WILLR_0']
-    df_all_25=indicatorCompute.computeListByStock(ts_code='test',list_name='test',where='',factor_list=factor_list,c_list=[],pure=True,check=True,df_price=df_25,db='tushare')
-    df_all_25=df_all_25.dropna()
-    df_all_25['Y']=df_all_25.groupby('ts_code')['close'].shift(-10)/df_all_25['close']
-    df_all_25.to_pickle(cache_path_25)          
+hs300=list(set(hs300))
+
+
+flist=factorManager.getAnalysedIndicatorsList()
+random.shuffle(flist)
+n=random.randint(3,7)
+factor_list=[]
+
+for i in range(0,n):
+    factor_list.append(flist.pop())
+
+factor_list=factor_list+['open','high','low','close','pre_close','change','returns','volume','amount','vwap'] 
+
+#factor_list=['open','high','low','close']
+
+df_all_25=factorManager.getFactors(factor_list=factor_list,stock_list=hs300[0:25],start_date='20160823',end_date='20200823')
+df_all_25['Y']=df_all_25.groupby('ts_code',group_keys=False)['close'].apply(lambda x: x.shift(-10)/x)
 df_all_25=df_all_25.dropna()
-df_all_25=df_all_25.reset_index(drop=True)
+df_all_25=df_all_25.reset_index() 
 
-      
-if os.path.isfile(cache_path_300):
-    df_all_300=pd.read_pickle(cache_path_300)
-else:
-
-    factor_list=['buySmVol_0','WILLR_0']
-    df_all_300=indicatorCompute.computeListByStock(ts_code='test',list_name='test',where='',factor_list=factor_list,c_list=[],pure=True,check=True,df_price=df_25,db='tushare')
-    df_all_300=df_all_300.dropna()
-    df_all_300['Y']=df_all_300.groupby('ts_code')['close'].shift(-10)/df_all_300['close']
-    df_all_300.to_pickle(cache_path_300)   
+df_all_300=factorManager.getFactors(factor_list=factor_list,stock_list=hs300,start_date='20160823',end_date='20200823')
+df_all_300['Y']=df_all_300.groupby('ts_code',group_keys=False)['close'].apply(lambda x: x.shift(-10)/x)
+df_all_300=df_all_300.dropna()
 
 
+print(df_all_25)
+print(df_all_300)
 
-
-init_function = ['add', 'sub', 'mul', 'div', 'sqrt', 'abs', 'sin', 'cos', 'tan']
 
 df_tmp=df_all_25[['ts_code','trade_date']]
 df_tmp=df_tmp.reset_index(drop=True)
 
 
- 
+init_function = ['add', 'sub', 'mul', 'div', 'sqrt', 'abs', 'sin', 'cos', 'tan']
+
+
 
 def trans_xy(xy,key='x'):
     status=True
+    
     if(len(xy)<100):
         status=False
         return status,xy
@@ -76,7 +78,13 @@ def trans_xy(xy,key='x'):
         status=False
         return status,xy
     if 'numpy.memmap' in str(type(xy)):
-        xy=np.array(xy)    
+        xy=np.array(xy)   
+        
+    if xy.max()==xy.min():
+        xy=np.zeros(len(xy))
+        status=False
+        return status,xy
+        
     if(type(xy)==type(np.ndarray([]))):
         df_xy=df_tmp.copy()
         df_xy[key]=xy
@@ -186,13 +194,33 @@ def _ts_max(x):
     df=alphaFunc.ts_max(x)
     return np.nan_to_num(df.values)  
     
-def _delay(x):
+def _delay_1(x):
     status,x=trans_xy(x,'x')
     if not status:
         return x
-    df=alphaFunc.delay(x)
+    df=alphaFunc.delay(x,1)
     return np.nan_to_num(df.values)      
-    
+ 
+def _delay_3(x):
+    status,x=trans_xy(x,'x')
+    if not status:
+        return x
+    df=alphaFunc.delay(x,3)
+    return np.nan_to_num(df.values)  
+
+def _delay_5(x):
+    status,x=trans_xy(x,'x')
+    if not status:
+        return x
+    df=alphaFunc.delay(x,5)
+    return np.nan_to_num(df.values)  
+
+def _delay_7(x):
+    status,x=trans_xy(x,'x')
+    if not status:
+        return x
+    df=alphaFunc.delay(x,7)
+    return np.nan_to_num(df.values)  
     
 def _stddev(x):
     status,x=trans_xy(x,'x')
@@ -255,7 +283,10 @@ function_set = [
     gp.functions.make_function(function = _product,name = 'product',arity = 1),
     gp.functions.make_function(function = _ts_min,name = 'ts_min',arity = 1),
     gp.functions.make_function(function = _ts_max,name = 'ts_max',arity = 1),
-    gp.functions.make_function(function = _delay,name = 'delay',arity = 1),
+    gp.functions.make_function(function = _delay_1,name = 'delay_1',arity = 1),
+    gp.functions.make_function(function = _delay_3,name = 'delay_3',arity = 1),
+    gp.functions.make_function(function = _delay_5,name = 'delay_5',arity = 1),
+    gp.functions.make_function(function = _delay_7,name = 'delay_7',arity = 1),
     gp.functions.make_function(function = _ts_rank,name = 'ts_rank',arity = 1),
     gp.functions.make_function(function = _stddev,name = 'stddev',arity = 1),
     gp.functions.make_function(function = _ts_argmax,name = 'ts_argmax',arity = 1),
@@ -272,48 +303,37 @@ function_set = [
 
 
 label = df_all_25['Y']
-train = df_all_25.drop(columns=['ts_code','trade_date','change','pre_close','adj_factor','Y'])
+train = df_all_25.drop(columns=['ts_code','trade_date','Y'])
 
 print(train)
 
 gp1 = SymbolicTransformer(  
                             generations=3, #整数，可选(默认值=20)要进化的代数
                             population_size=1000,# 整数，可选(默认值=1000)，每一代群体中的公式数量
-                            hall_of_fame=100, 
-                            n_components=100,
-                            function_set=function_set+init_function ,
-                            parsimony_coefficient=0.0005,
-                            max_samples=0.9, 
+                            hall_of_fame=100, # 备选因子的数量
+                            n_components=100,#最终筛选出的最优因子的数量
+                            function_set=function_set+init_function , # 函数集
+                            parsimony_coefficient=0.001, # 节俭系数
+                            tournament_size=20,  # 作为父代的数量
+                            init_depth=(2, 6),  # 公式树的初始化深度
+                            max_samples=1, 
                             verbose=1,
-                            const_range = (10.0,20.0),
+                            #const_range = (0,0),
+                            p_crossover=0.9,  # 交叉变异概率
+                            p_subtree_mutation=0.01,  # 子树变异概率
+                            p_hoist_mutation=0.01,  # Hoist 变异概率
+                            p_point_mutation=0.01,  # 点变异概率
+                            p_point_replace=0.05,  # 点替代概率                             
                             feature_names=list('$'+n for n in train.columns),
                             random_state=int(time.time()),  # 随机数种子
-                            n_jobs=-1
+                            n_jobs=12
                     )
 
-
-
-
-# gp1 = SymbolicTransformer(generations=20,  # 公式进化的世代数量
-#                           population_size=2000,  # 每一代生成因子数量
-#                           n_components=100,  # 最终筛选出的最优因子的数量
-#                           hall_of_fame=100,  # 备选因子的数量
-#                           function_set=function_set+init_function,  # 函数集
-#                           parsimony_coefficient=0.001,  # 节俭系数
-#                           tournament_size=20,  # 作为父代的数量
-#                           init_depth=(2, 6),  # 公式树的初始化深度
-#                           metric='pearson', # 适应度指标，可以用make_fitness自定义
-#                           const_range = (10.0,20.0), # 因子中常数的取值范围
-#                           p_crossover=0.9,  # 交叉变异概率
-#                           p_subtree_mutation=0.01,  # 子树变异概率
-#                           p_hoist_mutation=0.01,  # Hoist 变异概率
-#                           p_point_mutation=0.01,  # 点变异概率
-#                           p_point_replace=0.05,  # 点替代概率                         
-#                           max_samples=0.9,  # 最大采样比例
-#                           verbose=0,
-#                           random_state=int(time.time()),  # 随机数种子
-#                           n_jobs=-1,  # 并行计算使用的核心数量
-#                          )
+ 
+ 
+                        
+        
+ 
 
 
 
@@ -329,24 +349,24 @@ for formula in gp1:
     alphas.append(str(formula))
 
 alphas=list(set(alphas))
+ 
 
-df_all_300=df_all_300.set_index(['ts_code','trade_date'])
+
 for alpha in alphas:
     print(alpha)
-    alpha=alphaEngine.calc(alpha,df_all_300.copy(),'alpha',True)
+    df_alpha=alphaEngine.calc(alpha,df_all_300.copy(),'alpha',True)
+    #print(df_alpha)
     
-    if alpha.empty:
+    if df_alpha.empty:
         print('err')
         continue
     
     
     df_analys=df_all_300.copy()
-    df_analys['alpha']=alpha
+    df_analys['alpha']=df_alpha
     df_analys=df_analys[['close','alpha']]
     
-    
-    factorAnalyzer.analys('alpha',df_analys)
-
+    factorAnalyzer.analys('alpha',df=df_analys,start_date='',end_date='',formula=alpha,pool='hs300',table='factors_mining')
     print("\n")
 
 
