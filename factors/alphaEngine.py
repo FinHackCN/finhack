@@ -273,6 +273,19 @@ def ts_max(df, window=10):
         df=df.droplevel(1)
     return df 
 
+
+def delay_1(df):
+    return delay(df,1)
+
+def delay_3(df):
+    return delay(df,3)
+    
+def delay_5(df):
+    return delay(df,5)
+    
+def delay_7(df):
+    return delay(df,7)
+
 def delay(df, period=1):
     df=df.groupby('ts_code').shift(period)
     if len(df.index.names)==3:

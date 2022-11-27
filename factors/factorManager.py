@@ -16,6 +16,14 @@ from concurrent.futures import ThreadPoolExecutor,ProcessPoolExecutor, wait, ALL
 
 
 class factorManager:
+    
+    def getAnalysedIndicatorsList(valid=True):
+        flist=mydb.selectToDf('select * from factors_analysis where factor_name not like "alpha%"','finhack')
+        flist=flist['factor_name'].tolist()
+        return flist
+        
+    
+    
     #获取因子列表
     def getFactorsList(valid=True):
         factorslist=[]
@@ -52,7 +60,7 @@ class factorManager:
     
     
     #获取因子数据
-    def getFactors(factor_list,stock_list='',start_date='',end_date=''):
+    def getFactors(factor_list,stock_list=[],start_date='',end_date=''):
         #print(factor_list)
         mypath=os.path.dirname(os.path.dirname(__file__))
         data_path=mypath+'/data/single_factors/'
@@ -74,6 +82,28 @@ class factorManager:
                     del df
             else:
                 print(data_path+factor+'.csv not found')
+        
+        
+        df_factor=df_factor.reset_index() 
+        
+        if df_factor.empty:
+            return df_factor
+        
+        if stock_list!=[]:
+            df_list=[]
+            for ts_code in stock_list:
+                df_tmp=df_factor[df_factor.ts_code==ts_code]
+                df_list.append(df_tmp)
+            df_factor=pd.concat(df_list)
+            
+        if start_date!="":
+            df_factor=df_factor[df_factor.trade_date>=start_date]
+        
+        if end_date!="":
+            df_factor=df_factor[df_factor.trade_date<=end_date]
+          
+        df_factor=df_factor.set_index(['ts_code','trade_date'])  
+        
         return df_factor    
     
     
@@ -85,10 +115,6 @@ class factorManager:
             if not '__' in subfile:
                 listname=subfile
                 alphalists.append(subfile)
-                
-                
-
- 
         return alphalists
     
     #根据alpha列表获取alpha

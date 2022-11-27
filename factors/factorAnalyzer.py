@@ -6,13 +6,13 @@ from library.mydb import mydb
 import hashlib
 import traceback
 class factorAnalyzer():
-    def analys(factor_name,df=pd.DataFrame(),days=[1,2,3,5,8,13,21],pool='all',start_date='20000101',end_date='20100101',formula="",relace=False):
+    def analys(factor_name,df=pd.DataFrame(),days=[1,2,3,5,8,13,21],pool='all',start_date='20000101',end_date='20100101',formula="",relace=False,table='factors_analysis'):
         try:
         
             hashstr=factor_name+'-'+(str(days))+'-'+pool+'-'+start_date+':'+end_date+'#'+formula
             md5=hashlib.md5(hashstr.encode(encoding='utf-8')).hexdigest()
             
-            has=mydb.selectToDf('select hash from factors_analysis where BINARY  hash="%s"' % (md5),'finhack')
+            has=mydb.selectToDf('select hash from %s where BINARY  hash="%s"' % (table,md5),'finhack')
             
             
             #有值且不替换
@@ -24,8 +24,10 @@ class factorAnalyzer():
             
             df.reset_index(inplace=True)
             df['trade_date']= df['trade_date'].astype('string')
-            df=df[df.trade_date>=start_date]
-            df=df[df.trade_date<end_date]
+            if start_date!='':
+                df=df[df.trade_date>=start_date]
+            if end_date!='':
+                df=df[df.trade_date<end_date]
             df=df.set_index(['ts_code','trade_date'])
             
             
@@ -37,6 +39,7 @@ class factorAnalyzer():
             df=df.dropna()
   
             desc=df[factor_name].describe()
+            
             
             if desc['mean']==desc['max']:
                 if factor_name!='alpha':
@@ -70,9 +73,9 @@ class factorAnalyzer():
             
             #有值且不替换
             if(not has.empty and  relace):  
-                del_sql="DELETE FROM `finhack`.`factors_analysis` WHERE `hash` = '%s'" % (md5)    
+                del_sql="DELETE FROM `finhack`.`%s` WHERE `hash` = '%s'" % (table,md5)    
                 mydb.exec(del_sql,'finhack')
-            insert_sql="INSERT INTO `finhack`.`factors_analysis`(`factor_name`, `days`, `pool`, `start_date`, `end_date`, `formula`, `IC`, `IR`, `IRR`, `score`, `hash`) VALUES ( '%s', '%s', '%s', '%s', '%s', '%s', %s, %s, %s, %s, '%s')" %  (factor_name,str(days),pool,start_date,end_date,formula,str(IC),str(IR),str(IRR),str(score),md5)
+            insert_sql="INSERT INTO `finhack`.`%s`(`factor_name`, `days`, `pool`, `start_date`, `end_date`, `formula`, `IC`, `IR`, `IRR`, `score`, `hash`) VALUES ( '%s', '%s', '%s', '%s', '%s', '%s', %s, %s, %s, %s, '%s')" %  (table,factor_name,str(days),pool,start_date,end_date,formula,str(IC),str(IR),str(IRR),str(score),md5)
             mydb.exec(insert_sql,'finhack')
             #print(insert_sql)
             
