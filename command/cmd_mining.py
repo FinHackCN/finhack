@@ -23,44 +23,6 @@ import factors.alphaEngine as alphaFunc
 
 
 
-t1=time.time()
-
-startdate='20160619'
-enddate='20160619'
-
-hs300=AStock.getIndexMember(index='000300.SH',trade_date='')
-
-hs300=list(set(hs300))
-
-
-flist=factorManager.getAnalysedIndicatorsList()
-random.shuffle(flist)
-n=random.randint(3,7)
-factor_list=[]
-
-for i in range(0,n):
-    factor_list.append(flist.pop())
-
-factor_list=factor_list+['open','high','low','close','pre_close','change','returns','volume','amount','vwap'] 
-
-#factor_list=['open','high','low','close']
-
-df_all_25=factorManager.getFactors(factor_list=factor_list,stock_list=hs300[0:25],start_date='20160823',end_date='20200823')
-df_all_25['Y']=df_all_25.groupby('ts_code',group_keys=False)['close'].apply(lambda x: x.shift(-10)/x)
-df_all_25=df_all_25.dropna()
-df_all_25=df_all_25.reset_index() 
-
-df_all_300=factorManager.getFactors(factor_list=factor_list,stock_list=hs300,start_date='20160823',end_date='20200823')
-df_all_300['Y']=df_all_300.groupby('ts_code',group_keys=False)['close'].apply(lambda x: x.shift(-10)/x)
-df_all_300=df_all_300.dropna()
-
-
-print(df_all_25)
-print(df_all_300)
-
-
-df_tmp=df_all_25[['ts_code','trade_date']]
-df_tmp=df_tmp.reset_index(drop=True)
 
 
 init_function = ['add', 'sub', 'mul', 'div', 'sqrt', 'abs', 'sin', 'cos', 'tan']
@@ -299,77 +261,106 @@ function_set = [
 
 
 
+    
+startdate='20160619'
+enddate='20160619'
+    
+hs300=AStock.getIndexMember(index='000300.SH',trade_date='')
+    
+hs300=list(set(hs300))
 
 
+while True:
+    t1=time.time()
+    
+    flist=factorManager.getAnalysedIndicatorsList()
+    random.shuffle(flist)
+    n=random.randint(3,7)
+    factor_list=[]
+    
+    for i in range(0,n):
+        factor_list.append(flist.pop())
+    
+    factor_list=factor_list+['open','high','low','close','pre_close','change','returns','volume','amount','vwap'] 
+    
+    #factor_list=['open','high','low','close']
+    
+    df_all_25=factorManager.getFactors(factor_list=factor_list,stock_list=hs300[0:25],start_date='20160823',end_date='20200823')
+    df_all_25['Y']=df_all_25.groupby('ts_code',group_keys=False).apply(lambda x: x['close'].shift(-10)/x['open'].shift(-1))
+    df_all_25=df_all_25.dropna()
+    df_all_25=df_all_25.reset_index() 
+    
+    df_all_300=factorManager.getFactors(factor_list=factor_list,stock_list=hs300,start_date='20160823',end_date='20200823')
+    df_all_300['Y']=df_all_300.groupby('ts_code',group_keys=False).apply(lambda x: x['close'].shift(-10)/x['open'].shift(-1))
+    df_all_300=df_all_300.dropna()  
+    
+    
+    df_tmp=df_all_25[['ts_code','trade_date']]
+    df_tmp=df_tmp.reset_index(drop=True)
+    
+    
+    label = df_all_25['Y']
+    train = df_all_25.drop(columns=['ts_code','trade_date','Y'])
+    
+    
+    gp1 = SymbolicTransformer(  
+                                generations=random.randint(2,6), #整数，可选(默认值=20)要进化的代数
+                                population_size=1000,# 整数，可选(默认值=1000)，每一代群体中的公式数量
+                                hall_of_fame=200, # 备选因子的数量
+                                n_components=200,#最终筛选出的最优因子的数量
+                                function_set=function_set+init_function , # 函数集
+                                parsimony_coefficient=0.001, # 节俭系数
+                                tournament_size=20,  # 作为父代的数量
+                                init_depth=(2, 6),  # 公式树的初始化深度
+                                max_samples=1, 
+                                verbose=1,
+                                #const_range = (0,0),
+                                p_crossover=0.9,  # 交叉变异概率
+                                p_subtree_mutation=0.01,  # 子树变异概率
+                                p_hoist_mutation=0.01,  # Hoist 变异概率
+                                p_point_mutation=0.01,  # 点变异概率
+                                p_point_replace=0.05,  # 点替代概率                             
+                                feature_names=list('$'+n for n in train.columns),
+                                random_state=int(time.time()),  # 随机数种子
+                                n_jobs=12
+                        )
+    
+     
+     
 
-label = df_all_25['Y']
-train = df_all_25.drop(columns=['ts_code','trade_date','Y'])
-
-print(train)
-
-gp1 = SymbolicTransformer(  
-                            generations=3, #整数，可选(默认值=20)要进化的代数
-                            population_size=1000,# 整数，可选(默认值=1000)，每一代群体中的公式数量
-                            hall_of_fame=100, # 备选因子的数量
-                            n_components=100,#最终筛选出的最优因子的数量
-                            function_set=function_set+init_function , # 函数集
-                            parsimony_coefficient=0.001, # 节俭系数
-                            tournament_size=20,  # 作为父代的数量
-                            init_depth=(2, 6),  # 公式树的初始化深度
-                            max_samples=1, 
-                            verbose=1,
-                            #const_range = (0,0),
-                            p_crossover=0.9,  # 交叉变异概率
-                            p_subtree_mutation=0.01,  # 子树变异概率
-                            p_hoist_mutation=0.01,  # Hoist 变异概率
-                            p_point_mutation=0.01,  # 点变异概率
-                            p_point_replace=0.05,  # 点替代概率                             
-                            feature_names=list('$'+n for n in train.columns),
-                            random_state=int(time.time()),  # 随机数种子
-                            n_jobs=12
-                    )
-
- 
- 
-                        
+    
+    gp1.fit(train,label)
+    new_df2 = gp1.transform(train)
+    
+    print(gp1)
+    
+    
+    alphas=[]
+    
+    for formula in gp1:
+        alphas.append(str(formula))
+    
+    alphas=list(set(alphas))
+     
+    
+    
+    for alpha in alphas:
+        print(alpha)
+        df_alpha=alphaEngine.calc(alpha,df_all_300.copy(),'alpha',True)
         
- 
-
-
-
-
-
-gp1.fit(train,label)
-new_df2 = gp1.transform(train)
-
-
-alphas=[]
-
-for formula in gp1:
-    alphas.append(str(formula))
-
-alphas=list(set(alphas))
- 
-
-
-for alpha in alphas:
-    print(alpha)
-    df_alpha=alphaEngine.calc(alpha,df_all_300.copy(),'alpha',True)
-    #print(df_alpha)
-    
-    if df_alpha.empty:
-        print('err')
-        continue
+        if df_alpha.empty:
+            print('err')
+            continue
+        
+        
+        df_analys=df_all_300.copy()
+        df_analys['alpha']=df_alpha
+        df_analys=df_analys[['close','open','alpha']]
+        
+        factorAnalyzer.analys('alpha',df=df_analys,start_date='',end_date='',formula=alpha,pool='hs300',table='factors_mining')
+        print("\n")
     
     
-    df_analys=df_all_300.copy()
-    df_analys['alpha']=df_alpha
-    df_analys=df_analys[['close','alpha']]
+    print(time.time()-t1)
     
-    factorAnalyzer.analys('alpha',df=df_analys,start_date='',end_date='',formula=alpha,pool='hs300',table='factors_mining')
-    print("\n")
-
-
-print(time.time()-t1)
-
-
+    

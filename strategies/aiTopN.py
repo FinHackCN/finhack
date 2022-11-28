@@ -9,6 +9,10 @@ class strategy():
         t1=time.time()
         #n用来控制轮仓时间
         instance['g']['n']=0
+        
+        instance['date_range']=list(filter(lambda x: x >= instance['start_date'], instance['date_range']))
+        
+        
         for date in instance['date_range']:
             instance['now_date']=date
             strategy.every_bar(instance)
@@ -28,8 +32,8 @@ class strategy():
             
             #i用来控制持仓数据
             i=0
-            for postion in instance['positions']:
-                bt.sell(instance=instance,ts_code=postion['ts_code'],amount=postion['amount'],time='close')
+            for ts_code,postion in instance['positions'].copy().items():
+                bt.sell(instance=instance,ts_code=ts_code,amount=postion['amount'],time='close')
      
         
         #第10日开盘买入

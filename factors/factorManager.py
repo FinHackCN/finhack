@@ -22,16 +22,22 @@ class factorManager:
         flist=flist['factor_name'].tolist()
         return flist
         
+    def getTopAnalysedFactorsList(valid=True,top=100):
+        flist=mydb.selectToDf('select * from factors_analysis order by score desc limit '+str(top),'finhack')
+        flist=flist['factor_name'].tolist()
+        return flist 
     
     
     #获取因子列表
-    def getFactorsList(valid=True):
+    def getFactorsList(valid=True,ignore=True):
         factorslist=[]
         result=[]
+        ignore_list=[]
         path = os.path.dirname(__file__)+"/../data/single_factors"
-        ignore=['close','vol','volume','open','low','high','pct_chg','amount','pre_close','vwap','stop','lh']
+        if ignore:
+            ignore_list=['close','vol','volume','open','low','high','pct_chg','amount','pre_close','vwap','stop','lh']
         for subfile in os.listdir(path):
-            if not '__' in subfile and not subfile.replace('.csv','') in ignore:
+            if not '__' in subfile and not subfile.replace('.csv','') in ignore_list:
                 factorslist.append(subfile.replace('.csv',''))
                 
  

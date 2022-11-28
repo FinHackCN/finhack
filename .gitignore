@@ -7,3 +7,6 @@ nohup.out
 factors/namespace/
 *.zip
 research/.ipynb_checkpoints/
+*.log
+/datalogs/
+logs/
