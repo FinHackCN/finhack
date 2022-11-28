@@ -12,7 +12,7 @@ class factorAnalyzer():
             hashstr=factor_name+'-'+(str(days))+'-'+pool+'-'+start_date+':'+end_date+'#'+formula
             md5=hashlib.md5(hashstr.encode(encoding='utf-8')).hexdigest()
             
-            has=mydb.selectToDf('select hash from %s where BINARY  hash="%s"' % (table,md5),'finhack')
+            has=mydb.selectToDf('select * from %s where  hash="%s"' % (table,md5),'finhack')
             
             
             #有值且不替换
@@ -20,8 +20,8 @@ class factorAnalyzer():
                 return True
             
             if df.empty:
-                df=factorManager.getFactors(factor_list=['close',factor_name])
-            
+                df=factorManager.getFactors(factor_list=['close','open',factor_name])
+ 
             df.reset_index(inplace=True)
             df['trade_date']= df['trade_date'].astype('string')
             if start_date!='':
@@ -48,7 +48,7 @@ class factorAnalyzer():
                 return False
     
             for day in days:
-                df['return']=df.groupby('ts_code',group_keys=False)['close'].apply(lambda x: x.shift(-1*day)/x)
+                df['return']=df.groupby('ts_code',group_keys=False).apply(lambda x: x['close'].shift(-1*day)/x['open'].shift(-1))
                 df_tmp=df.copy().dropna()
                 IC,IR=factorAnalyzer.ICIR(df_tmp,factor_name)
                 IR_list.append(IR)

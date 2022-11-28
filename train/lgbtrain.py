@@ -7,28 +7,27 @@ import hashlib
 import lightgbm as lgb
 from math import e
 import traceback
+import os
 class lgbtrain:
-    def run(start_date='20000101',valid_date="20080101",end_date='20100101',features=[],label='close',shift=10,param={}):
+    def run(start_date='20000101',valid_date="20080101",end_date='20100101',features=[],label='abs',shift=10,param={}):
         try:
-            features=[
-                'TANH_0','CCI_0','buyLgAmount_0','NATR_0','WILLR_0','MACDHISTFIX_0','buyMdVol_0','CMO_0','RSI_0','SQRT_0','LN_0'
-                ]
-            
             hashstr=start_date+"-"+valid_date+"-"+end_date+"-"+",".join(features)+","+label+","+str(shift)+","+str(param)
             md5=hashlib.md5(hashstr.encode(encoding='utf-8')).hexdigest()
-                
-            print(md5)
-            exit()
-                
-            df=factorManager.getFactors(factor_list=features+[label])
+
+            has=mydb.selectToDf('select * from auto_train where  hash="%s"' % (md5),'finhack')
+            #有值且不替换
+            if(not has.empty):  
+                return md5         
+
+            data_path=os.path.dirname(os.path.dirname(__file__))+'/data'
+            df=factorManager.getFactors(factor_list=features+['open','close'])
             df.reset_index(inplace=True)
             df['trade_date']= df['trade_date'].astype('string')
     
-            #df['label']=df[label]/df.groupby('ts_code')[label].shift(1*shift)
-            
-            df['label']=df.groupby('ts_code')[label].apply(lambda x: x.shift(-1*shift)/x)
-            
-            print(df)
+            #绝对涨跌幅
+            if label=='abs':
+                df['label']=df.groupby('ts_code',group_keys=False).apply(lambda x: x['close'].shift(-1*shift)/x['open'].shift(-1))
+
             
             df_train=df[df.trade_date>=start_date]
             df_train=df[df.trade_date<valid_date]        
@@ -54,8 +53,14 @@ class lgbtrain:
             data_train = lgb.Dataset(x_train, y_train)
             data_valid = lgb.Dataset(x_valid, y_valid)        
             
-            lgbtrain.train(data_train,data_valid)
-            lgbtrain.pred(df_pred)
+            lgbtrain.train(data_train,data_valid,data_path,md5)
+            lgbtrain.pred(df_pred,data_path,md5)
+            
+            insert_sql="INSERT INTO auto_train (start_date, valid_date, end_date, features, label, shift, param, hash) VALUES ('%s', '%s', '%s', '%s', '%s', %s, '%s', '%s')" % (start_date,valid_date,end_date,','.join(features),label,str(shift),str(param),md5)
+            
+            mydb.exec(insert_sql,'finhack')            
+            
+            return md5
         except Exception as e:
             print("error:"+str(e))
             print("err exception is %s" % traceback.format_exc())
@@ -75,7 +80,7 @@ class lgbtrain:
         return "ds", np.mean(loss), False
 
 
-    def train(data_train,data_valid):
+    def train(data_train,data_valid,data_path='/tmp',md5='test'):
  
         
         # 参数设置
@@ -108,12 +113,13 @@ class lgbtrain:
         
         print('Saving model...')
         # 模型保存
-        gbm.save_model('/tmp/lgb_model.txt')
+        gbm.save_model(data_path+'/models/lgb_model_'+md5+'.txt')
         # 模型加载
         
-    def pred(df_pred):
+    def pred(df_pred,data_path='/tmp',md5='test'):
         # df_pred=df_pred.drop('symbol', axis=1)   
-        gbm = lgb.Booster(model_file='/tmp/lgb_model.txt')
+        
+        gbm = lgb.Booster(model_file=data_path+'/models/lgb_model_'+md5+'.txt')
         pred=df_pred[['ts_code','trade_date']]
         x_pred=df_pred.drop('label', axis=1)  
         x_pred= x_pred.drop('ts_code', axis=1)  
@@ -122,11 +128,11 @@ class lgbtrain:
         # 模型预测
         y_pred = gbm.predict(x_pred, num_iteration=gbm.best_iteration)
         pred['pred']=y_pred
+        #今天预测的，其实是明天的
+        pred['pred']=pred.groupby('ts_code',group_keys=False).apply(lambda x: x['pred'].shift(1))
         
+        pred=pred.dropna()
         
-        
-        print(pred)
-        
-        pred.to_pickle("/tmp/lgb_model.pkl")
+        pred.to_pickle(data_path+'/preds/lgb_model_'+md5+'_pred.pkl')
         
         return 
