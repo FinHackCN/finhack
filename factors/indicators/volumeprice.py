@@ -39,4 +39,10 @@ class volumeprice:
         df['lLimit']=df_vp['limit']
         del df_vp
         return df
-
+        
+    # def limit_price(df,p): 
+    #     df_vp=AStock.alignStockFactors(df,'astock_price_stk_limit','trade_date',filed='*',conv=2,db='tushare')  
+    #     df['upLimit']=df_vp['up_limit']
+    #     df['downLimit']=df_vp['down_limit']
+    #     del df_vp
+    #     return df

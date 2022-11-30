@@ -85,8 +85,18 @@ class indicatorCompute():
     
             df_factor=pd.DataFrame()
             td_list_p=df_price['trade_date'].tolist()
+            lastdate=df_price['trade_date'].max()
             mypath=os.path.dirname(os.path.dirname(__file__))
             code_factors_path=mypath+"/data/code_factors/"+list_name+'_'+ts_code
+            date_factors_path=mypath+"/data/date_factors/"+lastdate+"/"
+            if not os.path.exists(date_factors_path): 
+                try:
+                    os.mkdir(date_factors_path)
+                except Exception as e:
+                    print(str(e))
+            
+            
+            
  
             if not check and os.path.exists(code_factors_path) and os.path.getsize(code_factors_path) > 0:
                 first_time=False
@@ -132,13 +142,15 @@ class indicatorCompute():
                             t = os.path.getmtime(code_factors_path)-os.path.getmtime(single_factors_path)
                             if t<60*60: #修改时间和code_factor不超过1小时
                                 return True 
-                        
-                        single_factors_path1=mypath+"/data/single_factors_tmp1/"+factor_name+'.csv'
-                        single_factors_path2=mypath+"/data/single_factors_tmp2/"+factor_name+'.csv'
-                        if factor_name not in ['ts_code','trade_date'] and not os.path.exists(single_factors_path2):
-                            df=pd.DataFrame(df_factor,columns=['ts_code','trade_date',factor_name])
-                            df.to_csv(single_factors_path1,mode='a',encoding='utf-8',header=False,index=False)
-                            del df
+                        if not check:
+                            single_factors_path1=mypath+"/data/single_factors_tmp1/"+factor_name+'.csv'
+                            single_factors_path2=mypath+"/data/single_factors_tmp2/"+factor_name+'.csv'
+                            if factor_name not in ['ts_code','trade_date'] and not os.path.exists(single_factors_path2):
+                                df=pd.DataFrame(df_factor,columns=['ts_code','trade_date',factor_name])
+                                df.to_csv(single_factors_path1,mode='a',encoding='utf-8',header=False,index=False)
+                                df_date=df[df.trade_date==lastdate]
+                                df_date.to_csv(date_factors_path+factor_name+'.csv',mode='a',encoding='utf-8',header=False,index=False)
+           
                     return True
                 else:
                     print(ts_code)
@@ -184,14 +196,7 @@ class indicatorCompute():
             df_factor.to_pickle(code_factors_path)
 
 
-            #想了想，这里没法保证不同list相同因子重复写入的问题，只能先写到1里，然后移动到2里
-            for factor_name in df_factor.columns.tolist():
-                single_factors_path1=mypath+"/data/single_factors_tmp1/"+factor_name+'.csv'
-                single_factors_path2=mypath+"/data/single_factors_tmp2/"+factor_name+'.csv'
-                if factor_name not in ['ts_code','trade_date'] and not os.path.exists(single_factors_path2):
-                    df=pd.DataFrame(df_factor,columns=['ts_code','trade_date',factor_name])
-                    df.to_csv(single_factors_path1,mode='a',encoding='utf-8',header=False,index=False)
-                    del df
+
             
             
 
@@ -201,7 +206,20 @@ class indicatorCompute():
                 #print(df_factor)
                 return df_factor
             else:
-                
+                #想了想，这里没法保证不同list相同因子重复写入的问题，只能先写到1里，然后移动到2里
+                for factor_name in df_factor.columns.tolist():
+    
+                    single_factors_path1=mypath+"/data/single_factors_tmp1/"+factor_name+'.csv'
+                    single_factors_path2=mypath+"/data/single_factors_tmp2/"+factor_name+'.csv'
+                    if factor_name not in ['ts_code','trade_date'] and not os.path.exists(single_factors_path2):
+                        df=pd.DataFrame(df_factor,columns=['ts_code','trade_date',factor_name])
+                        df.to_csv(single_factors_path1,mode='a',encoding='utf-8',header=False,index=False)
+                        
+                        df_date=df[df.trade_date==lastdate]
+                        df_date.to_csv(date_factors_path+factor_name+'.csv',mode='a',encoding='utf-8',header=False,index=False)
+                                        
+                        del df
+                        del df_date                
                 del df_factor
                 del df_all
                 del df_250

@@ -9,9 +9,9 @@ from math import e
 import traceback
 import os
 class lgbtrain:
-    def run(start_date='20000101',valid_date="20080101",end_date='20100101',features=[],label='abs',shift=10,param={}):
+    def run(start_date='20000101',valid_date="20080101",end_date='20100101',features=[],label='abs',shift=10,param={},loss='ds'):
         try:
-            hashstr=start_date+"-"+valid_date+"-"+end_date+"-"+",".join(features)+","+label+","+str(shift)+","+str(param)
+            hashstr=start_date+"-"+valid_date+"-"+end_date+"-"+",".join(features)+","+label+","+str(shift)+","+str(param)+","+str(loss)
             md5=hashlib.md5(hashstr.encode(encoding='utf-8')).hexdigest()
 
             has=mydb.selectToDf('select * from auto_train where  hash="%s"' % (md5),'finhack')
@@ -53,7 +53,7 @@ class lgbtrain:
             data_train = lgb.Dataset(x_train, y_train)
             data_valid = lgb.Dataset(x_valid, y_valid)        
             
-            lgbtrain.train(data_train,data_valid,data_path,md5)
+            lgbtrain.train(data_train,data_valid,data_path,md5,loss)
             lgbtrain.pred(df_pred,data_path,md5)
             
             insert_sql="INSERT INTO auto_train (start_date, valid_date, end_date, features, label, shift, param, hash) VALUES ('%s', '%s', '%s', '%s', '%s', %s, '%s', '%s')" % (start_date,valid_date,end_date,','.join(features),label,str(shift),str(param),md5)
@@ -80,7 +80,7 @@ class lgbtrain:
         return "ds", np.mean(loss), False
 
 
-    def train(data_train,data_valid,data_path='/tmp',md5='test'):
+    def train(data_train,data_valid,data_path='/tmp',md5='test',loss="ds"):
  
         
         # 参数设置
@@ -101,15 +101,23 @@ class lgbtrain:
         
         print('Starting training...')
         # 模型训练
-        gbm = lgb.train(params,
-                        data_train,
-                        num_boost_round=1000,
-                        valid_sets=data_valid,
-                        early_stopping_rounds=5,
-                        fobj=lgbtrain.custom_obj,
-                        feval=lgbtrain.custom_eval
-                        
-                        )
+        
+        if loss=="ds":
+            gbm = lgb.train(params,
+                            data_train,
+                            num_boost_round=1000,
+                            valid_sets=data_valid,
+                            early_stopping_rounds=5,
+                            fobj=lgbtrain.custom_obj,
+                            feval=lgbtrain.custom_eval
+                            )
+        else:
+             gbm = lgb.train(params,
+                            data_train,
+                            num_boost_round=1000,
+                            valid_sets=data_valid,
+                            early_stopping_rounds=5
+                            )           
         
         print('Saving model...')
         # 模型保存

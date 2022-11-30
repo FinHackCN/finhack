@@ -167,7 +167,7 @@ class preCheck():
 
             df_tmp=df_250e[(df_250e.trade_date>=daterange[0]) & (df_250e.trade_date<=date)].copy()
             factor_tmp=indicatorCompute.computeListByStock(ts_code=ts_code,df_price=df_tmp,check=True,factor_list=check_list,pure=False,db='tushare')
-            if len(factor_tmp)==0:
+            if 'None' in str(type(factor_tmp)) or len(factor_tmp)==0:
                 continue
             # print(factor_tmp)
             # print(1111111)
