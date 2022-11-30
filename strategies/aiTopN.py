@@ -25,6 +25,8 @@ class strategy():
         
     def every_bar(instance):
         now_date=instance['now_date']
+        if(instance['total_value']<100):
+            return False
         #第9日尾盘清仓
         if instance['g']['n'] % hold_day==hold_day-1:
             pred=instance['data'].loc[now_date]

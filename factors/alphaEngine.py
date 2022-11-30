@@ -470,6 +470,7 @@ def sumif(df, window, condition):
 
 class alphaEngine():
     def calc(formula='',df=pd.DataFrame(),name="alpha",check=False):
+        
         #根据 $符号匹配列名
         col_list = []
         col_list = re.findall(r'(?:\$)[a-zA-Z0-9_]+', formula)
@@ -478,7 +479,7 @@ class alphaEngine():
         #缓存路径
         mypath=os.path.dirname(os.path.dirname(__file__))
         data_path=mypath+'/data/single_factors/'+name+'.csv'   
-        diff_date=0
+        diff_date=999
         max_date=''
         
         if os.path.exists(data_path) and check==False:
@@ -487,9 +488,11 @@ class alphaEngine():
             today=time.strftime("%Y%m%d",time.localtime())
             diff_date=int(today)-int(max_date)
 
-
+        
         if df.empty:
             df=factorManager.getFactors(factor_list=col_list)
+            
+   
             
         
         if diff_date>0 and diff_date<100:
@@ -499,6 +502,8 @@ class alphaEngine():
             df=df.reset_index()
             df=df[df.trade_date>=start_date]
             df=df.set_index(['ts_code','trade_date'])
+        elif diff_date==0:
+            return True
 
         df=df.fillna(0)
         todolist=['indneutralize','cap','filter','self','banchmarkindex']
@@ -541,6 +546,8 @@ class alphaEngine():
                 print(name+"计算公式:"+formula)
             res=eval(formula)
             
+            
+            
             if check:
                 return res
             else:
@@ -551,11 +558,32 @@ class alphaEngine():
                     res=res.set_index(['ts_code','trade_date'])        
                     if not res.empty:
                         res.to_csv(data_path,mode='a',header=False)
-                    exit()
-                else:
+                elif diff_date>100:
                     res.to_csv(data_path,header=None)
+                else:
+                    return True
+                        
+
+                #计算单日指标
+                res=res.reset_index()
+                
+                lastdate=str(res['trade_date'].max())
+                date_factors_path=mypath+"/data/date_factors/"+lastdate
+                if not os.path.exists(date_factors_path): 
+                    try:
+                        os.mkdir(date_factors_path)
+                    except Exception as e:
+                        print(str(e))                
+                
+                res=res[res.trade_date==lastdate]
+                res=res.set_index(['ts_code','trade_date']) 
+                res.to_csv(date_factors_path+"/"+name+'.csv',header=None)
+                    
+                    
                 del df
                 del res
+                
+            return True
 
         except Exception as e:
             todolist=[]#['identically-labeled']
