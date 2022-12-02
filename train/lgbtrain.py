@@ -8,13 +8,39 @@ import lightgbm as lgb
 from math import e
 import traceback
 import os
+from factors.alphaEngine import alphaEngine
 class lgbtrain:
+    def score_mv(x,shift,md5):
+        pass
+        # mypath=os.path.dirname(os.path.dirname(__file__))
+        # cache_path=mypath+'/cache/factors/'
+        # cache_file=cache_path+'label_'+hashlib.md5(md5.encode(encoding='utf-8')).hexdigest()+'.pkl'
+        # if os.path.isfile(cache_file):
+        #         return pd.read_pickle(cache_file)  
+                
+        # tmp=x.copy()
+        # open=tmp['open'].shift(-1)
+        # for i in range(1,shift):
+        #     tmp['x_'+str(i)].append(tmp['close'].shift(-1*i)/open)
+        
+        # print(tmp)
+        
+        
+
+
+
+        
+        
     def run(start_date='20000101',valid_date="20080101",end_date='20100101',features=[],label='abs',shift=10,param={},loss='ds'):
+        print("start log_train:loss=%s" % (loss))
         try:
             hashstr=start_date+"-"+valid_date+"-"+end_date+"-"+",".join(features)+","+label+","+str(shift)+","+str(param)+","+str(loss)
             md5=hashlib.md5(hashstr.encode(encoding='utf-8')).hexdigest()
 
-            has=mydb.selectToDf('select * from auto_train where  hash="%s"' % (md5),'finhack')
+
+            hassql='select * from auto_train where hash="%s"' % (md5)
+            has=mydb.selectToDf(hassql,'finhack')
+
             #有值且不替换
             if(not has.empty):  
                 return md5         
@@ -27,7 +53,12 @@ class lgbtrain:
             #绝对涨跌幅
             if label=='abs':
                 df['label']=df.groupby('ts_code',group_keys=False).apply(lambda x: x['close'].shift(-1*shift)/x['open'].shift(-1))
-
+            elif label=='mv':
+                formula="mean(shift($close,%s),%s)/mean(shift($close,%s),%s)/shift($open,1)+1" % (str(-1*shift),str(shift-1),str(-1*shift),str(shift-1))
+                df=df.set_index(['ts_code','trade_date'])
+                df_tmp=df[['open','close']]
+                df['label']=alphaEngine.calc(formula=formula,df=df_tmp,name="label_mv",check=True)
+                
             
             df_train=df[df.trade_date>=start_date]
             df_train=df[df.trade_date<valid_date]        
@@ -53,10 +84,10 @@ class lgbtrain:
             data_train = lgb.Dataset(x_train, y_train)
             data_valid = lgb.Dataset(x_valid, y_valid)        
             
-            lgbtrain.train(data_train,data_valid,data_path,md5,loss)
+            lgbtrain.train(data_train,data_valid,data_path,md5,loss,param)
             lgbtrain.pred(df_pred,data_path,md5)
             
-            insert_sql="INSERT INTO auto_train (start_date, valid_date, end_date, features, label, shift, param, hash) VALUES ('%s', '%s', '%s', '%s', '%s', %s, '%s', '%s')" % (start_date,valid_date,end_date,','.join(features),label,str(shift),str(param),md5)
+            insert_sql="INSERT INTO auto_train (start_date, valid_date, end_date, features, label, shift, param, hash,loss,algorithm) VALUES ('%s', '%s', '%s', '%s', '%s', %s, '%s', '%s','%s','%s')" % (start_date,valid_date,end_date,','.join(features),label,str(shift),str(param).replace("'",'"'),md5,loss,'lgb')
             
             mydb.exec(insert_sql,'finhack')            
             
@@ -80,7 +111,7 @@ class lgbtrain:
         return "ds", np.mean(loss), False
 
 
-    def train(data_train,data_valid,data_path='/tmp',md5='test',loss="ds"):
+    def train(data_train,data_valid,data_path='/tmp',md5='test',loss="ds",param={}):
  
         
         # 参数设置
@@ -94,10 +125,13 @@ class lgbtrain:
                 'bagging_fraction': 0.9,  # 建树的样本采样比例subsample
                 'bagging_freq': 5,  # k 意味着每 k 次迭代执行bagging
                 'verbose': -1,  # <0 显示致命的, =0 显示错误 (警告), >0 显示信息
-                'lambda_l1':0,
-                'lambda_l2':0, 
-  
+                # 'lambda_l1':0,
+                # 'lambda_l2':0, 
         }   
+        
+        
+        for key in param.keys():
+            params[key]=param[key]
         
         print('Starting training...')
         # 模型训练

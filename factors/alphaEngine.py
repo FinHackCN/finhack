@@ -286,6 +286,11 @@ def delay_5(df):
 def delay_7(df):
     return delay(df,7)
 
+
+def shift(df, period=1):
+    return delay(df,period)
+
+    
 def delay(df, period=1):
     df=df.groupby('ts_code').shift(period)
     if len(df.index.names)==3:
