@@ -66,10 +66,24 @@ class factorManager:
     
     
     #获取因子数据
-    def getFactors(factor_list,stock_list=[],start_date='',end_date=''):
+    def getFactors(factor_list,stock_list=[],start_date='',end_date='',cache=False):
         #print(factor_list)
         mypath=os.path.dirname(os.path.dirname(__file__))
         data_path=mypath+'/data/single_factors/'
+        cache_path=mypath+'/cache/factors/'
+        
+        md5=','.join(factor_list)+'-'+','.join(stock_list)+'-'+start_date+'-'+end_date
+        cache_file=cache_path+'factors_'+hashlib.md5(md5.encode(encoding='utf-8')).hexdigest()+'.pkl'
+        if os.path.isfile(cache_file): # use cache 
+            #print('reading cache')
+            #print(factor_list)
+            #print(md5)
+            return pd.read_pickle(cache_file)
+        else:
+            pass
+            #print(factor_list)
+            #print("nocache")
+        
         df_factor=pd.DataFrame()
         for factor in factor_list:
             factor=factor.replace('$','')
@@ -85,6 +99,7 @@ class factorManager:
                     df_factor=df
                 else:
                     df_factor[factor]=df[factor]
+                    
                     del df
             else:
                 print(data_path+factor+'.csv not found')
@@ -109,7 +124,8 @@ class factorManager:
             df_factor=df_factor[df_factor.trade_date<=end_date]
           
         df_factor=df_factor.set_index(['ts_code','trade_date'])  
-        
+        if cache:
+            df_factor.to_pickle(cache_file)
         return df_factor    
     
     
