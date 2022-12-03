@@ -25,7 +25,7 @@ import math
 def search(param,feature_list):
     param['num_leaves']=int(math.pow(2,param['max_depth'])-1)
     lgbtrain.run('20000101','20080101','20100101',features=feature_list.split(","),label='abs',shift=10,param=param,loss='ds')
-
+    lgbtrain.run('20000101','20080101','20100101',features=feature_list.split(","),label='abs',shift=10,param=param,loss='mse')
 
 gird={
     "max_depth":[5,7,9],
