@@ -30,8 +30,8 @@ class taskRunner:
             factor_lists=task['list'].split(',')
             for factor_list_name in factor_lists:
                     #factor列表
-                if os.path.exists(mypath+"/lists/factorlist/"+factor_list_name):
-                    with open(mypath+"/lists/factorlist/"+factor_list_name, 'r', encoding='utf-8') as f:
+                if os.path.exists(mypath+"/lists/indicatorlist/"+factor_list_name):
+                    with open(mypath+"/lists/indicatorlist/"+factor_list_name, 'r', encoding='utf-8') as f:
                         factor_list=[_.rstrip('\n') for _ in f.readlines()]
                     indicatorCompute.computeList(list_name=factor_list_name,factor_list=factor_list,c_list=c_list)
             os.system('mv '+mypath+'/data/single_factors_tmp2/* '+mypath+'/data/single_factors/')
