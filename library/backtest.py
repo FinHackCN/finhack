@@ -89,7 +89,11 @@ class bt:
         if df_price.empty:
             df_price=bt.load_price()
         
-        data=pd.read_pickle(os.path.dirname(os.path.dirname(__file__))+"/data/preds/"+data_path)
+        if os.path.isfile(os.path.dirname(os.path.dirname(__file__))+"/data/preds/"+data_path):
+            data=pd.read_pickle(os.path.dirname(os.path.dirname(__file__))+"/data/preds/"+data_path)
+        else:
+            print(os.path.dirname(os.path.dirname(__file__))+"/data/preds/"+data_path+' not found!')
+            return False
         bt.log(instance=bt_instance,msg="行情数据读取完毕！",type='info')
         data=data[data.trade_date>=start_date]
         data=data[data.trade_date<=end_date]
@@ -149,7 +153,7 @@ class bt:
         mydb.exec(sql,'finhack')
         
         #太辣鸡的就不上报了
-        if(risk['annual_return']>0.2):
+        if(risk['annual_return']>0.3):
             print("!!!")
             mydb.exec('delete from finhack_backtest_record where id="%s"' % (bt_instance['instance_id']),'woldycvm')
             sql="INSERT INTO `finhack`.`finhack_backtest_record`(`n`, `server`,`loss`, `starttime`, `start_money`, `portvalue`, `alpha`, `beta`, `rnorm`, `sqn`, `info`, `vola`, `omega`, `sharpe`, `sortino`, `calmar`, `drawdown`, `roto`, `trade_num`, `win`, `returns`, `bench_returns`, `trainstart`, `trainend`, `btstart`, `btend`, `factor`, `id`, `endtime`, `runtime`) VALUES (%s, '%s','%s', '%s', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s')" % (0,'woldy-PC',loss,starttime,str(init_cash),str(bt_instance['total_value']),str(risk['alpha']),str(risk['beta']),str(risk['annual_return']),str(risk['sqn']),str(risk['info_ratio']),str(risk['annual_volatility']),str(risk['omega']),str(risk['sharpe']),str(risk['sortino']),str(risk['calmar']),str(risk['max_down']),str(risk['roto']),str(bt_instance['trade_num']),str(risk['win_ratio']),returns,bench_returns,'20010101','20091231',bt_instance['start_date'],bt_instance['end_date'],features_list,bt_instance['instance_id'],endtime,str(runtime))

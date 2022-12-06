@@ -176,7 +176,7 @@ class tsAStockFinance:
         end_date_list=['0331','0630','0930','1231']
         engine=mydb.getDBEngine(db)
         lastdate=tsSHelper.getLastDateAndDelete(table='astock_finance_disclosure_date',filed='end_date',ts_code="",db=db)
-
+        api='disclosure_date'
         
         start_year=int(lastdate[0:4])
         start_mounth=int(lastdate[4:6])

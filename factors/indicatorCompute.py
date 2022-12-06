@@ -15,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor,ProcessPoolExecutor, wait, ALL
 from multiprocessing import cpu_count 
 warnings.simplefilter(action='ignore', category=pd.errors.PerformanceWarning)
 import gc
+import time
 import objgraph
 
 # class BoundThreadPoolExecutor(ProcessPoolExecutor):
@@ -47,6 +48,9 @@ class indicatorCompute():
             for i in range(0, n):
                 yield origin_list[i*cnt:(i+1)*cnt]
  
+ 
+        # for ts_code in code_list:
+        #     indicatorCompute.computeListByStock(ts_code,list_name,'',factor_list,c_list)
         
         
         
@@ -56,7 +60,7 @@ class indicatorCompute():
                 for ts_code in code_list:
                     mytask=pool.submit(indicatorCompute.computeListByStock,ts_code,list_name,'',factor_list,c_list)
                     #tasklist.append(mytask)
-            print(list_name+' computed')
+        print(list_name+' computed')
         
         mypath=os.path.dirname(os.path.dirname(__file__))
         os.system('mv '+mypath+'/data/single_factors_tmp1/* '+mypath+'/data/single_factors_tmp2/')
@@ -75,6 +79,7 @@ class indicatorCompute():
             if(df_price.empty):        
                 #TODO 未处理停牌票
                 df_price=AStock.getStockDailyPriceByCode(ts_code,where=where,fq='hfq',db=db)
+                df_price=df_price.reset_index(drop=True)
             df_all=df_price.copy()
             df_250=df_all.tail(500)
             df_250=df_250.reset_index(drop=True)
@@ -82,6 +87,7 @@ class indicatorCompute():
             
             if(df_price.empty) :
                 return False
+            
     
             df_factor=pd.DataFrame()
             td_list_p=df_price['trade_date'].tolist()
@@ -102,6 +108,7 @@ class indicatorCompute():
                 first_time=False
                 try:
                     df_factor=pd.read_pickle(code_factors_path)
+                    #print('read')
                     td_list_f=df_factor['trade_date'].tolist()
                     diff_date=len(td_list_p)-len(td_list_f)
                 except Exception as e:
@@ -110,7 +117,12 @@ class indicatorCompute():
                 diff_date=len(td_list_p)
 
 
-
+            # print(diff_date)
+            # print(df_price)
+            # print(df_factor)
+            # # x=df_factor[2250:]
+            # print('--------------')
+            # time.sleep(10)  
 
             #去掉注释项
             for row in factor_list.copy():
@@ -193,7 +205,7 @@ class indicatorCompute():
             if pure==True:
                 df_factor=pd.DataFrame(df_factor,columns=factor_list)
                 df_factor=pd.concat([df_price,df_factor],axis=1)
-            df_factor.to_pickle(code_factors_path)
+            
 
 
 
@@ -206,9 +218,9 @@ class indicatorCompute():
                 #print(df_factor)
                 return df_factor
             else:
+                df_factor.to_pickle(code_factors_path)
                 #想了想，这里没法保证不同list相同因子重复写入的问题，只能先写到1里，然后移动到2里
                 for factor_name in df_factor.columns.tolist():
-    
                     single_factors_path1=mypath+"/data/single_factors_tmp1/"+factor_name+'.csv'
                     single_factors_path2=mypath+"/data/single_factors_tmp2/"+factor_name+'.csv'
                     if factor_name not in ['ts_code','trade_date'] and not os.path.exists(single_factors_path2):
