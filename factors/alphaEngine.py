@@ -471,59 +471,75 @@ def sumif(df, window, condition):
     return df   
  
 
-    
+
+def save_lastdate(res,name):
+    #计算单日指标
+    res=res.reset_index()
+    mypath=os.path.dirname(os.path.dirname(__file__))            
+    lastdate=str(res['trade_date'].max())
+    date_factors_path=mypath+"/data/date_factors/"+lastdate
+    if not os.path.exists(date_factors_path): 
+        try:
+            os.mkdir(date_factors_path)
+        except Exception as e:
+            print(str(e))                
+                
+    res=res[res.trade_date==lastdate]
+    res=res.set_index(['ts_code','trade_date']) 
+    res.to_csv(date_factors_path+"/"+name+'.csv',header=None)
+    return res
 
 class alphaEngine():
     def calc(formula='',df=pd.DataFrame(),name="alpha",check=False):
-        
-        #根据 $符号匹配列名
-        col_list = []
-        col_list = re.findall(r'(?:\$)[a-zA-Z0-9_]+', formula)
-        col_list=list(set(col_list))
-        
-        #缓存路径
-        mypath=os.path.dirname(os.path.dirname(__file__))
-        data_path=mypath+'/data/single_factors/'+name+'.csv'   
-        diff_date=999
-        max_date=''
-        
-        if os.path.exists(data_path) and check==False:
-            df_old=pd.read_csv(data_path, header=None, names=['ts_code','trade_date','alpha'])
-            max_date=df_old['trade_date'].max()
-            today=time.strftime("%Y%m%d",time.localtime())
-            diff_date=int(today)-int(max_date)
-
-        
-        if df.empty:
-            df=factorManager.getFactors(factor_list=col_list)
-            
-   
-            
-        
-        if diff_date>0 and diff_date<100:
-            dt=datetime.datetime.strptime(str(max_date),'%Y%m%d')
-            start_date=dt-datetime.timedelta(days=700)
-            start_date=start_date.strftime('%Y%m%d')
-            df=df.reset_index()
-            df=df[df.trade_date>=start_date]
-            df=df.set_index(['ts_code','trade_date'])
-        elif diff_date==0:
-            return True
-
-        df=df.fillna(0)
-        todolist=['indneutralize','cap','filter','self','banchmarkindex']
-        for todo in todolist:
-            if todo in formula:
-                return pd.DataFrame()     
-            
-        formula=formula.replace("$dtm"," ($open<=delay($open,1)?0:max(($high-$open),($open-delay($open,1)))) ")
-        formula=formula.replace("$dbm"," ($open>=delay($open,1)?0:max(($open-$low),($open-delay($open,1)))) ")
-        formula=formula.replace("$tr"," max(max($high-$low,abs($high-delay($close,1))),abs($low-delay($close,1)) ) ")
-        formula=formula.replace("$hd"," $high-delay($high,1) ")
-        formula=formula.replace("$ld"," delay($low,1)-$low ")    
-
-
         try:
+            #根据 $符号匹配列名
+            col_list = []
+            col_list = re.findall(r'(?:\$)[a-zA-Z0-9_]+', formula)
+            col_list=list(set(col_list))
+            
+            #缓存路径
+            mypath=os.path.dirname(os.path.dirname(__file__))
+            data_path=mypath+'/data/single_factors/'+name+'.csv'   
+            diff_date=999
+            max_date=''
+            
+            if os.path.exists(data_path) and check==False:
+                df_old=pd.read_csv(data_path, header=None, names=['ts_code','trade_date','alpha'])
+                max_date=df_old['trade_date'].max()
+                today=time.strftime("%Y%m%d",time.localtime())
+                diff_date=int(today)-int(max_date)
+    
+            
+            if df.empty:
+                df=factorManager.getFactors(factor_list=col_list)
+                
+       
+                
+            
+            if diff_date>0 and diff_date<100:
+                dt=datetime.datetime.strptime(str(max_date),'%Y%m%d')
+                start_date=dt-datetime.timedelta(days=700)
+                start_date=start_date.strftime('%Y%m%d')
+                df=df.reset_index()
+                df=df[df.trade_date>=start_date]
+                df=df.set_index(['ts_code','trade_date'])
+            elif diff_date==0:
+                return True
+    
+            df=df.fillna(0)
+            todolist=['indneutralize','cap','filter','self','banchmarkindex']
+            for todo in todolist:
+                if todo in formula:
+                    return pd.DataFrame()     
+                
+            formula=formula.replace("$dtm"," ($open<=delay($open,1)?0:max(($high-$open),($open-delay($open,1)))) ")
+            formula=formula.replace("$dbm"," ($open>=delay($open,1)?0:max(($open-$low),($open-delay($open,1)))) ")
+            formula=formula.replace("$tr"," max(max($high-$low,abs($high-delay($close,1))),abs($low-delay($close,1)) ) ")
+            formula=formula.replace("$hd"," $high-delay($high,1) ")
+            formula=formula.replace("$ld"," delay($low,1)-$low ")    
+
+
+
             pd.options.display.max_rows = 100
             t1=time.time()
             formula=formula.replace("||"," | ")
@@ -570,21 +586,8 @@ class alphaEngine():
                         
 
                 #计算单日指标
-                res=res.reset_index()
-                
-                lastdate=str(res['trade_date'].max())
-                date_factors_path=mypath+"/data/date_factors/"+lastdate
-                if not os.path.exists(date_factors_path): 
-                    try:
-                        os.mkdir(date_factors_path)
-                    except Exception as e:
-                        print(str(e))                
-                
-                res=res[res.trade_date==lastdate]
-                res=res.set_index(['ts_code','trade_date']) 
-                res.to_csv(date_factors_path+"/"+name+'.csv',header=None)
-                    
-                    
+                res=save_lastdate(res,name)
+
                 del df
                 del res
                 

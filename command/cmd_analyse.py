@@ -24,7 +24,7 @@ factors=factorManager.getFactorsList()
    
 
 
-with ProcessPoolExecutor(max_workers=24) as pool:
+with ProcessPoolExecutor(max_workers=3) as pool:
     tasklist=[]
     for factor in factors:
         mytask=pool.submit(factorAnalyzer.analys,factor)

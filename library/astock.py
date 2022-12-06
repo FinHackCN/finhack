@@ -203,7 +203,7 @@ class AStock:
             df_adj=df_adj.drop('ts_code',axis=1)
             
             
-            df_name=AStock.getTableDataByCode('astock_namechange',code,where)
+            df_name=AStock.getTableDataByCode('astock_namechange',code,'')
             
  
             
@@ -287,6 +287,7 @@ class AStock:
         
     def alignStockFactors(df,table,date,filed,conv=0,db='tushare'):
         df=df.copy()
+        df=df.reset_index()
         ts_code=df['ts_code'].tolist()[0]
         df.drop_duplicates('trade_date',inplace = True)
  
@@ -316,8 +317,9 @@ class AStock:
         if conv==2: #不填充
             pass
         else:
-            df_res=df_res.fillna(method='ffill')
-
+            df_res=df_res.fillna(method='ffill') # conv=0向下填充
+        
+        df_res=df_res.set_index('index')
         
         del df_factor
         return df_res

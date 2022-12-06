@@ -11,7 +11,7 @@ from library.mydb import mydb
 import hashlib
 from concurrent.futures import ThreadPoolExecutor,ProcessPoolExecutor, wait, ALL_COMPLETED
 from library.astock import AStock
-
+import json
 
 def start_bt(features_list,model_hash,loss,algorithm,init_cash,hold_day,hold_n):
                 try:
@@ -46,6 +46,10 @@ def start_bt(features_list,model_hash,loss,algorithm,init_cash,hold_day,hold_n):
 df_all=AStock.getStockDailyPrice(fq='qfq')
 df_all=AStock.getStockDailyPrice(fq='hfq')
 
+
+
+
+
 while True:
         strategy_list=mydb.selectToDf('select * from auto_train','finhack')
         for row in strategy_list.itertuples():
@@ -54,11 +58,12 @@ while True:
                 loss=getattr(row,'loss')
                 algorithm=getattr(row,'algorithm')
                                 
-                with ProcessPoolExecutor(max_workers=10) as pool:
+                with ProcessPoolExecutor(max_workers=24) as pool:
                         tasklist=[]
                         for init_cash in [10000,30000,50000,100000]:
                                 for hold_day in [3,5,7,9,11]:
                                         for hold_n in [2,4,6,8,10]:
+                                                #time.sleep(1)
                                                 mytask=pool.submit(start_bt,features_list,model_hash,loss,algorithm,init_cash,hold_day,hold_n)
                                                 tasklist.append(mytask)
                         wait(tasklist, return_when=ALL_COMPLETED)

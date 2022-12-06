@@ -22,7 +22,7 @@ class factorManager:
         flist=flist['factor_name'].tolist()
         return flist
         
-    def getTopAnalysedFactorsList(valid=True,top=100):
+    def getTopAnalysedFactorsList(valid=True,top=200):
         flist=mydb.selectToDf('select * from factors_analysis order by score desc limit '+str(top),'finhack')
         flist=flist['factor_name'].tolist()
         return flist 
@@ -185,7 +185,7 @@ class factorManager:
                         return_fileds=return_fileds+flist
                         
          
-        path = os.path.dirname(__file__)+"/../lists/factorlist/"
+        path = os.path.dirname(__file__)+"/../lists/indicatorlist/"
         with open(path+'all','w') as file_object:
             file_object.write("\n".join(return_fileds))  
         

@@ -6,9 +6,8 @@ sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from library.astock import AStock
 from factors.indicatorCompute import indicatorCompute
 from library.mydb import mydb
-md5='d5fae5c77fa76ab243b329f40d303f50'
-has=mydb.selectToDf('select * from auto_train where  hash="%s"' % (md5),'finhack')
 
-print(not has.empty)
 
-print(has)
+
+df=indicatorCompute.computeListByStock(ts_code="689009.SH",list_name='none',where='',factor_list=['pe_0','totalMv_0'],pure=True,check=True)
+print(df)

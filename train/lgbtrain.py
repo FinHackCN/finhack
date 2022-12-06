@@ -78,9 +78,11 @@ class lgbtrain:
             y_train=df_train['label']
             x_train=df_train.drop('label', axis=1)
             x_train=x_train.drop('close', axis=1)
+            x_train=x_train.drop('open', axis=1)
             y_valid=df_valid['label']
             x_valid=df_valid.drop('label', axis=1)  
             x_valid=x_valid.drop('close', axis=1)  
+            x_valid=x_valid.drop('open', axis=1) 
             data_train = lgb.Dataset(x_train, y_train)
             data_valid = lgb.Dataset(x_valid, y_valid)        
             
@@ -167,6 +169,7 @@ class lgbtrain:
         x_pred= x_pred.drop('ts_code', axis=1)  
         x_pred= x_pred.drop('trade_date', axis=1)  
         x_pred= x_pred.drop('close', axis=1) 
+        x_pred= x_pred.drop('open', axis=1) 
         # 模型预测
         y_pred = gbm.predict(x_pred, num_iteration=gbm.best_iteration)
         pred['pred']=y_pred
