@@ -5,6 +5,7 @@ __pycache__/
 *.swp
 nohup.out
 factors/namespace/
+factors/indicators/
 *.zip
 research/.ipynb_checkpoints/
 *.log
