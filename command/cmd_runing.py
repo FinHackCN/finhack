@@ -5,12 +5,20 @@ import random
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from runing.runing import runing
 
-df=runing.prepare('20221205')
-df=df.reset_index()
-pred=runing.pred(df)
+# df=runing.prepare('20221206')
 
-print(pred)
+# pred=runing.pred(df)
 
-print(pred[pred['ts_code']=='000151.SZ'])
-print(pred[pred['ts_code']=='000918.SZ'])
-print(pred[pred['ts_code']=='002595.SZ'])
+ 
+
+# print(pred[0:10])
+
+# print(pred[pred['ts_code']=='000151.SZ'])
+# print(pred[pred['ts_code']=='000918.SZ'])
+# print(pred[pred['ts_code']=='002595.SZ'])
+
+
+
+pred=runing.pred_bt(instance_id='208bee8b3bcbb99f0f242223e30d455a',trade_date='20221206')
+
+print(pred[:10])

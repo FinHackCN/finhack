@@ -16,7 +16,7 @@ import json
 def start_bt(features_list,model_hash,loss,algorithm,init_cash,hold_day,hold_n):
                 try:
                         train=algorithm+'_'+loss
-                        strategy='aiTopN'
+                        strategy='aiTopN2'
                         
                         args={
                                 "features_list":features_list,
@@ -51,14 +51,14 @@ df_all=AStock.getStockDailyPrice(fq='hfq')
 
 
 while True:
-        model_list=mydb.selectToDf('select * from auto_train','finhack')
+        model_list=mydb.selectToDf('select * from auto_train where hash in (select model from backtest where sharpe>0.5)','finhack')
         for row in model_list.itertuples():
                 features_list=getattr(row,'features')
                 model_hash=getattr(row,'hash')
                 loss=getattr(row,'loss')
                 algorithm=getattr(row,'algorithm')
                                 
-                with ProcessPoolExecutor(max_workers=24) as pool:
+                with ProcessPoolExecutor(max_workers=1) as pool:
                         tasklist=[]
                         for init_cash in [10000,30000,50000,100000]:
                                 for hold_day in [3,5,7,9,11]:
