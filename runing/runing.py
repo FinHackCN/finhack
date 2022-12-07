@@ -13,7 +13,8 @@ from factors.factorManager import factorManager
 
 
 from factors.factorManager import factorManager
-
+import warnings
+warnings.filterwarnings('ignore')
 
 #思路
 #1、遍历所有因子，取出lastdate的所有因子
@@ -40,30 +41,34 @@ class runing():
                     df[alpha_name]=df_tmp[alpha_name]
             #df=pd.concat(df_list,axis=1)
         return df
+        
+        
+    def pred_bt(instance_id='',trade_date='',df=pd.DataFrame()):
+        bt_sql="select features_list,model from backtest where instance_id='%s'" % (instance_id)
+        bt=mydb.selectToDf(bt_sql,'finhack')
+        features=bt['features_list'].values.tolist()[0]
+        model=bt['model'].values.tolist()[0]
+        if df.empty:
+            df=runing.prepare(trade_date)
+        return runing.pred(df,model,features)
     
-    def pred(df,model='c9909808629985b8934106fda842899b'):
-        features='AVGPRICE_0,FLOOR_0,MACDX_0,MINIDX_0,SMA_0,SUB_0,TYPPRICE_0,alpha101_083,alpha191_004,alpha191_005,alpha191_027,alpha191_057,alpha191_060,alpha191_100,alpha191_126,alpha191_153,alpha191_187,totalRevenuePs_0,open'
+    
+    def pred(df,model='c0c4544c03c2f63336abb675dd41d6bd',features=''):
         features=features.split(',')
+        df=df.reset_index(drop=False)
         df_pred=df[['ts_code']+features]
         gbm = lgb.Booster(model_file='/home/woldy/finhack/data/models/lgb_model_'+model+'.txt')
         pred=df_pred[['ts_code']]
 
-        print(df_pred.columns.tolist())
+        #print(df_pred.columns.tolist())
 
         x_pred= df_pred.drop('ts_code', axis=1)  
-
         # 模型预测
         y_pred = gbm.predict(x_pred, num_iteration=gbm.best_iteration)
-        
-        print(y_pred)
-        
         pred['pred']=y_pred
-
-        
         pred=pred.dropna()
-        #pred=pred.sort_values(by='pred',ascending=False)[0:10]
-        
-        
+        pred=pred.sort_values(by='pred',ascending=False)
+        pred=pred.reset_index()
         return pred
         
         

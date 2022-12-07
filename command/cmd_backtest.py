@@ -51,8 +51,8 @@ df_all=AStock.getStockDailyPrice(fq='hfq')
 
 
 while True:
-        strategy_list=mydb.selectToDf('select * from auto_train','finhack')
-        for row in strategy_list.itertuples():
+        model_list=mydb.selectToDf('select * from auto_train','finhack')
+        for row in model_list.itertuples():
                 features_list=getattr(row,'features')
                 model_hash=getattr(row,'hash')
                 loss=getattr(row,'loss')

@@ -173,7 +173,7 @@ class lgbtrain:
         # 模型预测
         y_pred = gbm.predict(x_pred, num_iteration=gbm.best_iteration)
         pred['pred']=y_pred
-        #今天预测的，其实是明天的
+        #今天预测的，其实是明天要操作的;所以要把今天的数据写成昨天的值
         pred['pred']=pred.groupby('ts_code',group_keys=False).apply(lambda x: x['pred'].shift(1))
         
         pred=pred.dropna()

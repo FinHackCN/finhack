@@ -37,10 +37,10 @@ while True:
     
     value_list=[]
     
-    # feature_list=mydb.selectToDf("SELECT * FROM `backtest` WHERE `annual_return` > '0.05' ORDER BY annual_return desc",'finhack')
-    # feature_list=feature_list['features_list'].to_list()
+    feature_list=mydb.selectToDf("SELECT * FROM `backtest` WHERE `annual_return` > '0.1' ORDER BY annual_return desc",'finhack')
+    feature_list=feature_list['features_list'].to_list()
     
-    # feature_list=list(set(feature_list))
+    feature_list=list(set(feature_list))
     
     
     for key in gird.keys():
@@ -51,9 +51,7 @@ while True:
     p_list = list(product(*value_list))
     k_list=list(gird.keys())
     
-    
-    feature_list=["AVGPRICE_0,FLOOR_0,MACDX_0,MINIDX_0,SMA_0,SUB_0,TYPPRICE_0,alpha101_083,alpha191_004,alpha191_005,alpha191_027,alpha191_057,alpha191_060,alpha191_100,alpha191_126,alpha191_153,alpha191_187,totalRevenuePs_0"]
-    
+ 
     
     for features in feature_list:
         factorManager.getFactors(factor_list=features.split(',')+['open','close'],cache=True)
