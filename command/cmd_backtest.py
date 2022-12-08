@@ -58,7 +58,7 @@ while True:
                 loss=getattr(row,'loss')
                 algorithm=getattr(row,'algorithm')
                                 
-                with ProcessPoolExecutor(max_workers=24) as pool:
+                with ProcessPoolExecutor(max_workers=28) as pool:
                         tasklist=[]
                         for init_cash in [10000,30000,50000,100000]:
                                 for hold_day in [3,5,7,9,11]:

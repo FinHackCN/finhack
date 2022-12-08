@@ -107,11 +107,10 @@ class AStock:
 
 
         mypath=os.path.dirname(os.path.dirname(__file__))
-        condition=','.join(code_list)+'-'+where+'-'+startdate+'-'+enddate+'-'+fq+'-'+db
-        where_md5=hashlib.md5(db.encode(encoding='utf-8')).hexdigest()
+        hashstr=','.join(code_list)+'-'+where+'-'+startdate+'-'+enddate+'-'+fq+'-'+db
+        md5=hashlib.md5(hashstr.encode(encoding='utf-8')).hexdigest()
         
-        #print(where_md5)
-        cache_path=mypath+"/cache/price/"+where_md5
+        cache_path=mypath+"/cache/price/"+md5
         if os.path.isfile(cache_path):
             #print('read cache---'+code)
             t = time.time()-os.path.getmtime(cache_path)
@@ -163,15 +162,15 @@ class AStock:
             where=where+datewhere
             
             #print('getStockDailyPriceByCode---'+code)
-            
-            where_md5 = hashlib.md5(where.encode(encoding='utf-8')).hexdigest()
+            hashstr=code+'-'+where+'-'+startdate+'-'+enddate+'-'+fq
+            md5 = hashlib.md5(hashstr.encode(encoding='utf-8')).hexdigest()
             mypath=os.path.dirname(os.path.dirname(__file__))
-            cache_path=mypath+"/cache/price/"+code+'_'+where_md5
+            cache_path=mypath+"/cache/price/"+code+'_'+md5
      
   
             try:
                 if os.path.isfile(cache_path):
-                    #print('read cache---'+code)
+                    #print('read cache---'+code+','+cache_path)
                     t = time.time()-os.path.getmtime(cache_path)
                     if t<60*60*12 and cache: #缓存时间为12小时
                         df=pd.read_pickle(cache_path)
