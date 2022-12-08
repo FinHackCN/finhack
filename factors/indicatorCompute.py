@@ -11,6 +11,7 @@ from pandarallel import pandarallel
 import numpy as np
 from functools import lru_cache
 import warnings
+import hashlib
 from concurrent.futures import ThreadPoolExecutor,ProcessPoolExecutor, wait, ALL_COMPLETED
 from multiprocessing import cpu_count 
 warnings.simplefilter(action='ignore', category=pd.errors.PerformanceWarning)
@@ -48,10 +49,6 @@ class indicatorCompute():
             for i in range(0, n):
                 yield origin_list[i*cnt:(i+1)*cnt]
  
- 
-        # for ts_code in code_list:
-        #     indicatorCompute.computeListByStock(ts_code,list_name,'',factor_list,c_list)
-        
         
         
         code_lists = split_list_n_list(code_list, n)
@@ -74,6 +71,9 @@ class indicatorCompute():
     def computeListByStock(ts_code,list_name='all',where='',factor_list=None,c_list=[],pure=False,check=False,df_price=pd.DataFrame(),db='tushare'):
         try:
             print('computeListByStock---'+ts_code)
+            
+            hashstr=ts_code+'-'+list_name+'-'+where+'-'+','.join(factor_list)+'-'+','.join(c_list)+'-'+str(pure)+'-'+str(check)
+            md5=hashlib.md5(hashstr.encode(encoding='utf-8')).hexdigest()
             diff_date=0  #对比日期
             first_time=True
             if(df_price.empty):        
@@ -87,13 +87,13 @@ class indicatorCompute():
             
             if(df_price.empty) :
                 return False
-            
+
     
             df_factor=pd.DataFrame()
             td_list_p=df_price['trade_date'].tolist()
             lastdate=df_price['trade_date'].max()
             mypath=os.path.dirname(os.path.dirname(__file__))
-            code_factors_path=mypath+"/data/code_factors/"+list_name+'_'+ts_code
+            code_factors_path=mypath+"/data/code_factors/"+ts_code+'_'+md5
             date_factors_path=mypath+"/data/date_factors/"+lastdate+"/"
             if not os.path.exists(date_factors_path): 
                 try:
@@ -117,9 +117,11 @@ class indicatorCompute():
                 diff_date=len(td_list_p)
 
 
+            # print(code_factors_path)
             # print(diff_date)
             # print(df_price)
             # print(df_factor)
+            # exit()
             # # x=df_factor[2250:]
             # print('--------------')
             # time.sleep(10)  
@@ -179,7 +181,7 @@ class indicatorCompute():
                     factor_name=factor_name+"_0"  
                     
                     
-                
+                #clist，chenged factor_list，代码发生变化
                 #print(first_time)
                 if (not factor_name in df_factor.columns or diff_date>100) and (not factor_name in c_list):
                     if not factor_name in df_all.columns:
@@ -187,15 +189,13 @@ class indicatorCompute():
                 #否则计算250日数据
                 else:
                     if not factor_name in df_250.columns:
-                        if(diff_date>0 and not factor_name in df_factor.columns):
+                        if(diff_date>0 and factor_name in df_factor.columns):
                             df_250=indicatorCompute.computeFactorByStock(ts_code,factor_name,df_250,where=where,db='factors')
-              
-            
-            
+                            
+        
+
             if(first_time):
                 df_factor=df_all
-                if 'index' in df_factor:
-                    del df_factor['index'] 
             else:
                 df_factor=pd.concat([df_factor,df_250.tail(diff_date)],ignore_index=True)
                 for f in df_all.columns:
@@ -206,11 +206,10 @@ class indicatorCompute():
                 df_factor=pd.DataFrame(df_factor,columns=factor_list)
                 df_factor=pd.concat([df_price,df_factor],axis=1)
             
+            if 'index' in df_factor:
+                del df_factor['index'] 
 
-
-
-            
-            
+ 
 
             #objgraph.show_most_common_types(limit=50)
             if check:

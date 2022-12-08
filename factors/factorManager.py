@@ -98,9 +98,12 @@ class factorManager:
                 if df_factor.empty:
                     df_factor=df
                 else:
-                    df_factor[factor]=df[factor]
+                    try:
+                        df_factor[factor]=df[factor]
+                    except Exception as e:
+                        print(factor+" error:",str(e))
                     
-                    del df
+                del df
             else:
                 print(data_path+factor+'.csv not found')
         

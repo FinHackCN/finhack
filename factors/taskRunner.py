@@ -9,7 +9,7 @@ import pandas as pd
 
 class taskRunner:
     def runTask(taskName='all'):
-        c_list=preCheck.checkAllFactors()
+        c_list=preCheck.checkAllFactors() #chenged factor，代码发生变化
         if taskName=='all':
             task_list=config.getSectionList('task')
         else:
@@ -32,6 +32,7 @@ class taskRunner:
             os.system('mv '+mypath+'/data/single_factors_tmp2/* '+mypath+'/data/single_factors/')
          
             #alpha列表
+            
             for factor_list_name in factor_lists:
                 if os.path.exists(mypath+"/lists/alphalist/"+factor_list_name):
                     with open(mypath+"/lists/alphalist/"+factor_list_name, 'r', encoding='utf-8') as f:
