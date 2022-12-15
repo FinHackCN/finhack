@@ -39,7 +39,7 @@ class indicatorCompute():
         tasklist=[]
         code_list=code_list['ts_code'].to_list()
         
-        
+        #为了节省内存，这里有bug，所以要拆开计算
         def split_list_n_list(origin_list, n):
             if len(origin_list) % n == 0:
                 cnt = len(origin_list) // n
@@ -50,6 +50,10 @@ class indicatorCompute():
                 yield origin_list[i*cnt:(i+1)*cnt]
  
         
+        #单进程断点调试用
+        # for ts_code in code_list:
+        #     indicatorCompute.computeListByStock(ts_code,list_name,'',factor_list,c_list)
+        #     exit()
         
         code_lists = split_list_n_list(code_list, n)
         for code_list in code_lists:
@@ -66,7 +70,7 @@ class indicatorCompute():
             
     
         
-    #计算单支股票的因子
+    #计算单支股票的一坨因子
     #pure=True时，只保留factor_list中的因子
     def computeListByStock(ts_code,list_name='all',where='',factor_list=None,c_list=[],pure=False,check=False,df_price=pd.DataFrame(),db='tushare'):
         try:
@@ -170,6 +174,7 @@ class indicatorCompute():
                     print(ts_code)
 
            
+            #下面是日期发生过变化的
             #增加shift_0
             for row in factor_list:
                 factor_name=row
@@ -209,7 +214,7 @@ class indicatorCompute():
             if 'index' in df_factor:
                 del df_factor['index'] 
 
- 
+
 
             #objgraph.show_most_common_types(limit=50)
             if check:

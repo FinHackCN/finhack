@@ -48,7 +48,8 @@ df_all=AStock.getStockDailyPrice(fq='hfq')
 
 
 
-
+tested_list=mydb.selectToDf('select model from  (select model,COUNT(model) as c from backtest GROUP BY (model) ) as x where c>=100','finhack')
+tested_list=tested_list['model'].to_list()
 
 while True:
         model_list=mydb.selectToDf('select * from auto_train where hash in (select model from backtest where sharpe>0.5)','finhack')
@@ -57,7 +58,10 @@ while True:
                 model_hash=getattr(row,'hash')
                 loss=getattr(row,'loss')
                 algorithm=getattr(row,'algorithm')
-                                
+      
+                if model_hash in tested_list:
+                        continue
+                
                 with ProcessPoolExecutor(max_workers=1) as pool:
                         tasklist=[]
                         for init_cash in [10000,30000,50000,100000]:
