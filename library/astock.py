@@ -112,7 +112,8 @@ class AStock:
         
         cache_path=mypath+"/cache/price/"+md5
         if os.path.isfile(cache_path):
-            #print('read cache---'+code)
+            #print('read cache---'+cache_path)
+            #print(hashstr)
             t = time.time()-os.path.getmtime(cache_path)
             if t<60*60*12 and cache: #缓存时间为12小时
                 df=pd.read_pickle(cache_path)
@@ -196,18 +197,18 @@ class AStock:
             last_date=max(df_price['trade_date'])
             calendar=calendar[calendar.trade_date<=last_date]  
         
-            df_adj = AStock.getTableDataByCode('astock_price_adj_factor',code,where)
+            df_adj = AStock.getTableDataByCode('astock_price_adj_factor',code,'')
             df_adj = pd.merge(calendar,df_adj, on='trade_date',how='left')
             df_adj = df_adj.fillna(method='ffill')
             df_adj=df_adj.drop('ts_code',axis=1)
             
             
-            df_name=AStock.getTableDataByCode('astock_namechange',code,'')
+            df_name=AStock.getTableDataByCode('astock_namechange',code,datewhere)
             
  
             
             if df_name.empty:
-                name=AStock.getTableDataByCode('astock_basic',code,where)
+                name=AStock.getTableDataByCode('astock_basic',code,'')
                 df_price['name']=name['name'].values[0]
             else:
                 df_name.rename(columns={'start_date':'trade_date'}, inplace = True)

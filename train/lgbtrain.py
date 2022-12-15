@@ -8,7 +8,9 @@ import lightgbm as lgb
 from math import e
 import traceback
 import os
+import importlib
 from factors.alphaEngine import alphaEngine
+from strategies.filters import filters
 class lgbtrain:
     def score_mv(x,shift,md5):
         pass
@@ -31,10 +33,10 @@ class lgbtrain:
 
         
         
-    def run(start_date='20000101',valid_date="20080101",end_date='20100101',features=[],label='abs',shift=10,param={},loss='ds'):
+    def run(start_date='20000101',valid_date="20080101",end_date='20100101',features=[],label='abs',shift=10,param={},loss='ds',filter_name='',replace=False):
         print("start log_train:loss=%s" % (loss))
         try:
-            hashstr=start_date+"-"+valid_date+"-"+end_date+"-"+",".join(features)+","+label+","+str(shift)+","+str(param)+","+str(loss)
+            hashstr=start_date+"-"+valid_date+"-"+end_date+"-"+",".join(features)+","+label+","+str(shift)+","+str(param)+","+str(loss)+filter_name
             md5=hashlib.md5(hashstr.encode(encoding='utf-8')).hexdigest()
 
 
@@ -43,12 +45,19 @@ class lgbtrain:
 
             #有值且不替换
             if(not has.empty):  
-                return md5         
+                if replace==False:
+                    return md5
 
             data_path=os.path.dirname(os.path.dirname(__file__))+'/data'
             df=factorManager.getFactors(factor_list=features+['open','close'])
             df.reset_index(inplace=True)
             df['trade_date']= df['trade_date'].astype('string')
+            df=df.sort_values('trade_date')
+            if filter_name!='':
+                #filters_module = importlib.import_module('.filters.filters',package='strategies')
+                func_filter=getattr(filters,filter_name)
+                df=func_filter(df)
+    
     
             #绝对涨跌幅
             if label=='abs':
@@ -89,9 +98,9 @@ class lgbtrain:
             lgbtrain.train(data_train,data_valid,data_path,md5,loss,param)
             lgbtrain.pred(df_pred,data_path,md5)
             
-            insert_sql="INSERT INTO auto_train (start_date, valid_date, end_date, features, label, shift, param, hash,loss,algorithm) VALUES ('%s', '%s', '%s', '%s', '%s', %s, '%s', '%s','%s','%s')" % (start_date,valid_date,end_date,','.join(features),label,str(shift),str(param).replace("'",'"'),md5,loss,'lgb')
-            
-            mydb.exec(insert_sql,'finhack')            
+            insert_sql="INSERT INTO auto_train (start_date, valid_date, end_date, features, label, shift, param, hash,loss,algorithm,filter) VALUES ('%s', '%s', '%s', '%s', '%s', %s, '%s', '%s','%s','%s','%s')" % (start_date,valid_date,end_date,','.join(features),label,str(shift),str(param).replace("'",'"'),md5,loss,'lgb',filter_name)
+            if(has.empty): 
+                mydb.exec(insert_sql,'finhack')            
             
             return md5
         except Exception as e:
@@ -174,6 +183,7 @@ class lgbtrain:
         y_pred = gbm.predict(x_pred, num_iteration=gbm.best_iteration)
         pred['pred']=y_pred
         #今天预测的，其实是明天要操作的;所以要把今天的数据写成昨天的值
+        pred=pred.sort_values('trade_date')
         pred['pred']=pred.groupby('ts_code',group_keys=False).apply(lambda x: x['pred'].shift(1))
         
         pred=pred.dropna()

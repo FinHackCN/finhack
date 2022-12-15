@@ -26,16 +26,17 @@ class bt:
         df_price=df_all.set_index(['trade_date','ts_code'])
         df_price=df_price[['high','low','open','close','volume','stop','upLimit','downLimit']]
         df_price.to_pickle(cache_path)
+        
         return df_price
 
         
     
-    def run(instance_id='',start_date='20100101',end_date='20221115',fees=0.0003,min_fees=5,tax=0.001,cash=100000,strategy_name="",data_path="",args={},df_price=pd.DataFrame()):
+    def run(instance_id='',start_date='20100101',end_date='20221115',fees=0.0003,min_fees=5,tax=0.001,cash=100000,strategy_name="",data_path="",args={},df_price=pd.DataFrame(),replace=False,type="bt"):
         t1=time.time()
         starttime=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
         bt_instance={
-            "instance_id":"",
+            "instance_id":instance_id,
             "start_date":start_date,
             "end_date":end_date,
             "now_date":'00000000',
@@ -73,7 +74,8 @@ class bt:
             "positions_value":0,
             "total_value":cash,
             "trade_num":0,
-            "win":0
+            "win":0,
+            "type":type
         }
 
         instance_id=hashlib.md5(str(bt_instance).encode(encoding='utf-8')).hexdigest()
@@ -81,33 +83,34 @@ class bt:
         hassql='select * from backtest  where instance_id="%s"' % (instance_id)
         has=mydb.selectToDf(hassql,'finhack')
         if(not has.empty):  
-            return False                  
+            if replace==False:
+                return False                  
 
         bt_instance["instance_id"]=instance_id
  
 
         if df_price.empty:
             df_price=bt.load_price()
+        bt_instance['df_price']=df_price
+        bt.log(instance=bt_instance,msg="行情数据读取完毕！",type='info')
         
         if os.path.isfile(os.path.dirname(os.path.dirname(__file__))+"/data/preds/"+data_path):
             data=pd.read_pickle(os.path.dirname(os.path.dirname(__file__))+"/data/preds/"+data_path)
         else:
             print(os.path.dirname(os.path.dirname(__file__))+"/data/preds/"+data_path+' not found!')
             return False
-        bt.log(instance=bt_instance,msg="行情数据读取完毕！",type='info')
         data=data[data.trade_date>=start_date]
         data=data[data.trade_date<=end_date]
         date_range=data['trade_date'].to_list()
         date_range=list(set(date_range))
         date_range=sorted(date_range)
-        
         data=data.set_index(['trade_date','ts_code'])
-        
-        
         bt_instance['data']=data
         bt_instance['date_range']=date_range
-        bt_instance['df_price']=df_price
         bt.log(instance=bt_instance,msg="预测数据读取完毕！",type='info')
+
+        
+        
         strategy_module = importlib.import_module('.'+strategy_name,package='strategies')
 
         strategy_instance = getattr(strategy_module, 'strategy')
@@ -119,15 +122,25 @@ class bt:
         bt_instance['returns']['values']=bt_instance['returns']['returns'].cumprod()
         bt_instance['returns']["trade_date"] = pd.to_datetime(bt_instance['returns']["trade_date"], format='%Y%m%d')
         bt_instance['returns']=bt_instance['returns'].set_index('trade_date')
-        
+            
         bt_instance["runtime_info"]={
-                "starttime":starttime,
-                "endtime":datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "runtime":time.time()-t1
+                    "starttime":starttime,
+                    "endtime":datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "runtime":time.time()-t1
         }        
-
+    
+        if bt_instance['returns']['returns'].empty:
+            sql="INSERT INTO `finhack`.`backtest`(`instance_id`) VALUES ( '%s' )" % (bt_instance['instance_id'])
+            mydb.exec(sql,'finhack')
+            print('-')
+            return False
+    
         bt_instance['risk']=bt.analyse(instance=bt_instance,benchmark=bt_instance['setting']['benchmark'],show=False)
-        bt.record(bt_instance)
+        if bt_instance['risk']!=False:
+            bt.record(bt_instance)
+        else:
+            pass
+           # print('error')
         
  
 
@@ -144,25 +157,58 @@ class bt:
         runtime=bt_instance['runtime_info']['runtime']
         starttime=bt_instance['runtime_info']['starttime']
         loss=bt_instance['args']['loss']
-        
-        mydb.exec('delete from backtest where instance_id="%s"' % (bt_instance['instance_id']),'finhack')
-        sql="INSERT INTO `finhack`.`backtest`(`instance_id`,`features_list`, `train`, `model`, `strategy`, `start_date`, `end_date`, `init_cash`, `args`, `history`, `returns`, `logs`, `total_value`, `alpha`, `beta`, `annual_return`, `cagr`, `annual_volatility`, `info_ratio`, `downside_risk`, `R2`, `sharpe`, `sortino`, `calmar`, `omega`, `max_down`, `SQN`) VALUES ( '%s','%s', '%s', '%s', '%s', '%s', '%s', %s, '%s', '%s', '%s', '%s', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)" % (bt_instance['instance_id'],features_list,train,model,strategy,bt_instance['start_date'],bt_instance['end_date'],str(init_cash),str(bt_instance['args']).replace("'",'"'),'history','returns','logs',str(bt_instance['total_value']),str(risk['alpha']),str(risk['beta']),str(risk['annual_return']),str(risk['cagr']),str(risk['annual_volatility']),str(risk['info_ratio']),str(risk['downside_risk']),str(risk['R2']),str(risk['sharpe']),str(risk['sortino']),str(risk['calmar']),str(risk['omega']),str(risk['max_down']),str(risk['sqn']))
+        filters_name=''
+        if 'filter' in bt_instance['args'].keys():
+            filters_name=bt_instance['args']['filter']
+
         
  
         
-        mydb.exec(sql,'finhack')
+        if bt_instance['type']=='bt':
         
-        #太辣鸡的就不上报了
-        if(risk['annual_return']>0.4):
-            print("!!!")
-            mydb.exec('delete from finhack_backtest_record where id="%s"' % (bt_instance['instance_id']),'woldycvm')
-            sql="INSERT INTO `finhack`.`finhack_backtest_record`(`n`, `server`,`loss`, `starttime`, `start_money`, `portvalue`, `alpha`, `beta`, `rnorm`, `sqn`, `info`, `vola`, `omega`, `sharpe`, `sortino`, `calmar`, `drawdown`, `roto`, `trade_num`, `win`, `returns`, `bench_returns`, `trainstart`, `trainend`, `btstart`, `btend`, `factor`, `id`, `endtime`, `runtime`) VALUES (%s, '%s','%s', '%s', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s')" % (0,'woldy-PC',loss,starttime,str(init_cash),str(bt_instance['total_value']),str(risk['alpha']),str(risk['beta']),str(risk['annual_return']),str(risk['sqn']),str(risk['info_ratio']),str(risk['annual_volatility']),str(risk['omega']),str(risk['sharpe']),str(risk['sortino']),str(risk['calmar']),str(risk['max_down']),str(risk['roto']),str(bt_instance['trade_num']),str(risk['win_ratio']),returns,bench_returns,'20010101','20091231',bt_instance['start_date'],bt_instance['end_date'],features_list,bt_instance['instance_id'],endtime,str(runtime))
-            mydb.exec(sql,'woldycvm')  
-
+            tv=10 #阈值
+            if risk['annual_return']<tv:
+                returns='returns'
+                bench_returns='bench_returns'
+       
+            sql="INSERT INTO `finhack`.`backtest`(`instance_id`,`features_list`, `train`, `model`, `strategy`, `start_date`, `end_date`, `init_cash`, `args`, `history`, `returns`, `logs`, `total_value`, `alpha`, `beta`, `annual_return`, `cagr`, `annual_volatility`, `info_ratio`, `downside_risk`, `R2`, `sharpe`, `sortino`, `calmar`, `omega`, `max_down`, `SQN`,filter,win,server,trade_num,runtime,starttime,endtime,benchReturns,roto) VALUES ( '%s','%s', '%s', '%s', '%s', '%s', '%s', %s, '%s', '%s', '%s', '%s', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,'%s',%s,'%s',%s,'%s','%s','%s','%s','%s')" % (bt_instance['instance_id'],features_list,train,model,strategy,bt_instance['start_date'],bt_instance['end_date'],str(init_cash),str(bt_instance['args']).replace("'",'"'),'history',returns,'logs',str(bt_instance['total_value']),str(risk['alpha']),str(risk['beta']),str(risk['annual_return']),str(risk['cagr']),str(risk['annual_volatility']),str(risk['info_ratio']),str(risk['downside_risk']),str(risk['R2']),str(risk['sharpe']),str(risk['sortino']),str(risk['calmar']),str(risk['omega']),str(risk['max_down']),str(risk['sqn']),filters_name,str(risk['win_ratio']),'woldy-PC',str(bt_instance['trade_num']),str(runtime),str(starttime),str(endtime),bench_returns,str(risk['roto']))       
 
     
+            if risk['annual_return']>tv:
+                mydb.exec('delete from backtest where instance_id="%s"' % (bt_instance['instance_id']),'woldycvm')
+                mydb.exec(sql,'woldycvm')                
+            mydb.exec('delete from backtest where instance_id="%s"' % (bt_instance['instance_id']),'finhack')
+            mydb.exec(sql,'finhack')
+        else:
+            
+            pred=bt_instance['data'].loc[bt_instance['now_date']]
+            pred=pred.sort_values(by='pred',ascending=False, inplace=False) 
+            pred=pred.dropna()
+            pred=pred[pred.pred>1.05]
+            pred=pred[~pred.index.duplicated()]
+            pred=pred.reset_index()
+            next_pool=[]
+            next_list=pred['ts_code'].to_list()[:10]
+            for x in next_list:
+                xx=x.split('.')
+                str_x="<a href=\"https://xueqiu.com/S/%s\" target=\"_blank\">%s</a>" % (xx[1]+xx[0],x)
+                next_pool.append(str_x)
+
+            
+            
+            mydb.exec('delete from simulate_record where instance_id="%s"' % (bt_instance['instance_id']),'woldycvm')
+            sql="INSERT INTO `finhack`.`simulate_record`(`instance_id`,`features_list`, `train`, `model`, `strategy`, `start_date`, `end_date`, `init_cash`, `args`, `history`, `returns`, `logs`, `total_value`, `alpha`, `beta`, `annual_return`, `cagr`, `annual_volatility`, `info_ratio`, `downside_risk`, `R2`, `sharpe`, `sortino`, `calmar`, `omega`, `max_down`, `SQN`,filter,win,server,trade_num,runtime,starttime,endtime,benchReturns,roto,next_pool,now_date) VALUES ( '%s','%s', '%s', '%s', '%s', '%s', '%s', %s, '%s', '%s', '%s', '%s', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,'%s',%s,'%s',%s,'%s','%s','%s','%s','%s','%s','%s')" % (bt_instance['instance_id'],features_list,train,model,strategy,bt_instance['start_date'],bt_instance['end_date'],str(init_cash),str(bt_instance['args']).replace("'",'"'),'history',returns,"\n".join(bt_instance['logs']),str(bt_instance['total_value']),str(risk['alpha']),str(risk['beta']),str(risk['annual_return']),str(risk['cagr']),str(risk['annual_volatility']),str(risk['info_ratio']),str(risk['downside_risk']),str(risk['R2']),str(risk['sharpe']),str(risk['sortino']),str(risk['calmar']),str(risk['omega']),str(risk['max_down']),str(risk['sqn']),filters_name,str(risk['win_ratio']),'woldy-PC',str(bt_instance['trade_num']),str(runtime),str(starttime),str(endtime),bench_returns,str(risk['roto']),','.join(next_pool),bt_instance['now_date'])  
+            # print(risk)
+            # print(sql)
+            # exit()
+            mydb.exec(sql,'woldycvm')  
     
     def buy(instance,ts_code,amount=0,price=0,time='open'):
+    
+        flag688=False
+        if ts_code[:3]=='688':
+            flag688=True
+
         now_date=instance['now_date']
         value=0
         try:
@@ -197,20 +243,35 @@ class bt:
                     price=price-5
             amount=price/value
 
-        
-        if amount>0:
+        amount=int(amount)
+        #非科创板
+        if amount>0 and not flag688:
             if(amount<100):
-                amount=100
+                amount=0
             if(amount % 100 !=0):
                 amount=int(amount/100)*100
             price=amount*value
             if instance['cash']-price<instance['setting']['min_fees'] or instance['cash']-price<price*instance['setting']['fees']:
                 amount=amount-100
+        elif amount>0 and flag688:
+            if(amount<200):
+                amount=0
+            if instance['cash']-price<instance['setting']['min_fees'] or instance['cash']-price<price*instance['setting']['fees']:
+                
+                fees=instance['setting']['min_fees']
+                if fees<price*instance['setting']['fees']:
+                    fees=price*instance['setting']['fees']
+                fees_amount=int(fees/value)+1
+                if (amount<200+fees_amount):
+                    amount=0
+                else:
+                    amount=amount-fees_amount
         
         #大于今日成交量的1/100
-        if amount>volume/1000:
-            amount=volume/1000
-        
+        if amount>volume*10:
+            amount=int(volume*0.1)*100
+ 
+   
         
         #再检测一下，排除买了1手手续费不够的情况
         if amount>0:
@@ -309,13 +370,13 @@ class bt:
     
     def update(instance):
         now_date=instance['now_date']
-        
+        #print(now_date+'--------')
         old_value=instance['total_value']
         
         positions_value=0
         
-        if instance['positions']=={}:
-            return True
+        # if instance['positions']=={}:
+        #     return True
         
  
         for ts_code,position in instance['positions'].items():
@@ -340,6 +401,8 @@ class bt:
         instance['total_value']=instance['cash']+positions_value
         instance['returns'].append([now_date,instance['total_value']/old_value])
 
+        instance['history'][now_date]=instance['positions']
+
         #bt.log(instance,"账户余额："+str(instance['total_value'])+","+now_date)
         return True
        
@@ -361,8 +424,9 @@ class bt:
 
 
         with open(log_path,'a') as f:
-            f.writelines(msgstr+"\n")        
-        #print(msg)
+            f.writelines(msgstr+"\n")      
+        instance['logs'].append(msgstr)
+        #print(msgstr)
         return True
         
         
@@ -382,7 +446,16 @@ class bt:
         returns=instance['returns']['returns']-1
         benchReturns=index['returns']-1
         
-        alpha, beta = ey.alpha_beta(returns = returns, factor_returns = benchReturns, annualization=252)       
+        
+        
+        try:
+            alpha, beta = ey.alpha_beta(returns = returns, factor_returns = benchReturns, annualization=252) 
+        except Exception as e:
+            print(str(e))
+            print(returns)
+            print(instance)
+            instance['risk']=False
+            return False
         result = {}
         result["alpha"] = alpha
         result["beta"] = beta
@@ -396,6 +469,8 @@ class bt:
         result['R2'] =ey.stability_of_timeseries(returns)
         result['sharpe'] = ey.sharpe_ratio(returns = returns, risk_free=0, period='daily', annualization=None)
         result['sortino'] = ey.sortino_ratio(returns = returns,required_return=0, period='daily', annualization=None, _downside_risk=None)
+    
+        
         result['calmar'] = ey.calmar_ratio(returns = returns,period='daily', annualization=None)
         result['omega'] = ey.omega_ratio(returns = returns, risk_free=0.0, required_return=0.0, annualization=252)
         result['max_down']=ey.max_drawdown(returns)
@@ -405,10 +480,23 @@ class bt:
         result['rnorm']=result['annual_return']
         result['trade_num']=instance['trade_num']
         result['roto']=instance['total_value']/instance['init_cash']-1
-        result['win_ratio']=instance['win']/instance['trade_num']
-        
+        if(instance['trade_num']>0):
+            result['win_ratio']=instance['win']/instance['trade_num']
+        else:
+            result['win_ratio']=0
         result['returns']=returns
         result['bench_returns']=benchReturns
+        
+      
+        for key in result.keys():
+            if key not in ['returns','bench_returns']:
+                #print(key)
+                try:
+                    if math.isnan(result[key]) or math.isinf(result[key]) :
+                        result[key]=0
+                except Exception as e:
+                    result[key]=0
+        
         instance['risk']=result
         return result
         

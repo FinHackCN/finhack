@@ -21,8 +21,6 @@ warnings.filterwarnings('ignore')
 #2、把这些因子丢到
 
 class runing():
-    
-
     def prepare(lastdate=''):
         path = os.path.dirname(__file__)+"/../data/date_factors/"+lastdate
         df=pd.DataFrame()
@@ -51,6 +49,8 @@ class runing():
         if df.empty:
             df=runing.prepare(trade_date)
         return runing.pred(df,model,features)
+        
+
     
     
     def pred(df,model='c0c4544c03c2f63336abb675dd41d6bd',features=''):
@@ -68,7 +68,7 @@ class runing():
         pred['pred']=y_pred
         pred=pred.dropna()
         pred=pred.sort_values(by='pred',ascending=False)
-        pred=pred.reset_index()
+        pred=pred.reset_index(drop=True)
         return pred
         
         
