@@ -24,14 +24,14 @@ class bt:
         df_all=AStock.getStockDailyPrice(fq='qfq')
         df_all=df_all.reset_index()
         df_price=df_all.set_index(['trade_date','ts_code'])
-        df_price=df_price[['high','low','open','close','volume','stop','upLimit','downLimit']]
+        df_price=df_price[['high','low','open','close','volume','stop','upLimit','downLimit','name']]
         df_price.to_pickle(cache_path)
         
         return df_price
 
         
     
-    def run(instance_id='',start_date='20100101',end_date='20221115',fees=0.0003,min_fees=5,tax=0.001,cash=100000,strategy_name="",data_path="",args={},df_price=pd.DataFrame(),replace=False,type="bt"):
+    def run(instance_id='',start_date='20100101',end_date='20221115',fees=0.0003,min_fees=5,tax=0.001,cash=100000,strategy_name="",data_path="",args={},df_price=pd.DataFrame(),replace=False,type="bt",g={},slip=0.015):
         t1=time.time()
         starttime=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
@@ -43,7 +43,7 @@ class bt:
             "data_path":data_path,
             "args":args,
             "data":None,
-            "g":{},
+            "g":g,
             "runtime_info":{},
             "positions":{ #仓位列表
                 
@@ -67,6 +67,7 @@ class bt:
                 "min_fees":min_fees,
                 "tax":tax,
                 "benchmark":"000001.SH",
+                "slip":slip
             },
             "strategy_name":strategy_name,
             "cash":cash,
@@ -78,7 +79,8 @@ class bt:
             "type":type
         }
 
-        instance_id=hashlib.md5(str(bt_instance).encode(encoding='utf-8')).hexdigest()
+        if instance_id=='':
+            instance_id=hashlib.md5(str(bt_instance).encode(encoding='utf-8')).hexdigest()
         
         hassql='select * from backtest  where instance_id="%s"' % (instance_id)
         has=mydb.selectToDf(hassql,'finhack')
@@ -197,7 +199,7 @@ class bt:
             
             
             mydb.exec('delete from simulate_record where instance_id="%s"' % (bt_instance['instance_id']),'woldycvm')
-            sql="INSERT INTO `finhack`.`simulate_record`(`instance_id`,`features_list`, `train`, `model`, `strategy`, `start_date`, `end_date`, `init_cash`, `args`, `history`, `returns`, `logs`, `total_value`, `alpha`, `beta`, `annual_return`, `cagr`, `annual_volatility`, `info_ratio`, `downside_risk`, `R2`, `sharpe`, `sortino`, `calmar`, `omega`, `max_down`, `SQN`,filter,win,server,trade_num,runtime,starttime,endtime,benchReturns,roto,next_pool,now_date) VALUES ( '%s','%s', '%s', '%s', '%s', '%s', '%s', %s, '%s', '%s', '%s', '%s', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,'%s',%s,'%s',%s,'%s','%s','%s','%s','%s','%s','%s')" % (bt_instance['instance_id'],features_list,train,model,strategy,bt_instance['start_date'],bt_instance['end_date'],str(init_cash),str(bt_instance['args']).replace("'",'"'),'history',returns,"\n".join(bt_instance['logs']),str(bt_instance['total_value']),str(risk['alpha']),str(risk['beta']),str(risk['annual_return']),str(risk['cagr']),str(risk['annual_volatility']),str(risk['info_ratio']),str(risk['downside_risk']),str(risk['R2']),str(risk['sharpe']),str(risk['sortino']),str(risk['calmar']),str(risk['omega']),str(risk['max_down']),str(risk['sqn']),filters_name,str(risk['win_ratio']),'woldy-PC',str(bt_instance['trade_num']),str(runtime),str(starttime),str(endtime),bench_returns,str(risk['roto']),','.join(next_pool),bt_instance['now_date'])  
+            sql="INSERT INTO `finhack`.`simulate_record`(`instance_id`,`features_list`, `train`, `model`, `strategy`, `start_date`, `end_date`, `init_cash`, `args`, `history`, `returns`, `logs`, `total_value`, `alpha`, `beta`, `annual_return`, `cagr`, `annual_volatility`, `info_ratio`, `downside_risk`, `R2`, `sharpe`, `sortino`, `calmar`, `omega`, `max_down`, `SQN`,filter,win,server,trade_num,runtime,starttime,endtime,benchReturns,roto,next_pool,now_date,bt_rank) VALUES ( '%s','%s', '%s', '%s', '%s', '%s', '%s', %s, '%s', '%s', '%s', '%s', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,'%s',%s,'%s',%s,'%s','%s','%s','%s','%s','%s','%s',%s)" % (bt_instance['instance_id'],features_list,train,model,strategy,bt_instance['start_date'],bt_instance['end_date'],str(init_cash),str(bt_instance['args']).replace("'",'"'),'history',returns,"\n".join(bt_instance['logs']),str(bt_instance['total_value']),str(risk['alpha']),str(risk['beta']),str(risk['annual_return']),str(risk['cagr']),str(risk['annual_volatility']),str(risk['info_ratio']),str(risk['downside_risk']),str(risk['R2']),str(risk['sharpe']),str(risk['sortino']),str(risk['calmar']),str(risk['omega']),str(risk['max_down']),str(risk['sqn']),filters_name,str(risk['win_ratio']),'woldy-PC',str(bt_instance['trade_num']),str(runtime),str(starttime),str(endtime),bench_returns,str(risk['roto']),','.join(next_pool),bt_instance['now_date'],str(bt_instance['g']['rank']))  
             # print(risk)
             # print(sql)
             # exit()
@@ -233,6 +235,13 @@ class bt:
         if value>=upLimit*1:
             bt.log(instance=instance,ts_code=ts_code,msg="涨停板，无法买入！",type='warn')
             return False
+
+
+        #设置滑点
+        value=value*(1+instance['setting']['slip'])
+        if value>=upLimit:
+            value=upLimit
+
 
         if price>0:
             #考虑手续费不够的情况
@@ -307,6 +316,7 @@ class bt:
             value=instance['df_price'][time].loc[(now_date,ts_code)]
         except Exception as e:
             return False   
+        
  
         try:
             value=float(value)
@@ -317,13 +327,20 @@ class bt:
                 print(value)
                 bt.log(instance,ts_code+":error！"+str(e))
                 return False   
-
-
+        
+        
+        
         downLimit=instance['df_price']['downLimit'].loc[(now_date,ts_code)]
  
         if value<=downLimit:
             bt.log(instance=instance,ts_code=ts_code,msg="跌停版，无法卖出！",type='warn')
             return False
+  
+ 
+        #设置滑点
+        value=value*(1-instance['setting']['slip'])
+        if value<=downLimit:
+            value=downLimit
   
     
         if amount>instance['positions'][ts_code]['amount']:

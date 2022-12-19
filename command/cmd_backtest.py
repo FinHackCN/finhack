@@ -56,9 +56,9 @@ tested_list=mydb.selectToDf('select model from  (select model,COUNT(model) as c 
 tested_list=tested_list['model'].to_list()
 
 #print(tested_list)
-for tested_model in tested_list:
-        if os.path.exists('/home/woldy/finhack/data/preds/lgb_model_'+tested_model+'_pred.pkl'):
-                os.remove('/home/woldy/finhack/data/preds/lgb_model_'+tested_model+'_pred.pkl')
+# for tested_model in tested_list:
+#         if os.path.exists('/home/woldy/finhack/data/preds/lgb_model_'+tested_model+'_pred.pkl'):
+#                 os.remove('/home/woldy/finhack/data/preds/lgb_model_'+tested_model+'_pred.pkl')
 
 
 
@@ -79,7 +79,7 @@ while True:
                 loss=getattr(row,'loss')
                 algorithm=getattr(row,'algorithm')
                                 
-                with ProcessPoolExecutor(max_workers=32) as pool:
+                with ProcessPoolExecutor(max_workers=16) as pool:
                         tasklist=[]
                         for init_cash in [10000,20000,30000,50000]:
                                 for hold_day in  [3,5,7,9,11]:

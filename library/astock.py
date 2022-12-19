@@ -246,14 +246,7 @@ class AStock:
                 df.rename(columns={'vol':'volume','pct_chg':'returns'}, inplace = True)
 
 
-            if code[0:3]=='300' or code[0:3]=='688':
-                limit=0.20
-            elif code[0:1]=='8':
-                limit=0.30
-            else:
-                limit=0.10
-                
-            df["upLimit"]=limit
+
 
 
             df['ts_code']=code
@@ -265,8 +258,21 @@ class AStock:
     
             df['name']=df['name'].fillna(method='bfill')
             
-            df["upLimit"] =np.where(df.name.str.contains('ST'),0.05,limit)
-            df["downLimit"] =np.where(df.name.str.contains('ST'),0.05,limit)
+            if code[0:3]=='300' or code[0:3]=='688':
+                limit=0.20
+                df["upLimit"]=limit       
+                df["downLimit"]=limit                
+            elif code[0:1]=='7' or code[0:1]=='8':
+                limit=0.30
+                df["upLimit"]=limit       
+                df["downLimit"]=limit                
+            else:
+                limit=0.10
+                df["upLimit"]=limit       
+                df["downLimit"]=limit
+                df["upLimit"] =np.where(df.name.str.contains('ST'),0.05,limit)
+                df["downLimit"] =np.where(df.name.str.contains('ST'),0.05,limit)
+                
             df["upLimit"]=round(df['close'].shift(1)*(1+df["upLimit"]),2)
             df["downLimit"]=round(df['close'].shift(1)*(1-df["downLimit"]),2)
             

@@ -26,8 +26,8 @@ def search(param,feature_list):
     param['num_leaves']=int(math.pow(2,param['max_depth'])-1)
     #lgbtrain.run('20000101','20080101','20100101',features=feature_list.split(","),label='abs',shift=10,param=param,loss='ds')
     #lgbtrain.run('20000101','20080101','20100101',features=feature_list.split(","),label='abs',shift=10,param=param,loss='mse')
-    lgbtrain.run('20000101','20080101','20100101',features=feature_list.split(","),label='abs',shift=10,param=param,loss='ds',filter_name='only_main')
-    lgbtrain.run('20000101','20080101','20100101',features=feature_list.split(","),label='abs',shift=10,param=param,loss='mse',filter_name='only_main')
+    lgbtrain.run('20000101','20080101','20100101',features=feature_list.split(","),label='abs',shift=10,param=param,loss='ds',filter_name='only_main_not_st')
+    lgbtrain.run('20000101','20080101','20100101',features=feature_list.split(","),label='abs',shift=10,param=param,loss='mse',filter_name='only_main_not_st')
 
 while True:
     gird={
@@ -38,7 +38,7 @@ while True:
     
     value_list=[]
     
-    feature_list=mydb.selectToDf("SELECT * FROM `backtest` WHERE `annual_return` > '0.1' ORDER BY annual_return desc",'finhack')
+    feature_list=mydb.selectToDf("SELECT * FROM `backtest` WHERE `annual_return` > '1' ORDER BY annual_return desc",'finhack')
     feature_list=feature_list['features_list'].to_list()
     
     feature_list=list(set(feature_list))
@@ -63,4 +63,5 @@ while True:
                 param[k_list[i]]=v
                 i=i+1
             search(param=param,feature_list=features)
+            exit()
  

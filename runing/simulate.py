@@ -15,20 +15,21 @@ import json
 from runing.runing import runing
 
 class simulate:
-    def updateTopBt(n=100):
-        top_features_sql="SELECT avg(annual_return) as mean,count(features_list) as c,features_list FROM `finhack`.`backtest`  where sharpe>2  GROUP BY features_list order  by mean desc";
-        top_features=mydb.selectToDf(top_features_sql,'finhack')
-        #print(top_features)
-        for row in top_features.itertuples():
-            features=getattr(row,'features_list')
-            mydb.exec("update backtest set simulate=1 where sharpe>2 and instance_id in (select t2.instance_id from (SELECT instance_id FROM backtest where features_list='%s' ORDER BY sharpe desc limit 3) as t2)" % features,'finhack')
+    def updateTopBt(n=10):
+        # top_features_sql="SELECT avg(annual_return) as mean,count(features_list) as c,features_list FROM `finhack`.`backtest`  where sharpe>2  GROUP BY features_list order  by mean desc";
+        # top_features=mydb.selectToDf(top_features_sql,'finhack')
+        # #print(top_features)
+        # for row in top_features.itertuples():
+        #     features=getattr(row,'features_list')
+        #     mydb.exec("update backtest set simulate=1 where sharpe>2 and instance_id in (select t2.instance_id from (SELECT instance_id FROM backtest where features_list='%s' ORDER BY sharpe desc limit 3) as t2)" % features,'finhack')
         
-        
-        #bt_list=mydb.exec("update backtest set simulate=1 where annual_return>1.6 and instance_id in (select t2.instance_id from (SELECT instance_id FROM backtest  ORDER BY annual_return desc limit %s) as t2)" % str(n),'finhack')
+        mydb.exec("update backtest set simulate=1 where instance_id in (select t2.instance_id from (SELECT instance_id FROM backtest  ORDER BY sortino desc limit %s) as t2)" % str(n),'finhack')
 
     def getSimulateList():
         simulate.updateTopBt()
-        bt_list=mydb.selectToDf("SELECT * FROM backtest where simulate=1",'finhack')
+        bt_list=mydb.selectToDf("SELECT * FROM backtest where simulate=1 order by sortino desc",'finhack')
+        bt_list['rank']=bt_list['sortino'].rank(ascending=False)
+        bt_list['rank']=bt_list['rank'].astype(int)
         return bt_list
         
     def loadData(bt_list):
@@ -84,7 +85,7 @@ class simulate:
             created_at=getattr(row,'created_at')
             instance_id=getattr(row,'instance_id')
             #print(str(created_at).replace('-','')[:8])
-            
+            rank=getattr(row,'rank')
             strategy_name=strategy.split('_')[0]
   
             bt_instance=bt.run(
@@ -95,6 +96,7 @@ class simulate:
                     strategy_name=strategy_name,
                     data_path="lgb_model_simulate_"+model_hash+"_pred.pkl",
                     args=args,
+                    g={'rank':rank},
                     replace=True,
                     type='simulate'
             )
