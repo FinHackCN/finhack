@@ -18,7 +18,7 @@ from factors.factorAnalyzer import factorAnalyzer
 from factors.factorManager import factorManager
 from factors.alphaEngine import alphaEngine
 import factors.alphaEngine as alphaFunc
-
+from library.globalvar import *
 
 
 init_function = ['add', 'sub', 'mul', 'div', 'sqrt', 'abs', 'sin', 'cos', 'tan']

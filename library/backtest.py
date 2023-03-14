@@ -10,10 +10,10 @@ import datetime
 import empyrical as ey
 import hashlib
 from library.mydb import mydb
+from library.globalvar import *
 class bt:
     def load_price(cache=True):
-        mypath='/data/code/finhack'
-        cache_path=mypath+"/cache/price/bt_price"
+        cache_path=PRICE_CACHE_DIR+"/bt_price"
         if os.path.isfile(cache_path):
             #print('read cache---'+code)
             t = time.time()-os.path.getmtime(cache_path)
@@ -31,7 +31,7 @@ class bt:
 
         
     
-    def run(instance_id='',start_date='20100101',end_date='20221115',fees=0.0003,min_fees=5,tax=0.001,cash=100000,strategy_name="",data_path="",args={},df_price=pd.DataFrame(),replace=False,type="bt",g={},slip=0.015):
+    def run(instance_id='',start_date='20100101',end_date='20221115',fees=0.0003,min_fees=5,tax=0.001,cash=100000,strategy_name="",data_path="",args={},df_price=pd.DataFrame(),replace=False,type="bt",g={},slip=0.005):
         t1=time.time()
         starttime=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
@@ -96,10 +96,10 @@ class bt:
         bt_instance['df_price']=df_price
         bt.log(instance=bt_instance,msg="行情数据读取完毕！",type='info')
         
-        if os.path.isfile(os.path.dirname(os.path.dirname(__file__))+"/data/preds/"+data_path):
-            data=pd.read_pickle(os.path.dirname(os.path.dirname(__file__))+"/data/preds/"+data_path)
+        if os.path.isfile(PREDS_DIR+data_path):
+            data=pd.read_pickle(PREDS_DIR+data_path)
         else:
-            print(os.path.dirname(os.path.dirname(__file__))+"/data/preds/"+data_path+' not found!')
+            print(PREDS_DIR+data_path+' not found!')
             return False
         data=data[data.trade_date>=start_date]
         data=data[data.trade_date<=end_date]
@@ -436,8 +436,7 @@ class bt:
             msgstr="%s %s [%s] %s" % (now_date,msg,type,time)
         else:
             msgstr="%s %s %s [%s] %s" % (now_date,ts_code,msg,type,time)
-        mypath='/data/code/finhack'
-        log_path=mypath+"/data/logs/backtest/bt_"+instance['instance_id']+'.log'
+        log_path=LOGS_DIR+"backtest/bt_"+instance['instance_id']+'.log'
 
 
         with open(log_path,'a') as f:
@@ -454,10 +453,22 @@ class bt:
         index['values']=index['returns'].cumprod()
         index["trade_date"] = pd.to_datetime(index["trade_date"], format='%Y%m%d')
         index=index.set_index('trade_date') 
+        qs.extend_pandas()
+        
+        # max_drawdown=qs.stats.max_drawdown(instance['returns']['values'])
+        # stats_rolling_sharpe = qs.stats.rolling_sharpe(instance['returns']['values'], rolling_period=20)
+        # print(stats_rolling_sharpe.mean())
+        # print(max_drawdown)
+        # exit()
+        
+        
         
         if show:
-            qs.extend_pandas()
+            
             qs.reports.full(instance['returns']['values'], index['values'])
+        
+        
+     
         
         
         returns=instance['returns']['returns']-1
