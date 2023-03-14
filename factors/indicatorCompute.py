@@ -18,7 +18,7 @@ warnings.simplefilter(action='ignore', category=pd.errors.PerformanceWarning)
 import gc
 import time
 import objgraph
-
+from library.globalvar import *
 # class BoundThreadPoolExecutor(ProcessPoolExecutor):
 #     """
 #     对ThreadPoolExecutor 进行重写，给队列设置边界
@@ -51,20 +51,19 @@ class indicatorCompute():
  
         
         #单进程断点调试用
-        # for ts_code in code_list:
-        #     indicatorCompute.computeListByStock(ts_code,list_name,'',factor_list,c_list)
-        #     exit()
+        for ts_code in code_list:
+            indicatorCompute.computeListByStock(ts_code,list_name,'',factor_list,c_list)
+            #exit()
         
-        code_lists = split_list_n_list(code_list, n)
-        for code_list in code_lists:
-            with ProcessPoolExecutor(max_workers=n) as pool:
-                for ts_code in code_list:
-                    mytask=pool.submit(indicatorCompute.computeListByStock,ts_code,list_name,'',factor_list,c_list)
-                    #tasklist.append(mytask)
-        print(list_name+' computed')
+        # code_lists = split_list_n_list(code_list, n)
+        # for code_list in code_lists:
+        #     with ProcessPoolExecutor(max_workers=n) as pool:
+        #         for ts_code in code_list:
+        #             mytask=pool.submit(indicatorCompute.computeListByStock,ts_code,list_name,'',factor_list,c_list)
+        #             #tasklist.append(mytask)
+        # print(list_name+' computed')
         
-        mypath=os.path.dirname(os.path.dirname(__file__))
-        os.system('mv '+mypath+'/data/single_factors_tmp1/* '+mypath+'/data/single_factors_tmp2/')
+        os.system('mv '+CACHE_DIR+'/single_factors_tmp1/* '+CACHE_DIR+'/single_factors_tmp2/')
             
             
             
@@ -96,9 +95,8 @@ class indicatorCompute():
             df_factor=pd.DataFrame()
             td_list_p=df_price['trade_date'].tolist()
             lastdate=df_price['trade_date'].max()
-            mypath=os.path.dirname(os.path.dirname(__file__))
-            code_factors_path=mypath+"/data/code_factors/"+ts_code+'_'+md5
-            date_factors_path=mypath+"/data/date_factors/"+lastdate+"/"
+            code_factors_path=CODE_FACTORS_DIR+ts_code+'_'+md5
+            date_factors_path=DATE_FACTORS_DIR+lastdate+"/"
             if not os.path.exists(date_factors_path): 
                 try:
                     os.mkdir(date_factors_path)
@@ -155,14 +153,14 @@ class indicatorCompute():
                 if  diff_col==[]:
                     #需要检查单因子是否需要重写
                     for factor_name in df_factor.columns.tolist():
-                        single_factors_path=mypath+"/data/single_factors/"+factor_name+'.csv'
+                        single_factors_path=SINGLE_FACTORS_DIR+factor_name+'.csv'
                         if os.path.isfile(single_factors_path):
                             t = os.path.getmtime(code_factors_path)-os.path.getmtime(single_factors_path)
                             if t<60*60: #修改时间和code_factor不超过1小时
                                 return True 
                         if not check:
-                            single_factors_path1=mypath+"/data/single_factors_tmp1/"+factor_name+'.csv'
-                            single_factors_path2=mypath+"/data/single_factors_tmp2/"+factor_name+'.csv'
+                            single_factors_path1=CACHE_DIR+"/single_factors_tmp1/"+factor_name+'.csv'
+                            single_factors_path2=CACHE_DIR+"/single_factors_tmp2/"+factor_name+'.csv'
                             if factor_name not in ['ts_code','trade_date'] and not os.path.exists(single_factors_path2):
                                 df=pd.DataFrame(df_factor,columns=['ts_code','trade_date',factor_name])
                                 df.to_csv(single_factors_path1,mode='a',encoding='utf-8',header=False,index=False)
@@ -213,6 +211,13 @@ class indicatorCompute():
             
             if 'index' in df_factor:
                 del df_factor['index'] 
+                
+                
+            
+
+
+
+            print(df_factor)
 
 
 
@@ -225,8 +230,8 @@ class indicatorCompute():
                 df_factor.to_pickle(code_factors_path)
                 #想了想，这里没法保证不同list相同因子重复写入的问题，只能先写到1里，然后移动到2里
                 for factor_name in df_factor.columns.tolist():
-                    single_factors_path1=mypath+"/data/single_factors_tmp1/"+factor_name+'.csv'
-                    single_factors_path2=mypath+"/data/single_factors_tmp2/"+factor_name+'.csv'
+                    single_factors_path1=CACHE_DIR+"single_factors_tmp1/"+factor_name+'.csv'
+                    single_factors_path2=CACHE_DIR+"/data/single_factors_tmp2/"+factor_name+'.csv'
                     if factor_name not in ['ts_code','trade_date'] and not os.path.exists(single_factors_path2):
                         df=pd.DataFrame(df_factor,columns=['ts_code','trade_date',factor_name])
                         df.to_csv(single_factors_path1,mode='a',encoding='utf-8',header=False,index=False)

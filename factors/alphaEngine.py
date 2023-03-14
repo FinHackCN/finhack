@@ -17,6 +17,8 @@ from factors.factorManager import factorManager
 np.seterr(all='ignore',over='ignore',divide='ignore') 
 import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning) 
+from library.globalvar import *
+
 class RewriteNode(ast.NodeTransformer):
     def visit_IfExp(self, node):
         #xprint(ast.dump(node))
@@ -475,9 +477,8 @@ def sumif(df, window, condition):
 def save_lastdate(res,name):
     #计算单日指标
     res=res.reset_index()
-    mypath=os.path.dirname(os.path.dirname(__file__))            
     lastdate=str(res['trade_date'].max())
-    date_factors_path=mypath+"/data/date_factors/"+lastdate
+    date_factors_path=DATE_FACTORS_DIR+lastdate
     if not os.path.exists(date_factors_path): 
         try:
             os.mkdir(date_factors_path)
@@ -491,6 +492,7 @@ def save_lastdate(res,name):
 
 class alphaEngine():
     def calc(formula='',df=pd.DataFrame(),name="alpha",check=False):
+        # print(formula)
         try:
             #根据 $符号匹配列名
             col_list = []
@@ -498,10 +500,12 @@ class alphaEngine():
             col_list=list(set(col_list))
             
             #缓存路径
-            mypath=os.path.dirname(os.path.dirname(__file__))
-            data_path=mypath+'/data/single_factors/'+name+'.csv'   
+            data_path=SINGLE_FACTORS_DIR+name+'.csv'   
             diff_date=999
             max_date=''
+            
+            
+            # print(data_path)
             
             if os.path.exists(data_path) and check==False:
                 df_old=pd.read_csv(data_path, header=None, names=['ts_code','trade_date','alpha'])
@@ -509,12 +513,17 @@ class alphaEngine():
                 today=time.strftime("%Y%m%d",time.localtime())
                 diff_date=int(today)-int(max_date)
     
-            
+            # print(diff_date)
+            # print(1111)
+            # print(df)
+            # print(col_list)
             if df.empty:
                 df=factorManager.getFactors(factor_list=col_list)
                 
        
-                
+            # print(df)  
+            # print(diff_date)
+            
             
             if diff_date>0 and diff_date<100:
                 dt=datetime.datetime.strptime(str(max_date),'%Y%m%d')
@@ -567,7 +576,7 @@ class alphaEngine():
                 print(name+"计算公式:"+formula)
             res=eval(formula)
             
-            
+            #print(res)
             
             if check:
                 return res

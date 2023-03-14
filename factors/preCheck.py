@@ -16,7 +16,7 @@ from factors.factorManager import factorManager
 from factors.alphaEngine import alphaEngine
 from factors.indicatorCompute import indicatorCompute
 from concurrent.futures import ThreadPoolExecutor,ProcessPoolExecutor, wait, ALL_COMPLETED
-
+from library.globalvar import *
 warnings.simplefilter(action='ignore', category=pd.errors.PerformanceWarning)
 
 class preCheck():

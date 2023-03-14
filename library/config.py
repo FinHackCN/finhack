@@ -1,12 +1,12 @@
 import configparser
 import os
-from library.util import util
+from library.globalvar import *
 
 class config:
     @staticmethod
     def getConfig(configName,sections='default'):
         filename=configName+".conf"
-        filepath = os.path.dirname(os.path.dirname(__file__))+"/config/"+filename #
+        filepath = CONFIG_DIR+filename 
         config = configparser.ConfigParser()
         config.read(filepath)
         config=config.items(sections)
@@ -17,7 +17,7 @@ class config:
     @staticmethod
     def getSectionList(configName):
         filename=configName+".conf"
-        filepath = util.mypath()+"/config/"+filename #
+        filepath = CONFIG_DIR+filename 
         config = configparser.ConfigParser()
         config.read(filepath)
         return config.sections()

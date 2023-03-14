@@ -10,7 +10,7 @@ import traceback
 from library.mydb import mydb
 import numpy as np
 import hashlib
-
+from library.globalvar import *
 import time
 import threading
 # 股票信息获取模块
@@ -106,11 +106,10 @@ class AStock:
             code_list=df_code['ts_code'].tolist()
 
 
-        mypath=os.path.dirname(os.path.dirname(__file__))
+
         hashstr=','.join(code_list)+'-'+where+'-'+startdate+'-'+enddate+'-'+fq+'-'+db
         md5=hashlib.md5(hashstr.encode(encoding='utf-8')).hexdigest()
-        
-        cache_path=mypath+"/cache/price/"+md5
+        cache_path=PRICE_CACHE_DIR+md5
         if os.path.isfile(cache_path):
             #print('read cache---'+cache_path)
             #print(hashstr)
@@ -165,8 +164,7 @@ class AStock:
             #print('getStockDailyPriceByCode---'+code)
             hashstr=code+'-'+where+'-'+startdate+'-'+enddate+'-'+fq
             md5 = hashlib.md5(hashstr.encode(encoding='utf-8')).hexdigest()
-            mypath=os.path.dirname(os.path.dirname(__file__))
-            cache_path=mypath+"/cache/price/"+code+'_'+md5
+            cache_path=PRICE_CACHE_DIR+code+'_'+md5
      
   
             try:
@@ -257,6 +255,7 @@ class AStock:
     
     
             df['name']=df['name'].fillna(method='bfill')
+            df['name']=df['name'].fillna("")
             
             if code[0:3]=='300' or code[0:3]=='688':
                 limit=0.20

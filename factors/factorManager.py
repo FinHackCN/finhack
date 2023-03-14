@@ -11,7 +11,7 @@ import traceback
 from library.mydb import mydb
 from pandarallel import pandarallel
 sys.path.append("..")
-
+from library.globalvar import *
 from concurrent.futures import ThreadPoolExecutor,ProcessPoolExecutor, wait, ALL_COMPLETED
 
 
@@ -33,10 +33,9 @@ class factorManager:
         factorslist=[]
         result=[]
         ignore_list=[]
-        path = os.path.dirname(__file__)+"/../data/single_factors"
         if ignore:
             ignore_list=['close','vol','volume','open','low','high','pct_chg','amount','pre_close','vwap','stop','lh']
-        for subfile in os.listdir(path):
+        for subfile in os.listdir(SINGLE_FACTORS_DIR):
             if not '__' in subfile and not subfile.replace('.csv','') in ignore_list:
                 factorslist.append(subfile.replace('.csv',''))
                 
@@ -67,28 +66,30 @@ class factorManager:
     
     #获取因子数据
     def getFactors(factor_list,stock_list=[],start_date='',end_date='',cache=False):
-        #print(factor_list)
-        mypath=os.path.dirname(os.path.dirname(__file__))
-        data_path=mypath+'/data/single_factors/'
-        cache_path=mypath+'/cache/factors/'
+        # print(factor_list)
+        # print(6567)
         
         md5=','.join(factor_list)+'-'+','.join(stock_list)+'-'+start_date+'-'+end_date
-        cache_file=cache_path+'factors_'+hashlib.md5(md5.encode(encoding='utf-8')).hexdigest()+'.pkl'
+        cache_file=FACTORS_CACHE_DIR+'factors_'+hashlib.md5(md5.encode(encoding='utf-8')).hexdigest()+'.pkl'
+        # print(cache_file)
         if os.path.isfile(cache_file): # use cache 
             #print('reading cache')
             #print(factor_list)
-            #print(md5)
+            # print(md5)
+            # print(99999)
             return pd.read_pickle(cache_file)
         else:
+            #print(77777)
             pass
             #print(factor_list)
             #print("nocache")
+        #print(2222)
         
         df_factor=pd.DataFrame()
         for factor in factor_list:
             factor=factor.replace('$','')
-            if os.path.isfile(data_path+factor+'.csv'):
-                df=pd.read_csv(data_path+factor+'.csv',names=['ts_code','trade_date',factor], dtype={'ts_code': str,'trade_date': str, factor: np.float64},low_memory=False)
+            if os.path.isfile(SINGLE_FACTORS_DIR+factor+'.csv'):
+                df=pd.read_csv(SINGLE_FACTORS_DIR+factor+'.csv',names=['ts_code','trade_date',factor], dtype={'ts_code': str,'trade_date': str, factor: np.float64},low_memory=False)
                 #df=df.set_index(['ts_code','trade_date'])
                 
                 df=df.sort_values(['ts_code','trade_date'])
@@ -105,7 +106,7 @@ class factorManager:
                     
                 del df
             else:
-                print(data_path+factor+'.csv not found')
+                print(SINGLE_FACTORS_DIR+factor+'.csv not found')
         
         
         df_factor=df_factor.reset_index() 
@@ -135,7 +136,7 @@ class factorManager:
     #获取alpha列表的列表
     def getAlphaLists():
         alphalists=[]
-        path = os.path.dirname(__file__)+"/../lists/alphalist"
+        path = CONFIG_DIR+"/factorlist/alphalist/"
         for subfile in os.listdir(path):
             if not '__' in subfile:
                 listname=subfile
@@ -144,7 +145,7 @@ class factorManager:
     
     #根据alpha列表获取alpha
     def getAlphaList(listname):
-        path = os.path.dirname(__file__)+"/../lists/alphalist/"+listname
+        path = CONFIG_DIR+"/factorlist/alphalist/"+listname
         with open(path, 'r', encoding='utf-8') as f:
             return f.readlines()
             
@@ -188,7 +189,7 @@ class factorManager:
                         return_fileds=return_fileds+flist
                         
          
-        path = os.path.dirname(__file__)+"/../lists/indicatorlist/"
+        path = CONFIG_DIR+"/factorlist/indicatorlist/"
         with open(path+'all','w') as file_object:
             file_object.write("\n".join(return_fileds))  
         

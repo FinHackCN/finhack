@@ -89,7 +89,8 @@ class tsAStockOther:
 
     @tsMonitor
     def cyq_chips(pro,db):
- 
+        pass
+    #感觉tushare的这个接口好像有问题
         table='astock_other_cyq_chips'
         mydb.exec("drop table if exists "+table+"_tmp",db)
         engine=mydb.getDBEngine(db)

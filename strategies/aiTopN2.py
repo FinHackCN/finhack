@@ -43,6 +43,7 @@ class strategy():
         if instance['g']['n'] % hold_day==hold_day-1:
             pred=instance['data'].loc[now_date]
             pred=pred.sort_values(by='pred',ascending=False, inplace=False) 
+            pred=pred[~pred.index.duplicated()]
             
             #i用来控制持仓数据
             i=0
@@ -55,6 +56,7 @@ class strategy():
             pred=pred.sort_values(by='pred',ascending=False, inplace=False) 
             pred=pred.dropna()
             pred=pred[pred.pred>1.05]
+            pred=pred[~pred.index.duplicated()]
             #i用来控制持仓数据
             i=0
             for ts_code, row in pred.iterrows():
