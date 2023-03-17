@@ -50,23 +50,24 @@ class indicatorCompute():
                 yield origin_list[i*cnt:(i+1)*cnt]
  
         
-        #单进程断点调试用
-        for ts_code in code_list:
-            indicatorCompute.computeListByStock(ts_code,list_name,'',factor_list,c_list)
-            #exit()
+        # #单进程断点调试用
+        # for ts_code in code_list:
+        #     indicatorCompute.computeListByStock(ts_code,list_name,'',factor_list,c_list)
+        #     #exit()
         
-        # code_lists = split_list_n_list(code_list, n)
-        # for code_list in code_lists:
-        #     with ProcessPoolExecutor(max_workers=n) as pool:
-        #         for ts_code in code_list:
-        #             mytask=pool.submit(indicatorCompute.computeListByStock,ts_code,list_name,'',factor_list,c_list)
-        #             #tasklist.append(mytask)
-        # print(list_name+' computed')
+        code_lists = split_list_n_list(code_list, n)
+        for code_list in code_lists:
+            with ProcessPoolExecutor(max_workers=n) as pool:
+                for ts_code in code_list:
+                    mytask=pool.submit(indicatorCompute.computeListByStock,ts_code,list_name,'',factor_list,c_list)
+                    tasklist.append(mytask)
         
+        wait(tasklist,return_when=ALL_COMPLETED)
+        print(list_name+' computed')
         os.system('mv '+CACHE_DIR+'/single_factors_tmp1/* '+CACHE_DIR+'/single_factors_tmp2/')
+        os.system('mv '+CACHE_DIR+'/single_factors_tmp2/* '+SINGLE_FACTORS_DIR)
             
-            
-            
+
     
         
     #计算单支股票的一坨因子
@@ -156,7 +157,7 @@ class indicatorCompute():
                         single_factors_path=SINGLE_FACTORS_DIR+factor_name+'.csv'
                         if os.path.isfile(single_factors_path):
                             t = os.path.getmtime(code_factors_path)-os.path.getmtime(single_factors_path)
-                            if t<60*60: #修改时间和code_factor不超过1小时
+                            if t<60*60: #修改时间和code_factor不超过1小时，即这个因子刚计算过
                                 return True 
                         if not check:
                             single_factors_path1=CACHE_DIR+"/single_factors_tmp1/"+factor_name+'.csv'
@@ -217,7 +218,7 @@ class indicatorCompute():
 
 
 
-            print(df_factor)
+            #print(df_factor)
 
 
 
@@ -237,6 +238,9 @@ class indicatorCompute():
                         df.to_csv(single_factors_path1,mode='a',encoding='utf-8',header=False,index=False)
                         
                         df_date=df[df.trade_date==lastdate]
+                        
+                        #print(date_factors_path+factor_name+"xxxxxxx")
+                        
                         df_date.to_csv(date_factors_path+factor_name+'.csv',mode='a',encoding='utf-8',header=False,index=False)
                                         
                         del df
