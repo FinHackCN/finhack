@@ -31,7 +31,7 @@ class taskRunner:
             
          
          
-            continue
+            #continue
             #alpha列表
             
             for factor_list_name in factor_lists:
