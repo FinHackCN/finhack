@@ -71,6 +71,7 @@ class dbMonitor:
                         continue
                     else:
                         info = traceback.format_exc()
+                        print(args)
                         print(self.func.__name__+":mysql异常，"+str(info))
                         alert.send(self.func.__name__,'mysql异常',str(info))
                         break

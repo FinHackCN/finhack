@@ -12,6 +12,8 @@ import importlib
 from factors.alphaEngine import alphaEngine
 from strategies.filters import filters
 from train.trainhelper import trainhelper
+from library.globalvar import *
+
 class lgbtrain:
     def score_mv(x,shift,md5):
         pass

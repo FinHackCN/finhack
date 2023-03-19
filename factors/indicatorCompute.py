@@ -50,7 +50,7 @@ class indicatorCompute():
                 yield origin_list[i*cnt:(i+1)*cnt]
  
         
-        # #单进程断点调试用
+        #单进程断点调试用
         # for ts_code in code_list:
         #     indicatorCompute.computeListByStock(ts_code,list_name,'',factor_list,c_list)
         #     #exit()
@@ -72,7 +72,7 @@ class indicatorCompute():
         
     #计算单支股票的一坨因子
     #pure=True时，只保留factor_list中的因子
-    def computeListByStock(ts_code,list_name='all',where='',factor_list=None,c_list=[],pure=False,check=False,df_price=pd.DataFrame(),db='tushare'):
+    def computeListByStock(ts_code,list_name='all',where='',factor_list=None,c_list=[],pure=True,check=False,df_price=pd.DataFrame(),db='tushare'):
         try:
             print('computeListByStock---'+ts_code)
             
@@ -130,12 +130,21 @@ class indicatorCompute():
             # time.sleep(10)  
 
             #去掉注释项
+            
+            
+
+            
             for row in factor_list.copy():
                 factor_name=row
                 if(isinstance(row,(dict))):
                     factor_name=row['name']
                 if factor_name.startswith('#'):
                     factor_list.remove(factor_name)
+
+
+            
+            #exit()
+
 
             #日期没有变化
             if diff_date==0:
@@ -210,18 +219,23 @@ class indicatorCompute():
                 df_factor=pd.DataFrame(df_factor,columns=factor_list)
                 df_factor=pd.concat([df_price,df_factor],axis=1)
             
-            if 'index' in df_factor:
-                del df_factor['index'] 
+            try:
+                if 'index' in df_factor:
+                    del df_factor['index'] 
+            except Exception as e:
+                return False
                 
                 
             
 
+            # print(factor_list)
+            # print(pure)
+            # print(df_factor)
 
 
-            #print(df_factor)
-
-
-
+            df_factor=df_factor.loc[:,~df_factor.columns.duplicated()]
+            
+            
             #objgraph.show_most_common_types(limit=50)
             if check:
                 print('check:'+ts_code)
@@ -231,10 +245,18 @@ class indicatorCompute():
                 df_factor.to_pickle(code_factors_path)
                 #想了想，这里没法保证不同list相同因子重复写入的问题，只能先写到1里，然后移动到2里
                 for factor_name in df_factor.columns.tolist():
+                    #print(factor_name)
                     single_factors_path1=CACHE_DIR+"single_factors_tmp1/"+factor_name+'.csv'
                     single_factors_path2=CACHE_DIR+"/data/single_factors_tmp2/"+factor_name+'.csv'
                     if factor_name not in ['ts_code','trade_date'] and not os.path.exists(single_factors_path2):
+                        
+                        # print(df_factor.columns.tolist())
+                        # print(factor_name)
+                        # print(df_factor.columns.duplicated().any())
+                        
                         df=pd.DataFrame(df_factor,columns=['ts_code','trade_date',factor_name])
+                        
+                        #print('------')
                         df.to_csv(single_factors_path1,mode='a',encoding='utf-8',header=False,index=False)
                         
                         df_date=df[df.trade_date==lastdate]
@@ -261,9 +283,9 @@ class indicatorCompute():
         
 
     #计算单个股票单个因子
-    def computeFactorByStock(ts_code,factor_name,df_price,where='',db='tushare'):
+    def computeFactorByStock(ts_code,factor_name,df_price=pd.DataFrame(),where='',db='tushare'):
         if(df_price.empty):
-            df_price=AStock.getStockDailyPriceByCode(ts_code,where,'tushare')
+            df_price=AStock.getStockDailyPriceByCode(code=ts_code,where=where,db='tushare')
             #df_result=df_price.copy()
         if(df_price.empty):
             return pd.DataFrame()
@@ -300,17 +322,36 @@ class indicatorCompute():
 
 
         df=func(df_price,factor)
+        if df.empty:
+            return False
 
 
         #给返回的因子加上后缀
         suffix=factor[1:]
-        suffix.pop(0)
+        
+        # print(111)
+        # print(suffix)
+        
+        suffix.pop()
+        
+        # print(222)
+        # print(suffix)
+        
         suffix='_'.join('%s' %p for p in suffix)
+        
+        # print(factor)
+        # print(suffix)
+        
         
         if suffix!="":
             suffix=suffix+'_'+shift
         else:
             suffix='_'+shift
+            
+        if suffix[0]!='_':
+            suffix="_"+suffix
+        #print(suffix)
+        #exit()
     
         #如果返回多列，则需要同样进行shift计算
         if True:
@@ -321,12 +362,15 @@ class indicatorCompute():
                     if(shift!="0"):
                         df[f+suffix]=df[f].shift(int(shift))
                     else:
+                        #print("suffix:"+suffix)
                         if(f not in ['open','high','low','close','pre_close','change','pct_chg']):
                             df.rename(columns={f:f+suffix},inplace=True)
                         else:
                             df[f+suffix]=df[f]
                     #print("f=%s,fs=%s" %(f,factor_name))
         #print(len(df.columns))
+        
+        #print(df)
         
         del df_price
         del func

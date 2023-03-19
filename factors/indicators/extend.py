@@ -4,30 +4,42 @@ import numpy as np
 class extend:
 
         # Pivot Points, Supports and Resistances
-        def PPSR(df):
-            PP = pd.Series((df['High'] + df['Low'] + df['close']) / 3)
-            R1 = pd.Series(2 * PP - df['Low'])
-            S1 = pd.Series(2 * PP - df['High'])
-            R2 = pd.Series(PP + df['High'] - df['Low'])
-            S2 = pd.Series(PP - df['High'] + df['Low'])
-            R3 = pd.Series(df['High'] + 2 * (PP - df['Low']))
-            S3 = pd.Series(df['Low'] - 2 * (df['High'] - PP))
+        def PPSR(df,p):
+            PP = pd.Series((df['high'] + df['low'] + df['close']) / 3)
+            R1 = pd.Series(2 * PP - df['low'])
+            S1 = pd.Series(2 * PP - df['high'])
+            R2 = pd.Series(PP + df['high'] - df['low'])
+            S2 = pd.Series(PP - df['high'] + df['low'])
+            R3 = pd.Series(df['high'] + 2 * (PP - df['low']))
+            S3 = pd.Series(df['low'] - 2 * (df['high'] - PP))
             psr = {'PP':PP, 'R1':R1, 'S1':S1, 'R2':R2, 'S2':S2, 'R3':R3, 'S3':S3}
             PSR = pd.DataFrame(psr)
+            
+            if PSR.empty:
+                return df
+            
             df = df.join(PSR)
+
+            df['PPSR']=df.PP
+            df['PPR1']=df.R1
+            df['PPS1']=df.S1
+            df['PPR2']=df.R2
+            df['PPS2']=df.S2
+            df['PPR3']=df.R3
+            df['PPS3']=df.S3
             return df
         
         
         # Stochastic oscillator %K
         def STOK(df):
-            SOk = pd.Series((df['close'] - df['Low']) / (df['High'] - df['Low']), name = 'SO%k')
+            SOk = pd.Series((df['close'] - df['low']) / (df['high'] - df['low']), name = 'SO%k')
             df = df.join(SOk)
             return df
         
         
         # Stochastic Oscillator, EMA smoothing, nS = slowing (1 if no slowing)
         def STO(df,  nK, nD, nS=1):
-            SOk = pd.Series((df['close'] - df['Low'].rolling(nK).min()) / (df['High'].rolling(nK).max() - df['Low'].rolling(nK).min()), name = 'SO%k'+str(nK))
+            SOk = pd.Series((df['close'] - df['low'].rolling(nK).min()) / (df['high'].rolling(nK).max() - df['low'].rolling(nK).min()), name = 'SO%k'+str(nK))
             SOd = pd.Series(SOk.ewm(ignore_na=False, span=nD, min_periods=nD-1, adjust=True).mean(), name = 'SO%d'+str(nD))
             SOk = SOk.ewm(ignore_na=False, span=nS, min_periods=nS-1, adjust=True).mean()
             SOd = SOd.ewm(ignore_na=False, span=nS, min_periods=nS-1, adjust=True).mean()
@@ -38,7 +50,7 @@ class extend:
         
         # Stochastic Oscillator, SMA smoothing, nS = slowing (1 if no slowing)
         def STO(df, nK, nD,  nS=1):
-            SOk = pd.Series((df['close'] - df['Low'].rolling(nK).min()) / (df['High'].rolling(nK).max() - df['Low'].rolling(nK).min()), name = 'SO%k'+str(nK))
+            SOk = pd.Series((df['close'] - df['low'].rolling(nK).min()) / (df['high'].rolling(nK).max() - df['low'].rolling(nK).min()), name = 'SO%k'+str(nK))
             SOd = pd.Series(SOk.rolling(window=nD, center=False).mean(), name = 'SO%d'+str(nD))
             SOk = SOk.rolling(window=nS, center=False).mean()
             SOd = SOd.rolling(window=nS, center=False).mean()
@@ -49,7 +61,7 @@ class extend:
         
         # Mass Index
         def MassI(df):
-            Range = df['High'] - df['Low']
+            Range = df['high'] - df['low']
             EX1 = pd.ewma(Range, span = 9, min_periods = 8)
             EX2 = pd.ewma(EX1, span = 9, min_periods = 8)
             Mass = EX1 / EX2
@@ -63,13 +75,13 @@ class extend:
             i = 0
             TR = [0]
             while i < df.index[-1]:
-                Range = max(df.get_value(i + 1, 'High'), df.get_value(i, 'close')) - min(df.get_value(i + 1, 'Low'), df.get_value(i, 'close'))
+                Range = max(df.get_value(i + 1, 'high'), df.get_value(i, 'close')) - min(df.get_value(i + 1, 'low'), df.get_value(i, 'close'))
                 TR.append(Range)
                 i = i + 1
             i = 0
             VM = [0]
             while i < df.index[-1]:
-                Range = abs(df.get_value(i + 1, 'High') - df.get_value(i, 'Low')) - abs(df.get_value(i + 1, 'Low') - df.get_value(i, 'High'))
+                Range = abs(df.get_value(i + 1, 'high') - df.get_value(i, 'low')) - abs(df.get_value(i + 1, 'low') - df.get_value(i, 'high'))
                 VM.append(Range)
                 i = i + 1
             VI = pd.Series(pd.rolling_sum(pd.Series(VM), n) / pd.rolling_sum(pd.Series(TR), n), name = 'Vortex_' + str(n))
@@ -111,7 +123,7 @@ class extend:
         
         # Accumulation/Distribution
         def ACCDIST(df, n):
-            ad = (2 * df['close'] - df['High'] - df['Low']) / (df['High'] - df['Low']) * df['Volume']
+            ad = (2 * df['close'] - df['high'] - df['low']) / (df['high'] - df['low']) * df['Volume']
             M = ad.diff(n - 1)
             N = ad.shift(n - 1)
             ROC = M / N
@@ -161,9 +173,9 @@ class extend:
         
         # Keltner Channel
         def KELCH(df, n):
-            KelChM = pd.Series(pd.rolling_mean((df['High'] + df['Low'] + df['close']) / 3, n), name = 'KelChM_' + str(n))
-            KelChU = pd.Series(pd.rolling_mean((4 * df['High'] - 2 * df['Low'] + df['close']) / 3, n), name = 'KelChU_' + str(n))
-            KelChD = pd.Series(pd.rolling_mean((-2 * df['High'] + 4 * df['Low'] + df['close']) / 3, n), name = 'KelChD_' + str(n))
+            KelChM = pd.Series(pd.rolling_mean((df['high'] + df['low'] + df['close']) / 3, n), name = 'KelChM_' + str(n))
+            KelChU = pd.Series(pd.rolling_mean((4 * df['high'] - 2 * df['low'] + df['close']) / 3, n), name = 'KelChU_' + str(n))
+            KelChD = pd.Series(pd.rolling_mean((-2 * df['high'] + 4 * df['low'] + df['close']) / 3, n), name = 'KelChD_' + str(n))
             df = df.join(KelChM)
             df = df.join(KelChU)
             df = df.join(KelChD)

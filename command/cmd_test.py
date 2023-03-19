@@ -9,10 +9,7 @@ from library.mydb import mydb
 from library.globalvar import *
 
  
-print(base_dir)
 
+df=indicatorCompute.computeFactorByStock(ts_code="002624.SZ",factor_name="PPSR_0")
+print(df)
 
-
-
-# df=indicatorCompute.computeListByStock(ts_code="002513.SZ",list_name='all',where='',factor_list=['pe_0','totalMv_0'],pure=False,check=False)
-# print(df)
