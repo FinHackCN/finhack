@@ -58,7 +58,7 @@ class strategy():
             pred=pred.sort_values(by='pred',ascending=False, inplace=False) 
             
             pred=pred.dropna()
-            pred=pred[pred.pred>1.05]
+            pred=pred[pred.pred>1]
             pred=pred[~pred.index.duplicated()]
             # if pred.empty:
             #     print(now_date)

@@ -10,6 +10,7 @@ import importlib
 import lightgbm as lgb
 from factors.alphaEngine import alphaEngine
 from strategies.filters import filters
+from library.globalvar import *
 
 class trainhelper:
     def getTrainData(start_date='20000101',valid_date="20080101",end_date='20100101',features=[],label='abs',shift=10,filter_name=''):

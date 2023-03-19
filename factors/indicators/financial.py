@@ -2,11 +2,14 @@ import numpy as np
 from library.astock import AStock
 
 class financial:
-
+    #财务指标，anndate需要加1，防止未来函数
     def financeIndicator(df,p):
-            df_fi=AStock.alignStockFactors(df,'astock_finance_indicator','ann_date',filed='*',conv=1,db='tushare') 
+            df_fi=AStock.alignStockFactors(df,'astock_finance_indicator','ann_date',filed='*',conv=3,db='tushare') 
             df=df.reset_index(drop=0)
             df_fi=df_fi.reset_index(drop=0)
+            
+            if df_fi.empty:
+                return df_fi
             
             if(len(df_fi)!=len(df)):
                 print('len(df_fi)!=len(df)!')

@@ -14,7 +14,7 @@ from library.globalvar import *
 import time
 import threading
 # 股票信息获取模块
-
+from datetime import timedelta
 
 class ProcessPoolExecutor2(ProcessPoolExecutor):
     '''
@@ -27,9 +27,6 @@ class ProcessPoolExecutor2(ProcessPoolExecutor):
 
 
 class AStock:
-
-
-    
     def getStockCodeList(db='tushare'):
         sql = "select ts_code from astock_basic;";
         try:
@@ -54,6 +51,7 @@ class AStock:
         except Exception as e:
             print("MySQL getStockCodeList Error:%s" % str(e))  
             return False        
+            
     
     def getIndexPrice(ts_code='000300.SH',start_date=None,end_date=None):
         c1=""
@@ -201,7 +199,7 @@ class AStock:
             df_adj=df_adj.drop('ts_code',axis=1)
             
             
-            df_name=AStock.getTableDataByCode('astock_namechange',code,datewhere)
+            df_name=AStock.getTableDataByCode('astock_namechange',code,datewhere.replace('trade_date','ann_date'))
             
  
             
@@ -289,7 +287,6 @@ class AStock:
         
         
         
-        
     def alignStockFactors(df,table,date,filed,conv=0,db='tushare'):
         df=df.copy()
         df=df.reset_index()
@@ -305,13 +302,33 @@ class AStock:
         else:
             df_factor=mydb.selectToDf("select "+date+","+filed+" from "+table+" where ts_code='"+ts_code+"'",'tushare')
         
+        
+        if isinstance(df_factor, bool) or df_factor.empty:
+            return pd.DataFrame()
+        
+        #去重
+        try:
+            df_factor = df_factor[~df_factor[date].duplicated()]
+        except Exception as e:
+            print(df_factor)
+        
+        #财务报表中的时间，需要+1处理
+        if conv==3:
+            df_factor[date]=df_factor[date].astype(str)
+            df_factor[date]=pd.to_datetime(df_factor[date],format='%Y%m%d',errors='coerce')
+            df_factor[date]=df_factor[date]+timedelta(days=1)
+            df_factor[date]=df_factor[date].astype(str)
+            df_factor[date]=df_factor[date].map(lambda x: x.replace('-',''))  
+            df_factor['trade_date']=df_factor[date].map(lambda x: x.replace('-',''))
+
+        
         if not 'pandas' in str(type(df_factor)) or df_factor.empty:
             df_res=df
             for f in filed.split(','):
                 df[f]=0
             return df_res
 
-        #转换时间
+        #转换时间,将yyyy-mm-dd转为yyyymmdd
         if conv==1:
             df_factor[date]=df_factor[date].astype(str)
             df_factor['trade_date']=df_factor[date].map(lambda x: x.replace('-',''))

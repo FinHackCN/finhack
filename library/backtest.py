@@ -31,10 +31,10 @@ class bt:
 
         
     
-    def run(instance_id='',start_date='20100101',end_date='20221115',fees=0.0003,min_fees=5,tax=0.001,cash=100000,strategy_name="",data_path="",args={},df_price=pd.DataFrame(),replace=False,type="bt",g={},slip=0.005):
+    def run(instance_id='',start_date='20100101',end_date='20230315',fees=0.0003,min_fees=5,tax=0.001,cash=100000,strategy_name="",data_path="",args={},df_price=pd.DataFrame(),replace=False,type="bt",g={},slip=0.005):
         t1=time.time()
         starttime=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
+        #print(starttime)
         bt_instance={
             "instance_id":instance_id,
             "start_date":start_date,
@@ -94,6 +94,7 @@ class bt:
         if df_price.empty:
             df_price=bt.load_price()
         bt_instance['df_price']=df_price
+
         bt.log(instance=bt_instance,msg="行情数据读取完毕！",type='info')
         
         if os.path.isfile(PREDS_DIR+data_path):
@@ -112,7 +113,6 @@ class bt:
         bt.log(instance=bt_instance,msg="预测数据读取完毕！",type='info')
 
         
-        
         strategy_module = importlib.import_module('.'+strategy_name,package='strategies')
 
         strategy_instance = getattr(strategy_module, 'strategy')
@@ -130,6 +130,7 @@ class bt:
                     "endtime":datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     "runtime":time.time()-t1
         }        
+    
     
         if bt_instance['returns']['returns'].empty:
             sql="INSERT INTO `finhack`.`backtest`(`instance_id`) VALUES ( '%s' )" % (bt_instance['instance_id'])
@@ -168,7 +169,7 @@ class bt:
         
         if bt_instance['type']=='bt':
         
-            tv=10 #阈值
+            tv=1.1 #阈值
             if risk['annual_return']<tv:
                 returns='returns'
                 bench_returns='bench_returns'

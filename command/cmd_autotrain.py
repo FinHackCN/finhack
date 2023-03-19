@@ -14,6 +14,7 @@ from factors.factorManager import factorManager
 from library.backtest import bt
 from library.mydb import mydb
 from concurrent.futures import ThreadPoolExecutor,ProcessPoolExecutor, wait, ALL_COMPLETED
+from library.globalvar import *
 
 def auto_lgbtrain(factor_list,init_cash=1000,loss='ds',backtest=True):
     pass
@@ -23,7 +24,12 @@ def auto_lgbtrain(factor_list,init_cash=1000,loss='ds',backtest=True):
 
 while True:
         try:
-            flist=factorManager.getTopAnalysedFactorsList(top=300)
+            #flist=factorManager.getTopAnalysedFactorsList(top=300)
+            
+            with open(CONFIG_DIR+"/factorlist/trainlist/autotrain", 'r', encoding='utf-8') as f:
+                flist=[_.rstrip('\n') for _ in f.readlines()]
+
+            
             random.shuffle(flist)
             n=random.randint(10,40)
             factor_list=[]

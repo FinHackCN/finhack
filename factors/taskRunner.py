@@ -17,12 +17,16 @@ class taskRunner:
 
         os.system('rm -rf '+CACHE_DIR+'/single_factors_tmp1/*')
         os.system('rm -rf '+CACHE_DIR+'/single_factors_tmp2/*')
+        
+
+        
         #遍历任务列表
         for task in task_list:
             task=config.getConfig('task',task)
             factor_lists=task['list'].split(',')
             for factor_list_name in factor_lists:
                 #factor列表
+
                 if os.path.exists(CONFIG_DIR+"/factorlist/indicatorlist/"+factor_list_name):
                     
                     with open(CONFIG_DIR+"/factorlist/indicatorlist/"+factor_list_name, 'r', encoding='utf-8') as f:
