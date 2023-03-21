@@ -31,7 +31,7 @@ class bt:
 
         
     
-    def run(instance_id='',start_date='20100101',end_date='20230315',fees=0.0003,min_fees=5,tax=0.001,cash=100000,strategy_name="",data_path="",args={},df_price=pd.DataFrame(),replace=False,type="bt",g={},slip=0.005):
+    def run(instance_id='',start_date='20100101',end_date='20230315',fees=0.0003,min_fees=5,tax=0.001,cash=100000,strategy_name="",data_path="",args={},df_price=pd.DataFrame(),replace=False,type="bt",g={},slip=0.005,benchmark="000001.SH"):
         t1=time.time()
         starttime=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         #print(starttime)
@@ -66,7 +66,7 @@ class bt:
                 "fees":fees,
                 "min_fees":min_fees,
                 "tax":tax,
-                "benchmark":"000001.SH",
+                "benchmark":benchmark,
                 "slip":slip
             },
             "strategy_name":strategy_name,
@@ -102,6 +102,7 @@ class bt:
         else:
             print(PREDS_DIR+data_path+' not found!')
             return False
+        
         data=data[data.trade_date>=start_date]
         data=data[data.trade_date<=end_date]
         date_range=data['trade_date'].to_list()
@@ -169,7 +170,7 @@ class bt:
         
         if bt_instance['type']=='bt':
         
-            tv=1.1 #阈值
+            tv=0.2 #阈值
             if risk['annual_return']<tv:
                 returns='returns'
                 bench_returns='bench_returns'
@@ -224,7 +225,7 @@ class bt:
         try:
             value=float(value)
             if(np.isnan(value) or instance['df_price']['stop'].loc[(now_date,ts_code)]==1):
-                #bt.log(instance=instance,ts_code=ts_code,msg="停牌，无法买入！",type='warn')
+                bt.log(instance=instance,ts_code=ts_code,msg="停牌，无法买入！",type='warn')
                 return False            
         except Exception as e:
                 bt.log(instance=instance,ts_code=ts_code,msg=str(e),type='error')
@@ -237,6 +238,12 @@ class bt:
             bt.log(instance=instance,ts_code=ts_code,msg="涨停板，无法买入！",type='warn')
             return False
 
+        # if(ts_code=="300684.SZ"):
+        #     print(instance['df_price']['upLimit'].loc[(now_date,ts_code)])
+        #     print(upLimit)
+        #     print(value)
+        #     exit()
+    
 
         #设置滑点
         value=value*(1+instance['setting']['slip'])
@@ -468,9 +475,7 @@ class bt:
             
             qs.reports.full(instance['returns']['values'], index['values'])
         
-        
-     
-        
+    
         
         returns=instance['returns']['returns']-1
         benchReturns=index['returns']-1

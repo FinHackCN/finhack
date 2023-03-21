@@ -1,6 +1,6 @@
 from  library.backtest import bt
 import time
-
+from astock.indexHelper import indexHelper
 
 class strategy():
     def get_arg(key,instance):
@@ -35,8 +35,8 @@ class strategy():
     def every_bar(instance):
         hold_day=strategy.get_arg('hold_day',instance)
         hold_n=strategy.get_arg('hold_n',instance)
+        
         now_date=instance['now_date']
-        pred=instance['data'].loc[now_date]
         if(instance['total_value']<100):
             return False
         #第9日尾盘清仓
@@ -53,25 +53,50 @@ class strategy():
         
         #第10日开盘买入
         elif instance['g']['n'] % hold_day==0:
+            pred=instance['data'].loc[now_date]
+            
             pred=pred.sort_values(by='pred',ascending=False, inplace=False) 
+            
             pred=pred.dropna()
             pred=pred[pred.pred>1.05]
             pred=pred[~pred.index.duplicated()]
+            #print(pred)
+            member_list=indexHelper.get_index_weights('000852.SH',now_date)['ts_code'].tolist()
+            #print(member_list)
+            
+            # pred['flag'] = pred.apply(lambda x: int(x.index in member_list), axis=1)
+            # pred=pred[pred.flag==1]
+            
+            # print(now_date)
+            # print(pred)
+            
+            
+            
+            pred_list=pred.index.tolist()
+            
+            
+            drop_list=list(set(pred_list) - set(member_list))
+            pred = pred.drop(index=drop_list)
+ 
+ 
+            if len(pred)<hold_n:
+                hold_n=len(pred)
+            if hold_n<10:
+                hold_n=10
+            
+            # if pred.empty:
+            #     print(now_date)
             #i用来控制持仓数据
-            i=0
+            i=1
             for ts_code, row in pred.iterrows():
-                buy=bt.buy(instance=instance,ts_code=ts_code,price=instance['cash']/(hold_n-i),time='open')
+                if i==hold_n:
+                    break        
+                
+                N=hold_n
+                a1=N
+                ai=N-(i-1)*(N/i)
+                Sn=N*N/2
+                wi=ai/Sn
+                buy=bt.buy(instance=instance,ts_code=ts_code,price=instance['cash']*wi,time='open')
                 if buy:
                     i=i+1
-                if i==hold_n:
-                    break
-                
-        
-        for ts_code,postion in instance['positions'].copy().items():
-            #提前卖出
-            try:
-                p=pred.loc[ts_code]['pred']
-            except:
-                p=1
-            if p<0.95:
-                bt.sell(instance=instance,ts_code=ts_code,amount=postion['amount'],time='close')

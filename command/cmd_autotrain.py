@@ -31,7 +31,7 @@ while True:
 
             
             random.shuffle(flist)
-            n=random.randint(10,40)
+            n=random.randint(5,15)
             factor_list=[]
                 
             for i in range(0,n):
@@ -40,7 +40,7 @@ while True:
             
             print(factor_list)        
             for loss in ['ds','mse']:
-                lgbtrain.run('20000101','20080101','20100101',factor_list,'abs',10,{},loss)
+                lgbtrain.run('20070101','20160101','20170101',factor_list,'abs',10,{},loss)
 
         except Exception as e:
             print("error:"+str(e))

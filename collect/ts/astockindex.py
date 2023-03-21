@@ -12,6 +12,25 @@ from collect.ts.helper import tsSHelper
 
 class tsAStockIndex:
 
+
+    def get_date_range(start, end, periods=2, freq='1D', format='%Y%m%d'):
+        """
+        使用pandas库的date_range方法生成日期间隔里的所有日期, start, end, periods和freq必须指定三个
+        :param start: 起始日期
+        :param end: 结束日期
+        :param periods: 周期
+        :param freq: 时间间隔
+        :param format: 格式化输出
+        :return: 日期list
+        """
+        periods = None if start and end else periods
+        date_list = pd.date_range(start=start, end=end, periods=periods, freq=freq)
+        if len(date_list) < 2:
+            date_list = date_list.union(date_list.shift(1)[-1:])
+    
+        return [item.strftime(format) for item in date_list]    
+
+
     @tsMonitor
     def index_basic(pro,db):
         tsSHelper.getDataAndReplace(pro,'index_basic','astock_index_basic',db)
@@ -160,36 +179,44 @@ class tsAStockIndex:
         engine=mydb.getDBEngine(db)
         #mydb.truncateTable('astock_index_weight',db)
         data=tsSHelper.getAllAStockIndex(pro,db)
-        index_list=data['ts_code'].tolist()
+        #index_list=data['ts_code'].tolist()
+        index_list=['000001.SH','000300.SH','000852.SH']
         for ts_code in index_list:
             try_times=0
-            while True:
-                try:
-                    today = datetime.datetime.now()
-                    today=today.strftime("%Y%m%d")
-                    lastdate=tsSHelper.getLastDateAndDelete('astock_index_weight','trade_date',ts_code=ts_code,db=db)
-                    df = pro.index_weight(index_code=ts_code,start_date=lastdate, end_date=today)
-                    df = df.rename({'index_code':'ts_code'}, axis='columns')
-                    df.to_sql('astock_index_weight', engine, index=False, if_exists='append', chunksize=5000)
-                    break
-                except Exception as e:
-                    if "每天最多访问" in str(e) or "每小时最多访问" in str(e):
-                        print("index_weight:触发最多访问。\n"+str(e)) 
-                        return
-                    if "最多访问" in str(e):
-                        print("index_weight:触发限流，等待重试。\n"+str(e))
-                        time.sleep(15)
-                        continue
-                    else:
-                        if try_times<10:
-                            try_times=try_times+1;
-                            print("index_weight:函数异常，等待重试。\n"+str(e))
+            
+            today = datetime.datetime.now()
+            today=today.strftime("%Y%m%d")
+            lastdate=tsSHelper.getLastDateAndDelete('astock_index_weight','trade_date',ts_code=ts_code,db=db)   
+            if lastdate<"20120101":
+                lastdate="20120101"
+            date_range=tsAStockIndex.get_date_range(lastdate,today)
+            
+            for dt in date_range:
+                while True:
+                    try:
+                        print(dt)
+                        df = pro.index_weight(index_code=ts_code,start_date=dt, end_date=dt)
+                        df = df.rename({'index_code':'ts_code'}, axis='columns')
+                        df.to_sql('astock_index_weight', engine, index=False, if_exists='append', chunksize=5000)
+                        break
+                    except Exception as e:
+                        if "每天最多访问" in str(e) or "每小时最多访问" in str(e):
+                            print("index_weight:触发最多访问。\n"+str(e)) 
+                            return
+                        if "最多访问" in str(e):
+                            print("index_weight:触发限流，等待重试。\n"+str(e))
                             time.sleep(15)
                             continue
-                        else:                    
-                            info = traceback.format_exc()
-                            alert.send('index_weight','函数异常',str(info))
-                            print(info)    
+                        else:
+                            if try_times<10:
+                                try_times=try_times+1;
+                                print("index_weight:函数异常，等待重试。\n"+str(e))
+                                time.sleep(15)
+                                continue
+                            else:                    
+                                info = traceback.format_exc()
+                                alert.send('index_weight','函数异常',str(info))
+                                print(info)    
         
  
     
