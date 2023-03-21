@@ -5,6 +5,8 @@ class volumeprice:
 
     def moneyflow(df,p): 
         df_vp=AStock.alignStockFactors(df,'astock_price_moneyflow','trade_date',filed='*',conv=0,db='tushare')  
+        if df_vp.empty:
+            return df_vp
         df['buySmVol']=df_vp['buy_sm_vol']
         df['buySmAmount']=df_vp['buy_sm_amount']
         df['sellSmVol']=df_vp['sell_sm_vol']

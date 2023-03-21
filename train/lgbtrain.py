@@ -99,7 +99,7 @@ class lgbtrain:
         if loss=="ds":
             gbm = lgb.train(params,
                             data_train,
-                            num_boost_round=1000,
+                            num_boost_round=100,
                             valid_sets=data_valid,
                             early_stopping_rounds=5,
                             fobj=lgbtrain.custom_obj,
@@ -108,7 +108,7 @@ class lgbtrain:
         else:
              gbm = lgb.train(params,
                             data_train,
-                            num_boost_round=1000,
+                            num_boost_round=100,
                             valid_sets=data_valid,
                             early_stopping_rounds=5
                             )           

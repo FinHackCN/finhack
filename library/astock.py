@@ -255,23 +255,52 @@ class AStock:
             df['name']=df['name'].fillna(method='bfill')
             df['name']=df['name'].fillna("")
             
-            if code[0:3]=='300' or code[0:3]=='688':
-                limit=0.20
-                df["upLimit"]=limit       
-                df["downLimit"]=limit                
-            elif code[0:1]=='7' or code[0:1]=='8':
-                limit=0.30
-                df["upLimit"]=limit       
-                df["downLimit"]=limit                
-            else:
-                limit=0.10
-                df["upLimit"]=limit       
-                df["downLimit"]=limit
-                df["upLimit"] =np.where(df.name.str.contains('ST'),0.05,limit)
-                df["downLimit"] =np.where(df.name.str.contains('ST'),0.05,limit)
+            # if code[0:3]=='300' or code[0:3]=='688':
+            #     limit=0.20
+            #     df["upLimit"]=limit       
+            #     df["downLimit"]=limit                
+            # elif code[0:1]=='7' or code[0:1]=='8':
+            #     limit=0.30
+            #     df["upLimit"]=limit       
+            #     df["downLimit"]=limit                
+            # else:
+            #     limit=0.10
+            #     df["upLimit"]=limit       
+            #     df["downLimit"]=limit
+            #     df["upLimit"] =np.where(df.name.str.contains('ST'),0.05,limit)
+            #     df["downLimit"] =np.where(df.name.str.contains('ST'),0.05,limit)
                 
-            df["upLimit"]=round(df['close'].shift(1)*(1+df["upLimit"]),2)
-            df["downLimit"]=round(df['close'].shift(1)*(1-df["downLimit"]),2)
+            
+            
+            df["upLimit"]=df['close'].shift(1)
+            df["downLimit"]=df['close'].shift(1)
+            
+            def updown(x,t="up"):
+                if x.ts_code[0:3]=='300':
+                    limit=0.20
+                    if x.trade_date<"2020824":
+                        limit=0.10
+                elif x.ts_code[0:3]=='688':
+                    limit=0.20
+                elif x.ts_code[0:1]=='7' or x.ts_code[0:1]=='8':
+                    limit=0.30
+                else:
+                    limit=0.10
+                    if "ST" in x['name'] or "st" in x['name']:
+                        limit=0.05
+                     
+                if t=="up":
+                    return round(x.upLimit*(1+limit),2)
+                else:
+                    return round(x.downLimit*(1-limit),2)
+            
+            df["upLimit"]= df.apply(lambda x:updown(x,"up") , axis=1)
+            df["downLimit"]= df.apply(lambda x:updown(x,"down") , axis=1)
+            
+            
+            
+            # df["upLimit"]=round(df['close'].shift(1)*(1+df["upLimit"]),2)
+            # df["downLimit"]=round(df['close'].shift(1)*(1-df["downLimit"]),2)
             
             del df_adj
             del calendar
@@ -285,7 +314,7 @@ class AStock:
             return pd.DataFrame()
         
         
-        
+       
         
     def alignStockFactors(df,table,date,filed,conv=0,db='tushare'):
         df=df.copy()
