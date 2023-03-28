@@ -20,7 +20,15 @@ def auto_lgbtrain(factor_list,init_cash=1000,loss='ds',backtest=True):
     pass
 
 
- 
+
+min_f=10
+max_f=20
+if len(sys.argv)>=3:
+    min_f=int(sys.argv[1])
+    max_f=int(sys.argv[2])
+
+print(sys.argv)
+
 
 while True:
         try:
@@ -31,7 +39,7 @@ while True:
 
             
             random.shuffle(flist)
-            n=random.randint(5,15)
+            n=random.randint(min_f,max_f)
             factor_list=[]
                 
             for i in range(0,n):
@@ -39,8 +47,8 @@ while True:
             factor_list.sort()
             
             print(factor_list)        
-            for loss in ['ds','mse']:
-                lgbtrain.run('20070101','20160101','20170101',factor_list,'abs',10,{},loss)
+            for loss in ['ds']:
+                lgbtrain.run('20070101','20150101','20170101',factor_list,'abs',10,{},loss)
 
         except Exception as e:
             print("error:"+str(e))

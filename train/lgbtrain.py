@@ -72,8 +72,6 @@ class lgbtrain:
 
 
     def train(data_train,data_valid,data_path='/tmp',md5='test',loss="ds",param={}):
- 
-        
         # 参数设置
         params = {
                 'boosting_type': 'gbdt',
@@ -87,6 +85,7 @@ class lgbtrain:
                 'verbose': -1,  # <0 显示致命的, =0 显示错误 (警告), >0 显示信息
                 # 'lambda_l1':0,
                 # 'lambda_l2':0, 
+                "device" : "gpu"
         }   
         
         
