@@ -1,0 +1,4 @@
+FROM node:14-alpine
+WORKDIR /web/
+COPY ./web/package.json .
+RUN npm install --registry=https://registry.npm.taobao.org

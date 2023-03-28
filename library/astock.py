@@ -194,6 +194,8 @@ class AStock:
             calendar=calendar[calendar.trade_date<=last_date]  
         
             df_adj = AStock.getTableDataByCode('astock_price_adj_factor',code,'')
+            last_adj=df_adj.tail(1).adj_factor
+            
             df_adj = pd.merge(calendar,df_adj, on='trade_date',how='left')
             df_adj = df_adj.fillna(method='ffill')
             df_adj=df_adj.drop('ts_code',axis=1)
@@ -222,7 +224,7 @@ class AStock:
                     df["adj_factor"]=1
             else:
                 if fq=='qfq':
-                    adj_factor=float(df_adj.tail(1).adj_factor)
+                    adj_factor=float(last_adj)
                 else:
                     adj_factor=1
                     

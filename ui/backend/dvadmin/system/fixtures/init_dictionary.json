@@ -1,0 +1,550 @@
+[
+    {
+        "label": "启用/禁用-布尔值",
+        "value": "button_status_bool",
+        "parent": null,
+        "type": 0,
+        "color": null,
+        "is_value": false,
+        "status": true,
+        "sort": 1,
+        "remark": null,
+        "children": [
+            {
+                "label": "启用",
+                "value": "true",
+                "parent": 1,
+                "type": 6,
+                "color": null,
+                "is_value": true,
+                "status": true,
+                "sort": 1,
+                "remark": null,
+                "children": []
+            },
+            {
+                "label": "禁用",
+                "value": "false",
+                "parent": 1,
+                "type": 6,
+                "color": null,
+                "is_value": true,
+                "status": true,
+                "sort": 2,
+                "remark": null,
+                "children": []
+            }
+        ]
+    },
+    {
+        "label": "系统按钮",
+        "value": "system_button",
+        "parent": null,
+        "type": 0,
+        "color": null,
+        "is_value": false,
+        "status": true,
+        "sort": 2,
+        "remark": null,
+        "children": [
+            {
+                "label": "新增",
+                "value": "Create",
+                "parent": 66,
+                "type": 0,
+                "color": "success",
+                "is_value": true,
+                "status": true,
+                "sort": 1,
+                "remark": null,
+                "children": []
+            },
+            {
+                "label": "编辑",
+                "value": "Update",
+                "parent": 66,
+                "type": 0,
+                "color": "primary",
+                "is_value": true,
+                "status": true,
+                "sort": 2,
+                "remark": null,
+                "children": []
+            },
+            {
+                "label": "删除",
+                "value": "Delete",
+                "parent": 66,
+                "type": 0,
+                "color": "danger",
+                "is_value": true,
+                "status": true,
+                "sort": 3,
+                "remark": null,
+                "children": []
+            },
+            {
+                "label": "详情",
+                "value": "Retrieve",
+                "parent": 66,
+                "type": 0,
+                "color": "info",
+                "is_value": true,
+                "status": true,
+                "sort": 4,
+                "remark": null,
+                "children": []
+            },
+            {
+                "label": "查询",
+                "value": "Search",
+                "parent": 66,
+                "type": 0,
+                "color": "warning",
+                "is_value": true,
+                "status": true,
+                "sort": 5,
+                "remark": null,
+                "children": []
+            },
+            {
+                "label": "保存",
+                "value": "Save",
+                "parent": 66,
+                "type": 0,
+                "color": "success",
+                "is_value": true,
+                "status": true,
+                "sort": 6,
+                "remark": null,
+                "children": []
+            },
+            {
+                "label": "导入",
+                "value": "Import",
+                "parent": 66,
+                "type": 0,
+                "color": "primary",
+                "is_value": true,
+                "status": true,
+                "sort": 7,
+                "remark": null,
+                "children": []
+            },
+            {
+                "label": "导出",
+                "value": "Export",
+                "parent": 66,
+                "type": 0,
+                "color": "warning",
+                "is_value": true,
+                "status": true,
+                "sort": 8,
+                "remark": null,
+                "children": []
+            }
+        ]
+    },
+    {
+        "label": "启用/禁用-数字值",
+        "value": "button_status_number",
+        "parent": null,
+        "type": 0,
+        "color": null,
+        "is_value": false,
+        "status": true,
+        "sort": 3,
+        "remark": null,
+        "children": [
+            {
+                "label": "启用",
+                "value": "1",
+                "parent": 7,
+                "type": 1,
+                "color": null,
+                "is_value": true,
+                "status": true,
+                "sort": 1,
+                "remark": null,
+                "children": []
+            },
+            {
+                "label": "禁用",
+                "value": "0",
+                "parent": 7,
+                "type": 1,
+                "color": null,
+                "is_value": true,
+                "status": true,
+                "sort": 2,
+                "remark": null,
+                "children": []
+            }
+        ]
+    },
+    {
+        "label": "是/否-布尔值",
+        "value": "button_whether_bool",
+        "parent": null,
+        "type": 0,
+        "color": null,
+        "is_value": false,
+        "status": true,
+        "sort": 4,
+        "remark": null,
+        "children": [
+            {
+                "label": "是",
+                "value": "true",
+                "parent": 5,
+                "type": 6,
+                "color": null,
+                "is_value": true,
+                "status": true,
+                "sort": 1,
+                "remark": null,
+                "children": []
+            },
+            {
+                "label": "否",
+                "value": "false",
+                "parent": 5,
+                "type": 6,
+                "color": null,
+                "is_value": true,
+                "status": true,
+                "sort": 2,
+                "remark": null,
+                "children": []
+            }
+        ]
+    },
+    {
+        "label": "是/否-数字值",
+        "value": "button_whether_number",
+        "parent": null,
+        "type": 0,
+        "color": null,
+        "is_value": false,
+        "status": true,
+        "sort": 5,
+        "remark": null,
+        "children": [
+            {
+                "label": "是",
+                "value": "1",
+                "parent": 10,
+                "type": 1,
+                "color": null,
+                "is_value": true,
+                "status": true,
+                "sort": 1,
+                "remark": null,
+                "children": []
+            },
+            {
+                "label": "否",
+                "value": "2",
+                "parent": 10,
+                "type": 1,
+                "color": null,
+                "is_value": true,
+                "status": true,
+                "sort": 2,
+                "remark": null,
+                "children": []
+            }
+        ]
+    },
+    {
+        "label": "用户类型",
+        "value": "user_type",
+        "parent": null,
+        "type": 0,
+        "color": null,
+        "is_value": false,
+        "status": true,
+        "sort": 6,
+        "remark": null,
+        "children": [
+            {
+                "label": "后台用户",
+                "value": "0",
+                "parent": 15,
+                "type": 1,
+                "color": null,
+                "is_value": true,
+                "status": true,
+                "sort": 1,
+                "remark": null,
+                "children": []
+            },
+            {
+                "label": "前台用户",
+                "value": "1",
+                "parent": 15,
+                "type": 1,
+                "color": null,
+                "is_value": true,
+                "status": true,
+                "sort": 2,
+                "remark": null,
+                "children": []
+            }
+        ]
+    },
+    {
+        "label": "表单类型",
+        "value": "config_form_type",
+        "parent": null,
+        "type": 0,
+        "color": null,
+        "is_value": false,
+        "status": true,
+        "sort": 7,
+        "remark": null,
+        "children": [
+            {
+                "label": "text",
+                "value": "0",
+                "parent": 49,
+                "type": 1,
+                "color": null,
+                "is_value": true,
+                "status": true,
+                "sort": 0,
+                "remark": null,
+                "children": []
+            },
+            {
+                "label": "textarea",
+                "value": "3",
+                "parent": 49,
+                "type": 1,
+                "color": "",
+                "is_value": true,
+                "status": true,
+                "sort": 0,
+                "remark": null,
+                "children": []
+            },
+            {
+                "label": "number",
+                "value": "10",
+                "parent": 49,
+                "type": 1,
+                "color": "",
+                "is_value": true,
+                "status": true,
+                "sort": 0,
+                "remark": null,
+                "children": []
+            },
+            {
+                "label": "datetime",
+                "value": "1",
+                "parent": 49,
+                "type": 1,
+                "color": null,
+                "is_value": true,
+                "status": true,
+                "sort": 1,
+                "remark": null,
+                "children": []
+            },
+            {
+                "label": "date",
+                "value": "2",
+                "parent": 49,
+                "type": 1,
+                "color": null,
+                "is_value": true,
+                "status": true,
+                "sort": 2,
+                "remark": null,
+                "children": []
+            },
+            {
+                "label": "time",
+                "value": "15",
+                "parent": 49,
+                "type": 1,
+                "color": "",
+                "is_value": true,
+                "status": true,
+                "sort": 3,
+                "remark": null,
+                "children": []
+            },
+            {
+                "label": "select",
+                "value": "4",
+                "parent": 49,
+                "type": 1,
+                "color": null,
+                "is_value": true,
+                "status": true,
+                "sort": 4,
+                "remark": null,
+                "children": []
+            },
+            {
+                "label": "checkbox",
+                "value": "5",
+                "parent": 49,
+                "type": 1,
+                "color": null,
+                "is_value": true,
+                "status": true,
+                "sort": 5,
+                "remark": null,
+                "children": []
+            },
+            {
+                "label": "radio",
+                "value": "6",
+                "parent": 49,
+                "type": 1,
+                "color": null,
+                "is_value": true,
+                "status": true,
+                "sort": 6,
+                "remark": null,
+                "children": []
+            },
+            {
+                "label": "switch",
+                "value": "9",
+                "parent": 49,
+                "type": 1,
+                "color": "",
+                "is_value": true,
+                "status": true,
+                "sort": 6,
+                "remark": null,
+                "children": []
+            },
+            {
+                "label": "文件附件",
+                "value": "8",
+                "parent": 49,
+                "type": 1,
+                "color": "",
+                "is_value": true,
+                "status": true,
+                "sort": 7,
+                "remark": null,
+                "children": []
+            },
+            {
+                "label": "图片(单张)",
+                "value": "7",
+                "parent": 49,
+                "type": 1,
+                "color": "",
+                "is_value": true,
+                "status": true,
+                "sort": 8,
+                "remark": null,
+                "children": []
+            },
+            {
+                "label": "图片(多张)",
+                "value": "12",
+                "parent": 49,
+                "type": 1,
+                "color": "",
+                "is_value": true,
+                "status": true,
+                "sort": 9,
+                "remark": null,
+                "children": []
+            },
+            {
+                "label": "数组",
+                "value": "11",
+                "parent": 49,
+                "type": 1,
+                "color": "",
+                "is_value": true,
+                "status": true,
+                "sort": 11,
+                "remark": null,
+                "children": []
+            },
+            {
+                "label": "关联表",
+                "value": "13",
+                "parent": 49,
+                "type": 1,
+                "color": "",
+                "is_value": true,
+                "status": true,
+                "sort": 13,
+                "remark": null,
+                "children": []
+            },
+            {
+                "label": "关联表(多选)",
+                "value": "14",
+                "parent": 49,
+                "type": 1,
+                "color": "",
+                "is_value": true,
+                "status": true,
+                "sort": 14,
+                "remark": null,
+                "children": []
+            }
+        ]
+    },
+    {
+        "label": "性别",
+        "value": "gender",
+        "parent": null,
+        "type": 0,
+        "color": null,
+        "is_value": false,
+        "status": true,
+        "sort": 8,
+        "remark": null,
+        "children": [
+            {
+                "label": "未知",
+                "value": "0",
+                "parent": 18,
+                "type": 1,
+                "color": null,
+                "is_value": true,
+                "status": true,
+                "sort": 0,
+                "remark": null,
+                "children": []
+            },
+            {
+                "label": "男",
+                "value": "1",
+                "parent": 18,
+                "type": 1,
+                "color": null,
+                "is_value": true,
+                "status": true,
+                "sort": 1,
+                "remark": null,
+                "children": []
+            },
+            {
+                "label": "女",
+                "value": "2",
+                "parent": 18,
+                "type": 1,
+                "color": null,
+                "is_value": true,
+                "status": true,
+                "sort": 2,
+                "remark": null,
+                "children": []
+            }
+        ]
+    }
+]

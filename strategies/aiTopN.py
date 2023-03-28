@@ -29,7 +29,7 @@ class strategy():
             instance['g']['n']=instance['g']['n']+1
             if instance['g']['n']>=hold_day:
                 instance['g']['n']=0
-        print("backtest time: %s , return: %s" % (str(time.time()-t1),str(instance['total_value']/instance['init_cash']-1)))
+        #print("backtest time: %s , return: %s" % (str(time.time()-t1),str(instance['total_value']/instance['init_cash']-1)))
         return instance
         
     def every_bar(instance):

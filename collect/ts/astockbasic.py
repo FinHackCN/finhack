@@ -10,8 +10,18 @@ import time
 class tsAStockBasic:
     @tsMonitor
     def stock_basic(pro,db):
-        tsSHelper.getDataAndReplace(pro,'stock_basic','astock_basic',db)
-
+        table='astock_basic'
+        mydb.exec("drop table if exists "+table+"_tmp",db)
+        engine=mydb.getDBEngine(db)
+        data=pro.stock_basic(list_status='L', fields='ts_code,symbol,name,area,industry,fullname,enname,cnspell,market,exchange,curr_type,list_status,list_date,delist_date,is_hs')
+        # tsSHelper.getDataAndReplace(pro,'stock_basic','astock_basic',db)
+        data.to_sql('astock_basic_tmp', engine, index=False, if_exists='append', chunksize=5000)
+        data=pro.stock_basic(list_status='D', fields='ts_code,symbol,name,area,industry,fullname,enname,cnspell,market,exchange,curr_type,list_status,list_date,delist_date,is_hs')
+        data.to_sql('astock_basic_tmp', engine, index=False, if_exists='append', chunksize=5000)
+        mydb.exec('rename table '+table+' to '+table+'_old;',db);
+        mydb.exec('rename table '+table+'_tmp to '+table+';',db);
+        mydb.exec("drop table if exists "+table+'_old',db)
+        tsSHelper.setIndex(table,db)
       
     @tsMonitor  
     def trade_cal(pro,db):

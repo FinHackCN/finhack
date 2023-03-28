@@ -10,28 +10,44 @@ import datetime
 import empyrical as ey
 import hashlib
 from library.mydb import mydb
+from library.market import market
 from library.globalvar import *
+import multiprocessing
+import redis
+from library.config import config
+
 class bt:
-    def load_price(cache=True):
-        cache_path=PRICE_CACHE_DIR+"/bt_price"
-        if os.path.isfile(cache_path):
-            #print('read cache---'+code)
-            t = time.time()-os.path.getmtime(cache_path)
-            if t<60*60*24 and cache: #缓存时间为12小时
-                df=pd.read_pickle(cache_path)
-                return df        
+    # def load_price(cache=True):
+    #     cache_path=PRICE_CACHE_DIR+"/bt_price"
+    #     if os.path.isfile(cache_path):
+    #         #print('read cache---'+code)
+    #         t = time.time()-os.path.getmtime(cache_path)
+    #         if t<60*60*24 and cache: #缓存时间为12小时
+    #             df=pd.read_pickle(cache_path)
+    #             return df        
         
-        df_all=AStock.getStockDailyPrice(fq='qfq')
-        df_all=df_all.reset_index()
-        df_price=df_all.set_index(['trade_date','ts_code'])
-        df_price=df_price[['high','low','open','close','volume','stop','upLimit','downLimit','name']]
-        df_price.to_pickle(cache_path)
+    #     df_all=AStock.getStockDailyPrice(fq='qfq')
+    #     df_all=df_all.reset_index()
+    #     df_price=df_all.set_index(['trade_date','ts_code'])
+    #     df_price=df_price[['high','low','open','close','volume','stop','upLimit','downLimit','name']]
+    #     df_price['high']=df_price['high'].astype('float16')
+    #     df_price['low']=df_price['low'].astype('float16')
+    #     df_price['open']=df_price['open'].astype('float16')
+    #     df_price['close']=df_price['close'].astype('float16')
+    #     df_price['volume']=df_price['volume'].astype('float32')
+    #     df_price['stop']=df_price['stop'].astype('float16')
+    #     df_price['upLimit']=df_price['upLimit'].astype('float16')
+    #     df_price['downLimit']=df_price['downLimit'].astype('float16')
+    #     df_price.to_pickle(cache_path)
         
-        return df_price
+    #     return df_price
 
         
     
-    def run(instance_id='',start_date='20100101',end_date='20230315',fees=0.0003,min_fees=5,tax=0.001,cash=100000,strategy_name="",data_path="",args={},df_price=pd.DataFrame(),replace=False,type="bt",g={},slip=0.005,benchmark="000001.SH"):
+    def run(instance_id='',start_date='20100101',end_date='20230315',
+            fees=0.0003,min_fees=5,tax=0.001,cash=100000,strategy_name="",
+            data_path="",args={},df_price=pd.DataFrame(),replace=False,
+            type="bt",g={},slip=0.005,benchmark="000001.SH"):
         t1=time.time()
         starttime=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         #print(starttime)
@@ -91,11 +107,17 @@ class bt:
         bt_instance["instance_id"]=instance_id
  
 
-        if df_price.empty:
-            df_price=bt.load_price()
-        bt_instance['df_price']=df_price
+        # if df_price.empty:
+        #     df_price=bt.load_price()
+        # bt_instance['df_price']=df_price
+        
+        cfg=config.getConfig('db','redis')
+        redisPool = redis.ConnectionPool(host=cfg['host'],port=int(cfg['port']),password=cfg['password'],db=int(cfg['db']))
+        client = redis.Redis(connection_pool=redisPool)      
+        bt_instance['client']=client
+        
 
-        bt.log(instance=bt_instance,msg="行情数据读取完毕！",type='info')
+        #bt.log(instance=bt_instance,msg="行情数据读取完毕！",type='info')
         
         if os.path.isfile(PREDS_DIR+data_path):
             data=pd.read_pickle(PREDS_DIR+data_path)
@@ -142,6 +164,13 @@ class bt:
         bt_instance['risk']=bt.analyse(instance=bt_instance,benchmark=bt_instance['setting']['benchmark'],show=False)
         if bt_instance['risk']!=False:
             bt.record(bt_instance)
+            
+            
+            
+            rtime=str(round(time.time()-t1,2))
+            ret=str(round((bt_instance['total_value']/bt_instance['init_cash']-1)*100,2))
+            
+            print("backtest time: %ss , return: %s%%" % (rtime,ret)) 
         else:
             pass
            # print('error')
@@ -170,7 +199,7 @@ class bt:
         
         if bt_instance['type']=='bt':
         
-            tv=0.2 #阈值
+            tv=0.03 #阈值
             if risk['annual_return']<tv:
                 returns='returns'
                 bench_returns='bench_returns'
@@ -208,23 +237,41 @@ class bt:
             mydb.exec(sql,'woldycvm')  
     
     def buy(instance,ts_code,amount=0,price=0,time='open'):
-    
         flag688=False
         if ts_code[:3]=='688':
             flag688=True
 
         now_date=instance['now_date']
         value=0
-        try:
-            value=instance['df_price'][time].loc[(now_date,ts_code)]
-        except Exception as e:
-            return False               
+        
+        
+        now_price=market.get_price(ts_code,now_date,instance['client'])
+        if now_price==None:
+            bt.log(instance=instance,ts_code=ts_code,msg="价格获取失败，无法买入！",type='warn')
+            return False
+ 
+        
+        # try:
+        #     value=instance['df_price'][time].loc[(now_date,ts_code)]
+        # except Exception as e:
+        #     bt.log(instance=instance,ts_code=ts_code,msg="价格获取失败，无法买入！",type='warn')
+        #     return False               
 
         # print(instance['df_price']['open'])
         # print(value)
+        
+        #print(now_price)
+        
+        if time=="open":
+            value=now_price['open']
+        else:
+            value=now_price['close']
+        
+        stop=int(now_price['stop'])
+        
         try:
             value=float(value)
-            if(np.isnan(value) or instance['df_price']['stop'].loc[(now_date,ts_code)]==1):
+            if(np.isnan(value) or stop==1):
                 bt.log(instance=instance,ts_code=ts_code,msg="停牌，无法买入！",type='warn')
                 return False            
         except Exception as e:
@@ -232,8 +279,8 @@ class bt:
                 return False    
         
  
-        upLimit=instance['df_price']['upLimit'].loc[(now_date,ts_code)]
-        volume=instance['df_price']['volume'].loc[(now_date,ts_code)]
+        upLimit=now_price['upLimit']
+        volume=now_price['volume']
         if value>=upLimit*1:
             bt.log(instance=instance,ts_code=ts_code,msg="涨停板，无法买入！",type='warn')
             return False
@@ -260,6 +307,12 @@ class bt:
                     price=price-5
             amount=price/value
 
+
+        #大于今日成交量的1/100
+        if amount>volume*10:
+            amount=int(volume*0.1)*100
+
+
         amount=int(amount)
         #非科创板
         if amount>0 and not flag688:
@@ -284,9 +337,7 @@ class bt:
                 else:
                     amount=amount-fees_amount
         
-        #大于今日成交量的1/100
-        if amount>volume*10:
-            amount=int(volume*0.1)*100
+
  
    
         
@@ -319,16 +370,35 @@ class bt:
     
     def sell(instance,ts_code,amount=0,price=0,time='close'):
         value=0
+        volume=0
+        flag688=False
+        if ts_code[:3]=='688':
+            flag688=True        
         now_date=instance['now_date']
-        try:
-            value=instance['df_price'][time].loc[(now_date,ts_code)]
-        except Exception as e:
-            return False   
         
+        
+        now_price=market.get_price(ts_code,now_date,instance['client'])
+        if now_price==None:
+            bt.log(instance=instance,ts_code=ts_code,msg="无法获取价格！",type='warn')
+            return False               
+        
+        if time=='close':
+            value=now_price['close']
+        else:
+            value=now_price['open']
+        volume=now_price['volume']
+        stop=int(now_price['stop'])
+        
+        # try:
+        #     volume=instance['df_price']['volume'].loc[(now_date,ts_code)]
+        #     value=instance['df_price'][time].loc[(now_date,ts_code)]
+        # except Exception as e:
+        #     return False   
+
  
         try:
             value=float(value)
-            if(np.isnan(value) or instance['df_price']['stop'].loc[(now_date,ts_code)]==1):
+            if(np.isnan(value) or stop==1):
                 bt.log(instance=instance,ts_code=ts_code,msg="停牌，无法卖出！",type='warn')
                 return False            
         except Exception as e:
@@ -338,7 +408,7 @@ class bt:
         
         
         
-        downLimit=instance['df_price']['downLimit'].loc[(now_date,ts_code)]
+        downLimit=now_price['downLimit']
  
         if value<=downLimit:
             bt.log(instance=instance,ts_code=ts_code,msg="跌停版，无法卖出！",type='warn')
@@ -353,6 +423,31 @@ class bt:
     
         if amount>instance['positions'][ts_code]['amount']:
             amount=instance['positions'][ts_code]['amount']
+            
+            
+
+
+        
+                
+        if amount>volume*10:
+            amount=int(volume*0.1)*100  
+            
+        amount=int(amount)
+        #非科创板            
+        
+        if amount>0 and not flag688:
+            if(amount<100):
+                amount=0
+            if(amount % 100 !=0):
+                amount=int(amount/100)*100
+            price=amount*value
+        elif amount>0 and flag688:
+            if(amount<200):
+                amount=0
+            
+            
+        if amount<=0:
+            return False
             
         price=amount*value
         fees=5
@@ -403,18 +498,20 @@ class bt:
         # if instance['positions']=={}:
         #     return True
         
+        
  
         for ts_code,position in instance['positions'].items():
             #ts_code=position['ts_code']
             amount=position['amount']
             try:
-                value=instance['df_price']['close'].loc[(now_date,ts_code)]
+                now_price=market.get_price(ts_code,now_date,instance['client'])
+                value=now_price['close']
             except Exception as e:
                 value=0
             
             try:
                 value=float(value)
-                if(np.isnan(value)):
+                if(np.isnan(value) or value==0):
                     bt.log(instance=instance,ts_code=ts_code,msg="每日统计失败，当做停牌处理",type='warn')
                     value=0           
             except Exception as e:
@@ -435,6 +532,7 @@ class bt:
   
     
     def log(instance,msg,ts_code='',type='info'):
+        #return
         #type=warn,info,err,trade,sell
         
         now_date=instance['now_date']

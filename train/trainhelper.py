@@ -34,6 +34,8 @@ class trainhelper:
                 df_tmp=df[['open','close']]
                 df['label']=alphaEngine.calc(formula=formula,df=df_tmp,name="label_mv",check=True)
                 
+                
+            df=df[df.open!=df.close]    
             
             df_train=df[df.trade_date>=start_date]
             df_train=df[df.trade_date<valid_date]        
@@ -61,7 +63,7 @@ class trainhelper:
             data_train = lgb.Dataset(x_train, y_train)
             data_valid = lgb.Dataset(x_valid, y_valid)  
             
-            print(df.columns)
-            print(features)
+            # print(df.columns)
+            # print(features)
             
             return data_train,data_valid,df_pred,data_path

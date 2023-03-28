@@ -1,0 +1,36 @@
+[
+    {
+        "name": "DVAdmin团队",
+        "key": "dvadmin",
+        "sort": 1,
+        "owner": "",
+        "phone": "",
+        "email": "",
+        "status": true,
+        "parent": null,
+        "children": [
+            {
+                "name": "运营部",
+                "key": "",
+                "sort": 2,
+                "owner": "",
+                "phone": "",
+                "email": "",
+                "status": true,
+                "parent": 1,
+                "children": []
+            },
+            {
+                "name": "技术部",
+                "key": "technology",
+                "sort": 1,
+                "owner": "",
+                "phone": "",
+                "email": "",
+                "status": true,
+                "parent": 3,
+                "children": []
+            }
+        ]
+    }
+]

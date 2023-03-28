@@ -1,0 +1,7 @@
+[
+    {
+        "url": "/api/system/dept_lazy_tree/",
+        "method": 0,
+        "enable_datasource": true
+    }
+]
