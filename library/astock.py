@@ -228,20 +228,38 @@ class AStock:
                 else:
                     adj_factor=1
                     
-                df = pd.merge(df_price,df_adj,how = 'right',on=['trade_date'])
-                df["open"]=df["open"].astype(float)*df["adj_factor"].astype(float)/adj_factor
-                df["high"]=df["high"].astype(float)*df["adj_factor"].astype(float)/adj_factor
-                df["low"]=df["low"].astype(float)*df["adj_factor"].astype(float)/adj_factor
-                df["close"]=df["close"].astype(float)*df["adj_factor"].astype(float)/adj_factor
-                df["pre_close"]=df["pre_close"].astype(float)*df["adj_factor"].astype(float)/adj_factor
-                df["change"]=df["change"].astype(float)*df["adj_factor"].astype(float)/adj_factor
-                df["pct_chg"]=df["pct_chg"].astype(float)
-                df["vol"]=df["vol"].astype(float)
-                df['amount']=df['amount'].astype(float)
-                df["vwap"]=(df['amount'].astype(float)*1000)/(df['vol'].astype(float)*100+1) 
-                df["stop"]=pd.isna(df['close']).astype(int)
-                df["lh_limit"]=pd.isna(df['high']==df['low']).astype(int)
-                df.rename(columns={'vol':'volume','pct_chg':'returns'}, inplace = True)
+                    
+                if fq=='no':#不赋权
+                    df=df_price
+                    df["adj_factor"]=1
+                    df["open"]=df["open"].astype(float)
+                    df["high"]=df["high"].astype(float)
+                    df["low"]=df["low"].astype(float)
+                    df["close"]=df["close"].astype(float)
+                    df["pre_close"]=df["pre_close"].astype(float)
+                    df["change"]=df["change"].astype(float)
+                    df["pct_chg"]=df["pct_chg"].astype(float)
+                    df["vol"]=df["vol"].astype(float)
+                    df['amount']=df['amount'].astype(float)
+                    df["vwap"]=(df['amount'].astype(float)*1000)/(df['vol'].astype(float)*100+1) 
+                    df["stop"]=pd.isna(df['close']).astype(int)
+                    df["lh_limit"]=pd.isna(df['high']==df['low']).astype(int)
+                    df.rename(columns={'vol':'volume','pct_chg':'returns'}, inplace = True)
+                else:
+                    df = pd.merge(df_price,df_adj,how = 'right',on=['trade_date'])
+                    df["open"]=df["open"].astype(float)*df["adj_factor"].astype(float)/adj_factor
+                    df["high"]=df["high"].astype(float)*df["adj_factor"].astype(float)/adj_factor
+                    df["low"]=df["low"].astype(float)*df["adj_factor"].astype(float)/adj_factor
+                    df["close"]=df["close"].astype(float)*df["adj_factor"].astype(float)/adj_factor
+                    df["pre_close"]=df["pre_close"].astype(float)*df["adj_factor"].astype(float)/adj_factor
+                    df["change"]=df["change"].astype(float)*df["adj_factor"].astype(float)/adj_factor
+                    df["pct_chg"]=df["pct_chg"].astype(float)
+                    df["vol"]=df["vol"].astype(float)
+                    df['amount']=df['amount'].astype(float)
+                    df["vwap"]=(df['amount'].astype(float)*1000)/(df['vol'].astype(float)*100+1) 
+                    df["stop"]=pd.isna(df['close']).astype(int)
+                    df["lh_limit"]=pd.isna(df['high']==df['low']).astype(int)
+                    df.rename(columns={'vol':'volume','pct_chg':'returns'}, inplace = True)
 
 
 

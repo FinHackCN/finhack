@@ -44,7 +44,7 @@ class strategy():
         if(instance['total_value']<100):
             return False
 
-        cash=instance['cash']
+        total_value=instance['total_value']
 
         idx_weight=indexHelper.get_index_weights('000852.SH',now_date)
         idx_weight=idx_weight.set_index('ts_code',drop=True)
@@ -89,10 +89,31 @@ class strategy():
             weight=float(row['weight'])
             if code in del_list:
                 continue
-            pos_cash=cash*weight*0.01*1.05
+            pos_cash=total_value*weight*0.01*1.05
                 
             if pos_cash<100:
-                break
+                continue
+            now_pos_cash=0
+        
+            if code in instance['positions'].keys():
+                now_pos_cash=instance['positions'][code]['total_value']
+            x_cash=pos_cash-now_pos_cash
+            
+            
+            if x_cash<0:
+                bt.sell(instance=instance,ts_code=code,price=x_cash,time='open')
+                
+                
+                
+        for idx,row in idx_weight.iterrows():
+            code=idx
+            weight=float(row['weight'])
+            if code in del_list:
+                continue
+            pos_cash=total_value*weight*0.01*1.05
+                
+            if pos_cash<100:
+                continue
             now_pos_cash=0
         
             if code in instance['positions'].keys():
@@ -102,8 +123,9 @@ class strategy():
             
             if x_cash>0:
                 bt.buy(instance=instance,ts_code=code,price=x_cash,time='open')
-            else:
-                bt.sell(instance=instance,ts_code=code,price=x_cash,time='open')
+                
+                
+                
         #instance['data'].drop(index=now_date)
         #print(instance['data'])
               

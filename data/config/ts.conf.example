@@ -1,0 +1,6 @@
+[default]
+#Tushare数据存取的位置，需与db.conf中配置一致
+db=tushare
+
+#Tushare的token，https://waditu.com个人信息中获取
+token=

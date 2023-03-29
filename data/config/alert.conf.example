@@ -1,0 +1,12 @@
+[default]
+#是否启用告警，值为True时启用
+enable=False
+
+#发送通知消息时的关键字，请在飞书/钉钉机器人中同步配置
+key=【FinHack】
+
+#飞书webhook地址，使用请参考 https://www.feishu.cn/hc/zh-CN/articles/360024984973
+feishu_webhook=
+
+#钉钉webhook地址，使用请参考 https://developers.dingtalk.com/document/robots/custom-robot-access
+dingtalk_webhook=

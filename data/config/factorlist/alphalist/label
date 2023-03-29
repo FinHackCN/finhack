@@ -1,0 +1,2 @@
+shift($close,-10)/shift($open,-1)
+mean(shift($close,-10),9)/mean(shift($close,-10),9)/shift($open,-1)
