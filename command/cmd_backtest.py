@@ -116,8 +116,8 @@ while True:
                                                         time.sleep(1)
                                                         mytask=pool.submit(start_bt,features_list,model_hash,loss,algorithm,init_cash,hold_day,hold_n,filters_name,strategy)
                                                                 
-                                                        #start_bt(features_list,model_hash,loss,algorithm,init_cash,hold_day,hold_n,filters_name,strategy)
-                                                         
+                                                        # start_bt(features_list,model_hash,loss,algorithm,init_cash,hold_day,hold_n,filters_name,strategy)
+                                                        # exit()
                                                                 #tasklist.append(mytask)
                                 #wait(tasklist, return_when=ALL_COMPLETED)
         time.sleep(60)

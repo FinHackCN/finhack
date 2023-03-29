@@ -15,6 +15,7 @@ from library.globalvar import *
 import multiprocessing
 import redis
 from library.config import config
+import json
 
 class bt:
     # def load_price(cache=True):
@@ -281,7 +282,11 @@ class bt:
  
         upLimit=now_price['upLimit']
         volume=now_price['volume']
+        
+ 
+        
         if value>=upLimit*1:
+            bt.log(instance=instance,ts_code=ts_code,msg="%s,%s" % (str(value),str(upLimit)),type='warn')
             bt.log(instance=instance,ts_code=ts_code,msg="涨停板，无法买入！",type='warn')
             return False
 
@@ -499,10 +504,48 @@ class bt:
         #     return True
         
         
+        key="dividend_"+now_date
+        div_info=instance['client'].get(key)
+        if div_info==None:
+            df_div=pd.DataFrame()
+        else:
+            div_info=json.loads(div_info)
+            df_div=pd.DataFrame(div_info)
+
+  
+        # if not df_div.empty:
+            
+        #     for row in df_div.itertuples():
+        #         div_idx=row[0]
+        #         print(instance['positions'])
+             
+        #     pass
+        #     exit()
+        
+        
+        #分红现金
+        div_cash=0
+        
  
         for ts_code,position in instance['positions'].items():
             #ts_code=position['ts_code']
             amount=position['amount']
+            
+            if ts_code in df_div.index:
+                stk_div=float(df_div['stk_div'].at[ts_code])
+                cash_div_tax=float(df_div['cash_div_tax'].at[ts_code])
+                
+                div_cash=div_cash+amount*cash_div_tax
+                if cash_div_tax*amount>0:
+                    bt.log(instance=instance,ts_code=ts_code,msg="发生分红事件，共%s元" % str(round(amount*cash_div_tax,2)),type='warn')
+                    
+                amount=amount+amount*stk_div
+                if cash_div_tax*amount>0:
+                    instance['positions'][ts_code]['amount']=int(amount)
+                    bt.log(instance=instance,ts_code=ts_code,msg="发生送股事件，共%s股" % str(round(cash_div_tax*amount,2)),type='warn')
+                    
+                               
+            
             try:
                 now_price=market.get_price(ts_code,now_date,instance['client'])
                 value=now_price['close']
@@ -516,11 +559,13 @@ class bt:
                     value=0           
             except Exception as e:
                 value=0 
+                
+            #这里除权后的股价应在下一日发生变化，先不在意这些细节
             positions_value=positions_value+amount*value
-        
+            
+
         instance['position_value']=positions_value
-        instance['position_value']=positions_value
-        instance['total_value']=instance['cash']+positions_value
+        instance['total_value']=instance['cash']+positions_value+div_cash
         instance['returns'].append([now_date,instance['total_value']/old_value])
 
         instance['history'][now_date]=instance['positions']

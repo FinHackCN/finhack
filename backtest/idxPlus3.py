@@ -31,9 +31,6 @@ def on_trade_handler(context,event):
     trade = event.trade
     order = event.order
     account = event.account
-    #logger.info("*" * 10 + "Trade Handler" + "*" * 10)
-    #logger.info(trade)
-    
     code=order.order_book_id.replace('XSHG','SH') 
     code=code.replace('XSHE','SZ')
     now_date=context.now.strftime("%Y%m%d")
@@ -44,11 +41,8 @@ def on_trade_handler(context,event):
       side="买入"
     else:
       side="卖出"
-    
     buy_str="%s %s %s%s股，当前价格%s [trade]" %(now_date,code,side,vol,price)
-    
     logger.info(buy_str)
-    #logger.info(account)
 
 
 def init(context):
@@ -61,7 +55,7 @@ def init(context):
     
     context.n=n
     context.benchmark=benchmark
-    #subscribe_event(EVENT.TRADE,on_trade_handler)
+    subscribe_event(EVENT.TRADE,on_trade_handler)
  
 
 
@@ -107,28 +101,39 @@ def open_auction(context, bar_dict):
         code=code.replace('SZ','XSHE') 
         order_target_percent(code, 0)
       
-    cash=context.portfolio.cash
+    total_value=context.stock_account.total_value
+ 
       
     for code,row in idx_weight.iterrows():
         weight=float(row['weight'])#*0.01*1.05
         #print(weight)
         code=code.replace('SH','XSHG') 
         code=code.replace('SZ','XSHE') 
-        
- 
-        #order_target_percent(code, weight)
-        
-        
-        
-        pos_cash=cash*weight*0.01*1.05
-                
+        pos_cash=total_value*weight*0.01*1.05
+        now_pos_cash=get_position(code, POSITION_DIRECTION.LONG).market_value
         if pos_cash<100:
-                break
-              
-        #print(pos_cash)
-
-        order_target_value(code, pos_cash)
+          continue
         
+        #先减仓
+        if now_pos_cash-pos_cash>0:
+          order_target_value(code, pos_cash)
+        
+
+    
+    for code,row in idx_weight.iterrows():
+        weight=float(row['weight'])#*0.01*1.05
+        #print(weight)
+        code=code.replace('SH','XSHG') 
+        code=code.replace('SZ','XSHE') 
+        pos_cash=total_value*weight*0.01*1.05
+        now_pos_cash=get_position(code, POSITION_DIRECTION.LONG).market_value
+        if pos_cash<100:
+          continue
+        
+        #后加仓
+        if now_pos_cash-pos_cash<0:
+          order_target_value(code, pos_cash)
+
 
 
 config = {

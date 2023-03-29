@@ -17,12 +17,24 @@ from library.market import market
 
 
 
+# df=AStock.getStockDailyPriceByCode('000018.SZ',fq='qfq')
+# print(df[6612:])
+# exit()
+# exit()
+
+
 #df_price=market.load_price()
  
-x=market.get_price("002624.SZ",'20230321')
-
+x=market.get_price("000043.SZ",'20180102')
 print(x)
 
+#16.86
+x=market.get_price("000011.SZ",'20180102')
+print(x)
+
+
+df=AStock.getStockDailyPriceByCode('000043.SZ',fq='no')
+print(df[4158:])
 
  
 exit()

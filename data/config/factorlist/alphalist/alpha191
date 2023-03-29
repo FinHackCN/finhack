@@ -1,0 +1,191 @@
+(-1 * corr(rank(delta(log($volume), 1)), rank((($close - $open) / $open)), 6))
+(-1 * delta(((($close - $low) - ($high - $close)) / ($high - $low)), 1))
+sum(($close==delay($close,1)?0:$close-($close>delay($close,1)?min($low,delay($close,1)):max($high,delay($close,1)))),6)
+((((sum($close,8)/8)+std($close,8))<(sum($close,2)/2))?(-1*1):(((sum($close,2)/2)<((sum($close,8)/8)-std($close,8)))?1:(((1<($volume/mean($volume,20)))||(($volume/mean($volume,20))==1))?1:(-1*1))))
+(-1*tsmax(corr(tsrank($volume,5),tsrank($high,5),5),3))
+(rank(sign(delta(((($open*0.85)+($high*0.15))),4)))*-1)
+((rank(max(($vwap-$close),3))+rank(min(($vwap-$close),3)))*rank(delta($volume,3)))
+rank(delta((((($high+$low)/2)*0.2)+($vwap*0.8)),4)-1)
+sma((($high+$low)/2-(delay($high,1)+delay($low,1))/2)*($high-$low)/$volume,7,2)
+rank(max((($returns<0)?std($returns,20):$close)^2,5))  #研报公式有问题
+sum((($close-$low)-($high-$close))/($high-$low)*$volume,6)
+(rank(($open - (sum($vwap, 10) / 10)))) * (-1 * (rank(abs(($close - $vwap)))))
+((($high * $low)^0.5) - $vwap)
+$close-delay($close,5)
+$open/delay($close,1)-1
+(-1 * tsmax(rank(corr(rank($volume), rank($vwap), 5)), 5))
+rank(($vwap - max($vwap, 15)))^delta($close, 5)
+$close/delay($close,5)
+($close<delay($close,5)?($close-delay($close,5))/delay($close,5):($close==delay($close,5)?0:($close-delay($close,5))/$close))
+($close-delay($close,6))/delay($close,6)*100
+regbeta(mean($close,6),sequence(6))
+smean((($close-mean($close,6))/mean($close,6)-delay(($close-mean($close,6))/mean($close,6),3)),12,1)
+sma(($close>delay($close,1)?std($close,20):0),20,1)/(sma(($close>delay($close,1)?std($close,20):0),20,1 )+sma(($close<=delay($close,1)?std($close,20):0),20,1))*100
+sma($close-delay($close,5),5,1)
+((-1 * rank((delta($close, 7) * (1 - rank(decaylinear(($volume / mean($volume,20)), 9)))))) * (1 + rank(sum($returns, 250))))
+((((sum($close, 7) / 7) - $close)) + ((corr($vwap, delay($close, 5), 230)))) 
+wma(($close-delay($close,3))/delay($close,3)*100+($close-delay($close,6))/delay($close,6)*100,12)
+3*sma(($close-tsmin($low,9))/(tsmax($high,9)-tsmin($low,9))*100,3,1)-2*sma(sma(($close-tsmin($low,9))/( max($high,9)-tsmax($low,9))*100,3,1),3,1)
+($close-delay($close,6))/delay($close,6)*$volume
+$close#'wma((regresi($close/delay($close)-1,[mkt,smb,hml]，60))^2,20) 三因子暂时无法实现
+($close-mean($close,12))/mean($close,12)*100
+(-1 * sum(rank(corr(rank($high), rank($volume), 3)), 3))
+((((-1 * tsmin($low, 5)) + delay(tsmin($low, 5), 5)) * rank(((sum($returns, 240) - sum($returns, 20)) / 220))) * tsrank($volume, 5))
+mean($close,12)/$close
+(min(rank(decaylinear(delta($open, 1), 15)), rank(decaylinear(corr(($volume), (($open * 0.65) + ($open *0.35)), 17),7))) * -1)
+rank(sum(corr(rank($volume), rank($vwap), 6), 2)) #研报公式有问题
+(-1 * rank(((sum($open, 5) * sum($returns, 5)) - delay((sum($open, 5) * sum($returns, 5)), 10))))
+(((sum($high, 20) / 20) < $high) ? (-1 * delta($high, 2)) : 0)
+((rank(decaylinear(delta(($close), 2),8)) - rank(decaylinear(corr((($vwap * 0.3) + ($open * 0.7)), sum(mean($volume,180), 37), 14), 12))) * -1)
+sum(($close>delay($close,1)?$volume:0),26)/sum(($close<=delay($close,1)?$volume:0),26)*100
+(rank(max(delta(($vwap), 3), 5))* -1)
+((-1 * rank(std($high, 10))) * corr($high, $volume, 10))
+sum(($close>delay($close,1)?$volume:($close<delay($close,1)?-$volume:0)),6)
+(tsrank(decaylinear(corr((($low )), mean($volume,10), 7), 6),4) + tsrank(decaylinear(delta(($vwap), 3), 10), 15))
+(rank(delta(((($close * 0.6) + ($open *0.4))), 1)) * rank(corr($vwap, mean($volume,150), 15)))
+(mean($close,3)+mean($close,6)+mean($close,12)+mean($close,24))/(4*$close)
+sma((tsmax($high,6)-$close)/(tsmax($high,6)-tsmin($low,6))*100,9,1)
+(-1*((rank(((sign(($close - delay($close, 1))) + sign((delay($close, 1) - delay($close, 2)))) + sign((delay($close, 2) - delay($close, 3)))))) * sum($volume, 5)) / sum($volume, 20))
+sum((($high+$low)>=(delay($high,1)+delay($low,1))?0:max(abs($high-delay($high,1)),abs($low-delay($low,1)))),12)/(sum((($high+$low)>=(delay($high,1)+delay($low,1))?0:max(abs($high-delay($high,1)),abs($low-delay($low,1)))),12)+sum((($high+$low)<=(delay($high,1)+delay($low,1))?0:max(abs($high-delay($high,1)),abs($low-delay($low,1)))),12))
+sum((($high+$low)<=(delay($high,1)+delay($low,1))?0:max(abs($high-delay($high,1)),abs($low-delay($low,1)))),12)/(sum((($high+$low)<=(delay($high,1)+delay($low,1))?0:max(abs($high-delay($high,1)),abs($low-delay($low,1)))),12)+sum((($high+$low)>=(delay($high,1)+delay($low,1))?0:max(abs($high-delay($high,1)),abs($low-delay($low,1)))),12))-sum((($high+$low)>=(delay($high,1)+delay($low,1))?0:max(abs($high-delay($high,1)),abs($low-delay($low,1)))),12)/(sum((($high+$low)>=(delay($high,1)+delay($low,1))?0: max(abs($high-delay($high,1)),abs($low-delay($low,1)))),12)+sum((($high+$low)<=(delay($high,1)+delay($low,1))?0:max(abs($high-delay($high,1)),abs($low-delay($low,1)))),12))
+sum((($high+$low)<=(delay($high,1)+delay($low,1))?0:max(abs($high-delay($high,1)),abs($low-delay($low,1)))),12)/(sum((($high+$low)<=(delay($high,1)+delay($low,1))?0:max(abs($high-delay($high,1)),abs($low-delay($low,1)))),12)+sum((($high+$low)>=(delay($high,1)+delay($low,1))?0:max(abs($high-delay($high,1)),abs($low-delay($low,1)))),12))
+sum(max(0,$high-delay(($high+$low+$close)/3,1)),26)/sum(max(0,delay(($high+$low+$close)/3,1)-$low),26)* 100#公式有误，我认为是-$low
+count($close>delay($close,1),12)/12*100
+(-1 * rank((std(abs($close - $open)) + ($close - $open)) + corr($close, $open,10)))
+sum(16*($close-delay($close,1)+($close-$open)/2+delay($close,1)-delay($open,1))/(((abs($high-delay($close,1))>abs($low-delay($close,1)))&(abs($high-delay($close,1))>abs($high-delay($low,1)))?abs($high-delay($close,1))+abs($low-delay($close,1))/2+abs(delay($close,1)-delay($open,1))/4:((abs($low-delay($close,1))>abs($high-delay($low,1)))&(abs($low-delay($close,1))>abs($high-delay($close,1)))?abs($low-delay($close,1))+abs($high-delay($close,1))/2+abs(delay($close,1)-delay($open,1))/4:abs($high-delay($low,1))+abs(delay($close,1)-delay($open,1))/4)))*max(abs($high-delay($close,1)),abs($low-delay($close,1))),20)
+(rank(($open - tsmin($open, 12))) < rank((rank(corr(sum((($high + $low) / 2), 19), sum(mean($volume,40), 19), 13))^5)))
+sma(($close-tsmin($low,9))/(tsmax($high,9)-tsmin($low,9))*100,3,1)
+count($close>delay($close,1),20)/20*100
+sum(($close==delay($close,1)?0:$close-($close>delay($close,1)?min($low,delay($close,1)):max($high,delay($close,1)))),20)
+sum((($close-$low)-($high-$close))/($high-$low)*$volume,20)
+(max(rank(decaylinear(delta($vwap, 1), 12)), rank(decaylinear(rank(corr(($low),mean($volume,80), 8)), 17))) * -1)
+(-1 * corr($high, rank($volume), 5))
+sma(max($close-delay($close,1),0),6,1)/sma(abs($close-delay($close,1)),6,1)*100
+(max(rank(decaylinear(corr(rank($vwap), rank($volume), 4), 4)), rank(decaylinear(max(corr(rank($close), rank(mean($volume,60)), 4), 13), 14))) * -1)
+mean($close,6)/$close
+($close-mean($close,6))/mean($close,6)*100
+sma(max($close-delay($close,1),0),24,1)/sma(abs($close-delay($close,1)),24,1)*100
+sma((($high+$low)/2-(delay($high,1)+delay($low,1))/2)*($high-$low)/$volume,15,2)
+(sum($dtm,20)>sum($dbm,20) ? (sum($dtm,20)-sum($dbm,20))/sum($dtm,20) : (sum($dtm,20)==sum($dbm,20) ? 0:(sum($dtm,20)-sum($dbm,20))/sum($dbm,20)))
+std($amount,6)
+($close-mean($close,24))/mean($close,24)*100
+sma((tsmax($high,6)-$close)/(tsmax($high,6)-tsmin($low,6))*100,15,1)
+((tsrank(decaylinear(decaylinear(corr(($close), $volume, 10), 16),4),5)-rank(decaylinear(corr($vwap, mean($volume,30),4),3)))*-1)#研报公式有误
+(rank(corr(sum((($low * 0.35) + ($vwap * 0.65)), 20), sum(mean($volume,40), 20), 7)) + rank(corr(rank($vwap), rank($volume), 6)))
+count(($close>$open) & ($banchmarkindexclose<$banchmarkindexopen),50)/count($banchmarkindexclose<$banchmarkindexopen,50)
+std(abs(($close/delay($close,1)-1))/$volume,20)/mean(abs(($close/delay($close,1)-1))/$volume,20)
+min(rank(decaylinear((((($high + $low) / 2) + $high) - ($vwap + $high)), 20)), rank(decaylinear(corr((($high + $low) / 2), mean($volume,40), 3), 6)))
+(($high+$low+$close)/3-mean(($high+$low+$close)/3,12))/(0.015*mean(abs($close-mean(($high+$low+$close)/3,12)),12))
+sma(max($close-delay($close,1),0),12,1)/sma(abs($close-delay($close,1)),12,1)*100
+($volume-delay($volume,5))/delay($volume,5)*100
+sma($volume,21,2)
+sma((tsmax($high,6)-$close)/(tsmax($high,6)-tsmin($low,6))*100,20,1)
+(-1 * rank(coviance(rank($high), rank($volume), 5)))
+sum(($close>delay($close,1)?$volume:($close<delay($close,1)?-$volume:0)),20)
+(tsrank(($volume / mean($volume,20)), 20) * tsrank((-1 * delta($close, 7)), 8))
+((0.25 < (((delay($close, 20) - delay($close, 10)) / 10) - ((delay($close, 10) - $close) / 10))) ? (-1 * 1) : (((((delay($close, 20) - delay($close, 10)) / 10) - ((delay($close, 10) - $close) / 10)) < 0) ? 1 : ((-1 * 1) * ($close - delay($close, 1)))))
+((rank(decaylinear(delta($vwap, 4), 7)) + tsrank(decaylinear((((($low * 0.9) + ($low * 0.1)) - $vwap) / ($open - (($high + $low) / 2))), 11), 7)) * -1)
+($close-delay($close,20))/delay($close,20)*100
+2*(sma($close,13,2)-sma($close,27,2)-sma(sma($close,13,2)-sma($close,27,2),10,2))
+( rank(corr(rank($vwap), rank($volume), 5)) * -1)
+((rank(($close - max($close, 5)))*rank(corr((mean($volume,40)), $low, 5))) * -1)
+(max(rank(decaylinear(delta((($close * 0.35) + ($vwap *0.65)), 2), 3)), tsrank(decaylinear(abs(corr((mean($volume,180)), $close, 13)), 5), 15)) * -1)
+sum(($open>=delay($open,1)?0:max(($open-$low),($open-delay($open,1)))),20)
+sum(($close>delay($close,1)?$volume:($close<delay($close,1)?-$volume:0)),30)
+std($amount,20)
+sma(sma(($close-tsmin($low,9))/(tsmax($high,9)-tsmin($low,9))*100,3,1),3,1)
+std($volume,10)
+((((delta((sum($close, 100) / 100), 100) / delay($close, 100)) < 0.05) || ((delta((sum($close, 100) / 100), 100) / delay($close, 100)) == 0.05)) ? (-1 * ($close - tsmin($close, 100))) : (-1 * delta($close, 3)))
+(-1 * rank(coviance(rank($close), rank($volume), 5)))
+std($volume,20)
+((rank(corr($close, sum(mean($volume,30), 37), 15)) < rank(corr(rank((($high * 0.1) + ($vwap * 0.9))), rank($volume), 11))) * -1)
+sma(max($volume-delay($volume,1),0),6,1)/sma(abs($volume-delay($volume,1)),6,1)*100
+((20-lowday($low,20))/20)*100
+(-1 * (delta(corr($high, $volume, 5), 5) * rank(std($close, 20))))
+(-1 * corr(rank($open), rank($volume), 10))
+$close-delay($close,20)
+(((-1 * rank(($open - delay($high, 1)))) * rank(($open - delay($close, 1)))) * rank(($open - delay($low, 1))))
+((rank(($high - min($high, 2)))^rank(corr(($vwap), (mean($volume,120)), 6))) * -1)
+sma($high-$low,10,2)/sma(sma($high-$low,10,2),10,2)
+sum(max(0,$high-delay($close,1)),20)/sum(max(0,delay($close,1)-$low),20)*100
+sma($volume*(($close-$low)-($high-$close))/($high-$low),11,2)-sma($volume*(($close-$low)-($high-$close))/($high-$low),4,2)
+(sum(($close-delay($close,1)>0?$close-delay($close,1):0),12)-sum(($close-delay($close,1)<0?abs($close-delay($close,1)):0),12))/(sum(($close-delay($close,1)>0?$close-delay($close,1):0),12)+sum(($close-delay($close,1)<0?abs($close-delay($close,1)):0),12))*100
+(-1 * ((rank((sum(delay($close, 5), 20) / 20)) * corr($close, $volume, 2)) * rank(corr(sum($close, 5), sum($close, 20), 2))))
+((rank(delay((($high - $low) / (sum($close, 5) / 5)), 2)) * rank(rank($volume))) / ((($high - $low) / (sum($close, 5) / 5)) / ($vwap - $close)))
+(rank(corr((($high * 0.9) + ($close * 0.1)), mean($volume,30), 10))^rank(corr(tsrank((($high + $low) / 2), 4), tsrank($volume, 10), 7)))
+regbeta($close,sequence(20))
+((tsrank($volume, 32) * (1 - tsrank((($close + $high) - $low), 16))) * (1 - tsrank($returns, 32)))
+sum($high-$open,20)/sum($open-$low,20)*100
+(rank(decaylinear(corr($vwap, sum(mean($volume,5), 26), 5), 7)) - rank(decaylinear(tsrank(min(corr(rank($open), rank(mean($volume,15)), 21), 9), 7), 8)))
+(rank(($vwap - $close)) / rank(($vwap + $close)))
+((rank(($vwap - min($vwap, 12)))^tsrank(corr(tsrank($vwap, 20), tsrank(mean($volume,60), 2), 18), 3)) * -1)
+(sma(sma(sma(log($close),13,2),13,2),13,2)-delay(sma(sma(sma(log($close),13,2),13,2),13,2),1))/delay(sma(sma(sma(log($close),13,2),13,2),13,2),1)
+((rank(corr(sum((($high + $low) / 2), 20), sum(mean($volume,60), 20), 9)) < rank(corr($low, $volume, 6))) * -1)
+($close - $vwap) / decaylinear(rank(tsmax($close, 30)),2)
+(rank(decaylinear(corr(($vwap), mean($volume,80),17), 20)) / rank(decaylinear(delta((($close * 0.5) + ($vwap * 0.5)), 3), 16)))
+($close+$high+$low)/3
+(mean((100*($close-max($close,12))/(max($close,12)))^2))^(1/2)
+100-(100/(1+sum((($high+$low+$close)/3>delay(($high+$low+$close)/3,1)?($high+$low+$close)/3*$volume:0),14)/sum((($high+$low+$close)/3<delay(($high+$low+$close)/3,1)?($high+$low+$close)/3*$volume:0), 14)))
+sum(($close-delay($close,1)<0?abs($close-delay($close,1)):0),12)
+(rank(decaylinear(corr((($high + $low) / 2), mean($volume,40), 9), 10)) / rank(decaylinear(corr(rank($vwap), rank($volume), 7),3)))
+(rank(delta($vwap, 1))^tsrank(corr($close,mean($volume,50), 18), 18))
+mean($amount,20)
+((20-highday($high,20))/20)*100-((20-lowday($low,20))/20)*100
+($close-delay($close,12))/delay($close,12)*$volume
+sma(delay($close/delay($close,20),1),20,1)
+((-1 * rank(delta($returns, 3))) * corr($open, $volume, 10))
+16*($close-delay($close,1)+($close-$open)/2+delay($close,1)-delay($open,1))/(((abs($high-delay($close, 1))>abs($low-delay($close,1))) &(abs($high-delay($close,1))>abs($high-delay($low,1)))?abs($high-delay($close,1))+abs($low-delay($close,1))/2+abs(delay($close,1)-delay($open,1))/4:((abs($low-delay($close,1))>abs($high-delay($low,1))) &(abs($low-delay($close,1))>abs($high-delay($close,1)))?abs($low-delay($close,1))+abs($high-delay($close,1))/2+abs(delay($close,1)-delay($open,1))/4:abs($high-delay($low,1))+abs(delay($close,1)-delay($open,1))/4)))*max(abs($high-delay($close,1)),abs($low-delay($close,1)))
+((rank(decaylinear(delta(((($low * 0.7) + ($vwap *0.3))), 3), 20)) - tsrank(decaylinear(tsrank(corr(tsrank($low, 8), tsrank(mean($volume,60), 17), 5), 19), 16), 7)) * -1)
+(-1 * corr($open, $volume, 10))
+min(rank(decaylinear(((rank($open) + rank($low)) - (rank($high) + rank($close))), 8)), tsrank(decaylinear(corr(tsrank($close, 8), tsrank(mean($volume,60), 20), 8), 7), 3))
+(rank(corr(rank($high), rank(mean($volume,15)), 9))* -1)
+(((-1 * rank(tsrank($close, 10))) * rank(delta(delta($close, 1), 1))) * rank(tsrank(($volume /mean($volume,20)), 5)))
+$close>delay($close,1)?($close-delay($close,1))/delay($close,1)*self:self
+sumif(abs($close/delay($close,1)-1)/$amount,20,$close<delay($close,1))/count($close<delay($close, 1),20)
+(mean($volume,9)-mean($volume,26))/mean($volume,12)*100
+mean(($close-delay($close,1))/delay($close,1)-sma(($close-delay($close,1))/delay($close,1),61,2),20)*(($close-delay($close,1))/delay($close,1)-sma(($close-delay($close,1))/delay($close,1),61,2))/sma((($close-delay($close,1))/delay($close,1)-(($close-delay($close,1))/delay($close,1)-sma(($close-delay($close, 1))/delay($close,1),61,2)))^2,60)
+regbeta(mean($close,12),sequence(12))
+((rank(corr(($open), sum(mean($volume,60), 9), 6)) < rank(($open - tsmin($open, 14)))) * -1)
+regbeta(filter($close/delay($close,1)-1,$banchmarkindexclose<delay($banchmarkindexclose,1) ),filter($banchmarkindexclose/delay($banchmarkindexclose,1)-1,$banchmarkindexclose<delay($banchmarkindexclose,1)),252)
+($close+$high+$low)/3*$volume
+sma($close-delay($close,20),20,1)
+sma(mean(delay(sma(delay($close/delay($close,9),1),9,1),1),12)-mean(delay(sma(delay($close/delay ($close,9),1),9,1),1),26),9,1)
+(mean($close,3)+mean($close,6)+mean($close,12)+mean($close,24))/4
+((($vwap - min($vwap, 16))) < (corr($vwap, mean($volume,180), 18)))
+sma($volume,13,2)-sma($volume,27,2)-sma(sma($volume,13,2)-sma($volume,27,2),10,2)
+(max(rank(decaylinear(delta($vwap, 5), 3)), rank(decaylinear(((delta((($open * 0.15) + ($low *0.85)), 2) / (($open * 0.15) + ($low * 0.85))) * -1), 3))) * -1)
+(min(prod(rank(rank(log(sum(tsmin(rank(rank((-1 * rank(delta(($close - 1), 5))))), 2), 1)))), 1), 5) + tsrank(delay((-1 * $returns), 6), 5))
+(($high-sma($close,15,2))-($low-sma($close,15,2)))/$close
+(($close-sum(min($low,delay($close,1)),6))/sum(max($high,delay($close,1))-min($low,delay($close,1)),6) *12*24+($close-sum(min($low,delay($close,1)),12))/sum(max($high,delay($close,1))-min($low,delay($close,1)),12)*6*24+($close-sum(min($low,delay($close,1)),24))/sum(max($high,delay($close,1))-min($low,delay($close,1)),24)*6*24)*100/(6*12+6*24+12*24)
+sma(($close<=delay($close,1)?std($close,20):0),20,1)
+mean(max(max(($high-$low),abs(delay($close,1)-$high)),abs(delay($close,1)-$low)),12)
+(sma(max($close-delay($close,1),0),12,1)/sma(abs($close-delay($close,1)),12,1)*100-min(sma(max($close-delay($close,1),0),12,1)/sma(abs($close-delay($close,1)),12,1)*100,12))/(max(sma(max($close-delay($close,1),0),12,1)/sma(abs($close-delay($close,1)),12,1)*100,12)-min(sma(max($close-delay($close,1),0),12, 1)/sma(abs($close-delay($close,1)),12,1)*100,12))
+rank(((((-1 * $returns) * mean($volume,20)) * $vwap) * ($high - $close)))
+sma(((($close>delay($close,1))?1/($close-delay($close,1)):1)-min((($close>delay($close,1))?1/($close-delay($close,1)):1),12))/($high-$low)*100,13,2)
+$close#'max(sumac($close-mean($close,48)))-min(sumac($close-mean($close,48)))/std($close,48)公式有误
+-20* ( 20-1 ) ^1.5*sum($close/delay($close,1)-1-mean($close/delay($close,1)-1,20),20)/((20-1)*(20-2)*(sum(($close/delay($close,1))^2,20))^1.5)#公式有误
+sum(($close-delay($close,1)>0?$close-delay($close,1):0),12)
+(-1*$volume/mean($volume,20))
+sma(mean(delay(sma($close-delay($close,1),9,1),1),12)-mean(delay(sma($close-delay($close,1),9,1),1), 26),10,1)
+((((rank((1 / $close)) * $volume) / mean($volume,20)) * (($high * rank(($high - $close))) / (sum($high, 5) / 5))) - rank(($vwap - delay($vwap, 5))))
+((-1 * (($low - $close) * ($open^5))) / (($close - $high) * ($close^5)))
+mean(abs(sum(( (delay($low,1)-$low >0) &  (delay($low,1)-$low > $high-delay($high,1)))? delay($low,1)-$low :0,14)*100/sum( max(max($high-$low,abs($high-delay($close,1))),abs($low-delay($close,1)) ) ,14)-sum(( (($high-delay($high,1)) >0) & ($high-delay($high,1) > delay($low,1)-$low ))? $high-delay($high,1) :0,14)*100/sum( max(max($high-$low,abs($high-delay($close,1))),abs($low-delay($close,1)) ) ,14))/(sum(( delay($low,1)-$low >0 &  (delay($low,1)-$low > $high-delay($high,1) ))? delay($low,1)-$low :0,14)*100/sum( max(max($high-$low,abs($high-delay($close,1))),abs($low-delay($close,1)) ) ,14)+sum((($high-delay($high,1) >0) &  ($high-delay($high,1) > delay($low,1)-$low))? $high-delay($high,1) :0,14)*100/sum( max(max($high-$low,abs($high-delay($close,1))),abs($low-delay($close,1)) ) ,14))*100,6)
+3*sma($close,13,2)-2*sma(sma($close,13,2),13,2)+sma(sma(sma(log($close),13,2),13,2),13,2)
+sma(($close>delay($close,1)?std($close,20):0),20,1)
+mean(max(max(($high-$low),abs(delay($close,1)-$high)),abs(delay($close,1)-$low)),6)
+corr(rank((($close - tsmin($low, 12)) / (tsmax($high, 12) - tsmin($low,12)))), rank($volume), 6)
+((20-highday($high,20))/20)*100
+($close-delay($close,1))/delay($close,1)*$volume
+(rank(corr($vwap, $volume, 4)) *rank(corr(rank($low), rank(mean($volume,50)), 12)))
+((mean($volume,20) < $volume) ? ((-1 * tsrank(abs(delta($close, 7)), 60)) * sign(delta($close, 7))) : (-1 * $volume))
+sum((($close/delay($close,1)-1)-mean(($close/delay($close,1)-1),20))-($banchmarkindexclose-mean($banchmarkindexclose,20))^2,20)/sum(($banchmarkindexclose-mean($banchmarkindexclose,20))^3)
+count((($close>$open) & ($banchmarkindexclose>$banchmarkindexopen)) | (($close<$open) & ($banchmarkindexclose<$banchmarkindexopen)),20)/20
+$close#'max(sumac($close-mean($close,24)))-min(sumac($close-mean($close,24)))/std($close,24)公式有误
+(rank(corr(delay(($open - $close), 1), $close, 200)) + rank(($open - $close)))
+rank((-1 * ((1 - ($open / $close))^2)))
+(mean(abs(sum(( ((delay($low,1)-$low) >0)&  ((delay($low,1)-$low) > ($high-delay($high,1))) )? delay($low,1)-$low :0,14)*100/sum( max(max($high-$low,abs($high-delay($close,1))),abs($low-delay($close,1)) ) ,14)-sum(( (($high-delay($high,1)) >0)&  (($high-delay($high,1)) > (delay($low,1)-$low) ))? $high-delay($high,1) :0,14)*100/sum( max(max($high-$low,abs($high-delay($close,1))),abs($low-delay($close,1)) ) ,14))/(sum(( ((delay($low,1)-$low) >0)&((delay($low,1)-$low )> ($high-delay($high,1) )))? delay($low,1)-$low :0,14)*100/sum( max(max($high-$low,abs($high-delay($close,1))),abs($low-delay($close,1)) ) ,14)+sum(((($high-delay($high,1)) >0)&  (($high-delay($high,1)) > (delay($low,1)-$low )))? $high-delay($high,1) :0,14)*100/sum( max(max($high-$low,abs($high-delay($close,1))),abs($low-delay($close,1)) ) ,14))*100,6)+delay(mean(abs(sum((((delay($low,1)-$low) >0)&  ((delay($low,1)-$low) > ($high-delay($high,1) )))? delay($low,1)-$low :0,14)*100/sum( max(max($high-$low,abs($high-delay($close,1))),abs($low-delay($close,1)) ) ,14)-sum(( (($high-delay($high,1)) >0)&  (($high-delay($high,1)) > (delay($low,1)-$low )))? $high-delay($high,1) :0,14)*100/sum( max(max($high-$low,abs($high-delay($close,1))),abs($low-delay($close,1)) ) ,14))/(sum((((delay($low,1)-$low )>0)&  ((delay($low,1)-$low) > ($high-delay($high,1) )))? delay($low,1)-$low :0,14)*100/sum( max(max($high-$low,abs($high-delay($close,1))),abs($low-delay($close,1)) ) ,14)+sum(((($high-delay($high,1)) >0)&  (($high-delay($high,1)) > (delay($low,1)-$low )))? $high-delay($high,1) :0,14)*100/sum( max(max($high-$low,abs($high-delay($close,1))),abs($low-delay($close,1)) ) ,14))*100,6),6))/2
+sum(($open<=delay($open,1)?0:max(($high-$open),($open-delay($open,1)))),20)
+(($high-$low-sma($high-$low,11,2))/sma($high-$low,11,2))*100
+mean(abs($close-mean($close,6)),6)
+log((count($close/delay($close)-1>(($close/delay($close,19))^(1/20)-1),20)-1)*(sumif((($close/delay($close)-1-($close/delay($close,19))^(1/20)-1))^2,20,$close/delay($close)-1<($close/delay($close,19))^(1/20)- 1))/((count(($close/delay($close)-1<($close/delay($close,19))^(1/20)-1),20))*(sumif(($close/delay($close)-1-(($close/delay($close,19))^(1/20)-1))^2,20,$close/delay($close)-1>($close/delay($close,19))^(1/20)-1))))
+((corr(mean($volume,20), $low, 5) + (($high + $low) / 2)) - $close)
