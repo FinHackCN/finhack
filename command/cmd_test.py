@@ -15,26 +15,30 @@ from library.backtest import bt
 from library.market import market
 
 
+#market.load_dividend()
+
+df=AStock.getStockDailyPriceByCode('300476.SZ',fq='no')
+print(df[df.trade_date=='20180316'])
 
 
-# df=AStock.getStockDailyPriceByCode('000018.SZ',fq='qfq')
-# print(df[6612:])
-# exit()
-# exit()
+# x=market.get_price("600803.SH",'20180212')
+# print(x)
+exit()
+exit()
 
 
-#df_price=market.load_price()
+# df_price=market.load_price()
  
-x=market.get_price("000043.SZ",'20180102')
-print(x)
+# x=market.get_price("000043.SZ",'20180102')
+# print(x)
 
-#16.86
-x=market.get_price("000011.SZ",'20180102')
-print(x)
+# #16.86
+# x=market.get_price("000011.SZ",'20180102')
+# print(x)
 
 
-df=AStock.getStockDailyPriceByCode('000043.SZ',fq='no')
-print(df[4158:])
+# df=AStock.getStockDailyPriceByCode('000043.SZ',fq='no')
+# print(df[4158:])
 
  
 exit()

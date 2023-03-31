@@ -13,8 +13,8 @@ import time
 import math
 from astock.indexHelper import indexHelper
 
-model_hash="3358f2ad65dab03ce1f8afad9218d91d"
-n=2
+model_hash="4cc29a3522864b947bf5d31f8c44f84d"
+n=12
 benchmark="000852.XSHG"
 
 if len(sys.argv)>=2:
@@ -27,11 +27,68 @@ if len(sys.argv)>=4:
 
 
 
+def diff_bt(context,buy_str):
+  
+    instance_id="378dc88cddd0672a19190b0146f9a800"
+    file="/data/code/finhack/data/logs/backtest/bt_%s.log" % instance_id
+    if context.diff['content']=="":
+      f=open(file, 'r') 
+      context.diff['content'] = f.readlines()
+    start=1
+    total_value=context.stock_account.total_value
+    for i in range(start,len(context.diff['content'])):
+      context.diff['n']=context.diff['n']+1
+      if "无法" not in context.diff['content'][context.diff['n']+start] and "warn" not in context.diff['content'][context.diff['n']+start]:
+        finhack_log=context.diff['content'][context.diff['n']+start].strip().split('[trade')[0]
+        rqalpha_log=buy_str.split('[trade')[0]+""+str(round(total_value,3))+" "
+      else:
+        continue
+      
+      
+      print(finhack_log+" finhack")
+      print(rqalpha_log+" rqalpha")
+      print("\n")
+      if  finhack_log==rqalpha_log:
+        return True
+      #print("\n")
+      
+      
+      
+      
+      input('按任意键继续') 
+      return True
+
+
+
+def on_settlement_handler(context,event):
+  
+  now_date=context.now.strftime("%Y%m%d")
+  if now_date!="20180315":
+    return
+
+  print(event)
+  n=0
+  for pos in get_positions():
+    code=pos.order_book_id  
+    value=pos.market_value
+    amount=pos.quantity
+    n=n+value
+    print("%s,%s,%s" % (code,amount,value))
+  print("n=%s" % n)
+  print('-------------------')
+  pass
+
 def on_trade_handler(context,event):
     trade = event.trade
     order = event.order
     account = event.account
-    code=order.order_book_id.replace('XSHG','SH') 
+    
+    code=order.order_book_id
+    print("after trade")
+    print(get_position(code, POSITION_DIRECTION.LONG).quantity)
+    print(get_position(code, POSITION_DIRECTION.LONG).market_value)   
+    
+    code=code.replace('XSHG','SH') 
     code=code.replace('XSHE','SZ')
     now_date=context.now.strftime("%Y%m%d")
     vol=str(order.filled_quantity)
@@ -41,8 +98,33 @@ def on_trade_handler(context,event):
       side="买入"
     else:
       side="卖出"
-    buy_str="%s %s %s%s股，当前价格%s [trade]" %(now_date,code,side,vol,price)
-    logger.info(buy_str)
+    buy_str="%s %s %s%s股，当前价格%s [trade-rqalpha]" %(now_date,code,side,vol,price)
+    
+    print(trade)
+    print(order)
+    # print(account.cash)
+    # print(account.management_fees)
+    # print(account.position_equity)
+    # print(account.market_value)
+ 
+    info={
+          "total_value":context.stock_account.total_value,
+          "position_equity":context.stock_account.position_equity,
+          "cash":context.stock_account.cash
+          
+    }
+    print(info)  
+    
+    if '000036' in code:
+      pass
+    #   print(get_position(code, POSITION_DIRECTION.LONG).quantity)
+    #   print(get_position(code, POSITION_DIRECTION.LONG).market_value)     
+    diff_bt(context,buy_str)
+      
+    
+ 
+    
+    #logger.info(buy_str)
 
 
 def init(context):
@@ -56,7 +138,14 @@ def init(context):
     context.n=n
     context.benchmark=benchmark
     subscribe_event(EVENT.TRADE,on_trade_handler)
+    subscribe_event(EVENT.SETTLEMENT,on_settlement_handler)
  
+    context.diff={
+      "n":0,
+      "finhack":"",
+      "rqalpha":"",
+      "content":""
+    }
 
 
 def before_trading(context):
@@ -74,6 +163,21 @@ def handle_bar(context, bar_dict):
 def open_auction(context, bar_dict):
     #now=time.strftime("%Y%m%d", time.localtime(context.now))
     now_date=context.now.strftime("%Y%m%d")
+    
+    n=0
+    if now_date=="20180316":
+        for pos in get_positions():
+          code=pos.order_book_id  
+          value=pos.market_value
+          amount=pos.quantity
+          n=n+value
+          print("%s,%s,%s" % (code,amount,value))
+        print("n=%s" % n)
+        print('-------------------')
+    
+    
+    
+    
     try:
       bench_code=context.benchmark.replace('XSHG','SH') 
       bench_code=bench_code.replace('XSHE','SZ')
@@ -90,6 +194,12 @@ def open_auction(context, bar_dict):
     for ts_code,row in sr.iterrows():
         if ts_code in idx_weight.index.values:
             idx_weight.loc[ts_code,'weight']=float(idx_weight.loc[ts_code]['weight'])*math.pow(row['pred'],context.n)
+    
+    
+    
+    # print(idx_weight.loc['000520.SZ']['weight'])
+    # print(sr.loc['000520.SZ']['pred'])
+    # exit()
     
     
     for pos in get_positions():
@@ -109,37 +219,91 @@ def open_auction(context, bar_dict):
         #print(weight)
         code=code.replace('SH','XSHG') 
         code=code.replace('SZ','XSHE') 
-        pos_cash=total_value*weight*0.01*1.05
+        target_pos_cash=total_value*weight*0.01*1.05
         now_pos_cash=get_position(code, POSITION_DIRECTION.LONG).market_value
-        if pos_cash<100:
+        if target_pos_cash<100:
           continue
+ 
+        info={
+          "total_value":context.stock_account.total_value,
+          "position_equity":context.stock_account.position_equity,
+          "cash":context.stock_account.cash,
+          "code":code,
+          "quantity":get_position(code, POSITION_DIRECTION.LONG).quantity,
+          "market_value":get_position(code, POSITION_DIRECTION.LONG).market_value
+          
+        }
+        print(info) 
         
         #先减仓
-        if now_pos_cash-pos_cash>0:
-          order_target_value(code, pos_cash)
+        if now_pos_cash-target_pos_cash>0:
+          order_value(code, target_pos_cash-now_pos_cash)
         
 
+          
+          
     
     for code,row in idx_weight.iterrows():
         weight=float(row['weight'])#*0.01*1.05
         #print(weight)
         code=code.replace('SH','XSHG') 
         code=code.replace('SZ','XSHE') 
-        pos_cash=total_value*weight*0.01*1.05
+        target_pos_cash=total_value*weight*0.01*1.05
         now_pos_cash=get_position(code, POSITION_DIRECTION.LONG).market_value
-        if pos_cash<100:
+        if target_pos_cash<100:
           continue
         
+        
+        info={
+          "total_value":context.stock_account.total_value,
+          "position_equity":context.stock_account.position_equity,
+          "code":code,
+          "cash":context.stock_account.cash,
+          "quantity":get_position(code, POSITION_DIRECTION.LONG).quantity,
+          "market_value":get_position(code, POSITION_DIRECTION.LONG).market_value
+          
+        }
+        print(info)       
+        
+        
+        if code in ['600239.XSHG']:
+          continue
+        
+        
         #后加仓
-        if now_pos_cash-pos_cash<0:
-          order_target_value(code, pos_cash)
+        if now_pos_cash-target_pos_cash<0:
+
+  
+          info={
+                "code":code,
+                "total_value":total_value,
+                "weight":weight,
+                "now_pos_cash":now_pos_cash,
+                "target_pos_cash":target_pos_cash,
+                "x_cash":now_pos_cash-target_pos_cash
+          }
+          print(info)          
+          
+          order_value(code, target_pos_cash-now_pos_cash)
+          
+
+
+
+        # if "300066" in code  and now_date=="20180112":
+        #   print(total_value)
+        #   print(now_pos_cash)
+        #   print(target_pos_cash)
+          
+        #   print(target_pos_cash-now_pos_cash)
+        #   exit()     
+
 
 
 
 config = {
   "base": {
     "start_date": "2018-01-01",
-    "end_date": "2023-03-17",
+    "end_date": "2023-03-08",
     "accounts": {
       "stock": 10000000
     }
@@ -158,8 +322,13 @@ config = {
       "output_file": "data/backtest/"+model_hash+'_'+str(n)+"_"+benchmark+".pkl",
       "plot_save_file":"data/backtest/"+model_hash+'_'+str(n)+"_"+benchmark+".png",
       "benchmark":benchmark
-      
-    }
+    },
+    "sys_transaction_cost":{
+        "enabled": True,
+        "cn_stock_min_commission": 5,
+        "commission_multiplier": 0.375,
+        "tax_multiplier": 1
+      }
   }
 }
 

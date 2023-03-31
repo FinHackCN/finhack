@@ -23,7 +23,7 @@ class market:
         cfg=config.getConfig('db','redis')
         redisPool = redis.ConnectionPool(host=cfg['host'],port=int(cfg['port']),password=cfg['password'],db=int(cfg['db']))
         client = redis.Redis(connection_pool=redisPool)           
-        df=mydb.selectToDf('SELECT ts_code,record_date,stk_div,cash_div_tax FROM `tushare`.`astock_finance_dividend` where not ISNULL(pay_date) and div_proc="实施"','tushare')
+        df=mydb.selectToDf('SELECT ts_code,record_date,ex_date,pay_date,stk_div,cash_div_tax FROM `tushare`.`astock_finance_dividend` where not ISNULL(pay_date) and div_proc="实施"','tushare')
         grouped=df.groupby("record_date")
         for date,group in grouped:
             group=group.drop_duplicates('ts_code',keep='last')
@@ -53,8 +53,7 @@ class market:
             df_price=df_price.reset_index(drop=True)
             df_price.to_pickle(cache_path)
         
-
-        
+ 
  
         for row in df_price.itertuples():
             key='market_no_'+row[2]+'_'+row[1]
