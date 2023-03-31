@@ -89,7 +89,7 @@ class bt:
             "strategy_name":strategy_name,
             "cash":cash,
             "init_cash":cash,
-            "positions_value":0,
+            "position_value":0,
             "total_value":cash,
             "trade_num":0,
             "win":0,
@@ -107,6 +107,8 @@ class bt:
 
         bt_instance["instance_id"]=instance_id
  
+
+        #print(bt_instance)
 
         # if df_price.empty:
         #     df_price=bt.load_price()
@@ -134,6 +136,10 @@ class bt:
         data=data.set_index(['trade_date','ts_code'])
         bt_instance['data']=data
         bt_instance['date_range']=date_range
+        bt_instance['dividend']={} #分红送股数据
+        
+        
+        
         bt.log(instance=bt_instance,msg="预测数据读取完毕！",type='info')
 
         
@@ -238,6 +244,7 @@ class bt:
             mydb.exec(sql,'woldycvm')  
     
     def buy(instance,ts_code,amount=0,price=0,time='open'):
+        
         flag688=False
         if ts_code[:3]=='688':
             flag688=True
@@ -245,6 +252,7 @@ class bt:
         now_date=instance['now_date']
         value=0
         
+        #print("%s,%s,%s"% (now_date,ts_code,price))
         
         now_price=market.get_price(ts_code,now_date,instance['client'])
         if now_price==None:
@@ -303,14 +311,26 @@ class bt:
             value=upLimit
 
 
+        if price> instance['cash']-5:
+            price=instance['cash']-5
+
+
+
+        #print(price)
         if price>0:
             #考虑手续费不够的情况
-            if instance['cash']-price<instance['setting']['min_fees'] or instance['cash']-price<price*instance['setting']['fees']:
+            if True:#instance['cash']-price<instance['setting']['min_fees'] or instance['cash']-price<price*instance['setting']['fees']:
                 if price*instance['setting']['fees']>5:
                     price=price-price*instance['setting']['fees']
                 else:
                     price=price-5
+                    
             amount=price/value
+            
+            
+        # if ts_code=="600185.SH":
+        #     print(price)
+        #     exit()
 
 
         #大于今日成交量的1/100
@@ -343,8 +363,10 @@ class bt:
                     amount=amount-fees_amount
         
 
- 
-   
+        if ts_code in instance['positions'].keys():
+            last_price=instance['positions'][ts_code]['last_close']*amount
+        else:
+            last_price=value*amount
         
         #再检测一下，排除买了1手手续费不够的情况
         if amount>0:
@@ -354,6 +376,7 @@ class bt:
                 fees=price*instance['setting']['fees']
                 
             instance['cash']=instance['cash']-price-fees
+            instance['total_value']=instance['total_value']-fees-price+last_price
             
             if ts_code not in instance['positions'].keys():
                 instance['positions'][ts_code]={
@@ -365,15 +388,22 @@ class bt:
                 instance['positions'][ts_code]['total_value']=instance['positions'][ts_code]['total_value']
                 instance['positions'][ts_code]['amount']=instance['positions'][ts_code]['amount']+amount
                 instance['positions'][ts_code]['avg_price']=(instance['positions'][ts_code]['total_value']+price+fees)/instance['positions'][ts_code]['amount']
-                
-            instance['positions_value']=instance['positions_value']+price
+                instance['positions'][ts_code]['last_close']=value
+            instance['position_value']=instance['position_value']+price
         else:
             #bt.log(instance=instance,ts_code=ts_code,msg="钱不够，无法买入！",type='warn')
-            return False            
+            return False     
+
+        
         bt.log(instance=instance,ts_code=ts_code,msg="买入"+str(amount)+"股，当前价格"+str(round(value,2)),type='trade')
         return True
     
     def sell(instance,ts_code,amount=0,price=0,time='close'):
+        #print(price)
+        
+        # if ts_code=="000059.SZ":
+        #     print(price)
+        #     exit()        
         value=0
         volume=0
         flag688=False
@@ -415,22 +445,27 @@ class bt:
         
         downLimit=now_price['downLimit']
  
-        if value<=downLimit:
+        if value<=downLimit and value==now_price['low']:
             bt.log(instance=instance,ts_code=ts_code,msg="跌停版，无法卖出！",type='warn')
             return False
   
  
         #设置滑点
         value=value*(1-instance['setting']['slip'])
-        if value<=downLimit:
-            value=downLimit
+        
+        #这个步骤还是非常有意义的，只不过现在的涨跌停价格不能确定
+        # if value<=downLimit:
+        #     value=downLimit
   
+    
+    
+        amount=price/value
     
         if amount>instance['positions'][ts_code]['amount']:
             amount=instance['positions'][ts_code]['amount']
             
             
-
+        
 
         
                 
@@ -451,6 +486,11 @@ class bt:
                 amount=0
             
             
+        # if amount>0:
+        #     print(instance['positions'][ts_code]['amount'])
+        #     print(amount)
+        #     print('-------')
+            
         if amount<=0:
             return False
             
@@ -460,11 +500,24 @@ class bt:
             fees=price*instance['setting']['fees']
         tax=price*instance['setting']['tax']
         
+        
+        print(instance['total_value'])
+        
+        #验证rqalpha不减手续费
+        # instance['cash']=instance['cash']+price-fees-tax
+        # instance['total_value']=instance['total_value']-fees-tax
+        
+        
+        
+        last_mv=instance['positions'][ts_code]['last_close']*amount
+        
         instance['cash']=instance['cash']+price-fees-tax
+        instance['total_value']=instance['total_value']-fees-tax+price-last_mv
         
         
+
         
-       
+
         
         #卖价>均价
         if value-(fees+tax)/amount>instance['positions'][ts_code]['avg_price']:
@@ -474,9 +527,9 @@ class bt:
         trade_return=(value-(fees+tax)/amount)/(instance['positions'][ts_code]['avg_price'])-1
         instance['trade_returns'].append(trade_return)
         
-        instance['positions'][ts_code]['total_value']=instance['positions'][ts_code]['total_value']-price
-        instance['positions'][ts_code]['amount']=instance['positions'][ts_code]['amount']-amount
         
+        instance['positions'][ts_code]['amount']=instance['positions'][ts_code]['amount']-amount
+        instance['positions'][ts_code]['total_value']=instance['positions'][ts_code]['amount']*instance['positions'][ts_code]['last_close']
 
         if(instance['positions'][ts_code]['amount']==0):
             del instance['positions'][ts_code]
@@ -484,20 +537,49 @@ class bt:
             instance['positions'][ts_code]['avg_price']=(instance['positions'][ts_code]['total_value']+fees+tax)/instance['positions'][ts_code]['amount']        
         
         
-        instance['positions_value']=instance['positions_value']-price 
+        instance['position_value']=instance['position_value']-price 
         instance['trade_num']=instance['trade_num']+1
-        bt.log(instance=instance,ts_code=ts_code,msg="卖出"+str(amount)+"股，当前价格"+str(round(value,2))
-        +"，每股盈利"+str(round(value-avg_price_old,2))+"，总共盈利"+str(round((value-avg_price_old)*amount,2)),type='trade')
+        bt.log(instance=instance,ts_code=ts_code,msg="卖出"+str(amount)+"股，当前价格"+str(round(value,2)),type='trade')
+        #+"，每股盈利"+str(round(value-avg_price_old,2))+"，总共盈利"+str(round((value-avg_price_old)*amount,2)),type='trade')
         
+        
+        # if ts_code=='000683.SZ':
+        #     print(fees)
+        #     print(tax)
+        #     print(instance['total_value'])
+        #     exit()
         return True
     
     
     
-    def update(instance):
+    def before_market(instance):
         now_date=instance['now_date']
-        #print(now_date+'--------')
+        positions_value=0
+        for ts_code,position in instance['positions'].items():
+            amount=position['amount']
+            value=instance['positions'][ts_code]['last_close']
+            instance['positions'][ts_code]['amount']
+            if "dt_"+now_date in instance['dividend'].keys():
+                if ts_code in instance['dividend']["dt_"+now_date].keys():
+                    # if instance['dividend']["dt_"+now_date][ts_code]['cash_tax']>0:
+                    #     instance['cash']=instance['cash']+instance['dividend']["dt_"+now_date][ts_code]['cash_tax']
+                    #     bt.log(instance=instance,ts_code=ts_code,msg="发生分红事件，共%s元" % str(round(instance['dividend']["dt_"+now_date][ts_code]['cash_tax'],2)),type='warn')
+                    if instance['dividend']["dt_"+now_date][ts_code]['cash_stk']>0:
+                        instance['positions'][ts_code]['amount']=instance['positions'][ts_code]['amount']+instance['dividend']["dt_"+now_date][ts_code]['cash_stk']
+                        bt.log(instance=instance,ts_code=ts_code,msg="发生送股事件，共%s股" % str(round(instance['dividend']["dt_"+now_date][ts_code]['cash_stk'],2)),type='warn')
+                positions_value=positions_value+amount*value
+        #instance['position_value']=positions_value
+        #instance['total_value']=instance['cash']+instance['position_value']
+    
+    
+    
+    
+    
+    
+    #收盘后进行更新
+    def after_market(instance):
+        now_date=instance['now_date']
         old_value=instance['total_value']
-        
         positions_value=0
         
         # if instance['positions']=={}:
@@ -531,20 +613,37 @@ class bt:
             #ts_code=position['ts_code']
             amount=position['amount']
             
+
             if ts_code in df_div.index:
                 stk_div=float(df_div['stk_div'].at[ts_code])
                 cash_div_tax=float(df_div['cash_div_tax'].at[ts_code])
                 
-                div_cash=div_cash+amount*cash_div_tax
-                if cash_div_tax*amount>0:
-                    bt.log(instance=instance,ts_code=ts_code,msg="发生分红事件，共%s元" % str(round(amount*cash_div_tax,2)),type='warn')
+                ex_date=df_div['ex_date'].at[ts_code]
+                pay_date=df_div['pay_date'].at[ts_code]
+                if pay_date==None:
+                    pay_date=ex_date
+                dt_key="dt_"+pay_date
+                
+                if dt_key not in instance['dividend'].keys():
+                    instance['dividend'][dt_key]={}
                     
-                amount=amount+amount*stk_div
-                if cash_div_tax*amount>0:
-                    instance['positions'][ts_code]['amount']=int(amount)
-                    bt.log(instance=instance,ts_code=ts_code,msg="发生送股事件，共%s股" % str(round(cash_div_tax*amount,2)),type='warn')
+
+                
+                instance['dividend'][dt_key][ts_code]={
+                    'cash_tax':amount*cash_div_tax,
+                    'cash_stk':amount*stk_div
+                }
+                
+            
+ 
+            if "dt_"+now_date in instance['dividend'].keys():
+                if ts_code in instance['dividend']["dt_"+now_date].keys():
+                    if instance['dividend']["dt_"+now_date][ts_code]['cash_tax']>0:
+                        instance['cash']=instance['cash']+instance['dividend']["dt_"+now_date][ts_code]['cash_tax']
+                        bt.log(instance=instance,ts_code=ts_code,msg="发生分红事件，共%s元" % str(round(instance['dividend']["dt_"+now_date][ts_code]['cash_tax'],2)),type='warn')
                     
-                               
+
+                    
             
             try:
                 now_price=market.get_price(ts_code,now_date,instance['client'])
@@ -552,24 +651,41 @@ class bt:
             except Exception as e:
                 value=0
             
+            
             try:
                 value=float(value)
                 if(np.isnan(value) or value==0):
-                    bt.log(instance=instance,ts_code=ts_code,msg="每日统计失败，当做停牌处理",type='warn')
-                    value=0           
+                    #bt.log(instance=instance,ts_code=ts_code,msg="每日统计失败，当做停牌处理",type='warn')
+                    value=instance['positions'][ts_code]['last_close']
+                else:
+                    instance['positions'][ts_code]['last_close']=value
+                    instance['positions'][ts_code]['total_value']=instance['positions'][ts_code]['amount']*value
             except Exception as e:
-                value=0 
+                value=0
                 
-            #这里除权后的股价应在下一日发生变化，先不在意这些细节
-            positions_value=positions_value+amount*value
-            
 
+            positions_value=positions_value+amount*value
+
+
+        
         instance['position_value']=positions_value
-        instance['total_value']=instance['cash']+positions_value+div_cash
+        instance['total_value']=instance['cash']+positions_value
+        
         instance['returns'].append([now_date,instance['total_value']/old_value])
 
         instance['history'][now_date]=instance['positions']
-
+        
+        
+        info={
+            "total_value":instance['total_value'],
+            "positions_value":instance['position_value'],
+            "cash":instance["cash"]
+        }
+        print(info)
+        if now_date>="20180316":
+            exit()
+        
+        
         #bt.log(instance,"账户余额："+str(instance['total_value'])+","+now_date)
         return True
        
@@ -578,22 +694,27 @@ class bt:
     
     def log(instance,msg,ts_code='',type='info'):
         #return
+        #print(msg)
+  
         #type=warn,info,err,trade,sell
-        
+        xstr=str(round(instance['total_value']*1.0,3))#"  cash:%s,pos_value:%s,total_value:%s" % (int(instance['cash']),int(instance['position_value']),int(instance['total_value']))
         now_date=instance['now_date']
         time=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         #instance['logs'].append({"trade_date":now_date,"msg":msg})
         if ts_code=='':
-            msgstr="%s %s [%s] %s" % (now_date,msg,type,time)
+            msgstr="%s %s %s %s [%s] %s" % (now_date,ts_code,msg,xstr,type,time)
         else:
-            msgstr="%s %s %s [%s] %s" % (now_date,ts_code,msg,type,time)
+            msgstr="%s %s %s %s [%s] %s" % (now_date,ts_code,msg,xstr,type,time)
         log_path=LOGS_DIR+"backtest/bt_"+instance['instance_id']+'.log'
 
 
+       
+ 
+
         with open(log_path,'a') as f:
-            f.writelines(msgstr+"\n")      
+            f.writelines(msgstr+xstr+"\n")      
         instance['logs'].append(msgstr)
-        #print(msgstr)
+        print(msgstr)
         return True
         
         

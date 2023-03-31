@@ -21,15 +21,17 @@ class strategy():
         instance['date_range']=list(filter(lambda x: x >= instance['start_date'], instance['date_range']))
         
         
-        instance['data']['pred']=instance['data']['pred'].astype('float16')
+        #instance['data']['pred']=instance['data']['pred'].astype('float16')
         
         hold_day=strategy.get_arg('hold_day',instance)
         hold_n=strategy.get_arg('hold_n',instance)
         
         for date in instance['date_range']:
+            
             instance['now_date']=date
+            bt.before_market(instance)
             strategy.every_bar(instance)
-            bt.update(instance)
+            bt.after_market(instance)
             instance['g']['n']=instance['g']['n']+1
             if instance['g']['n']>=hold_day:
                 instance['g']['n']=0
@@ -68,6 +70,12 @@ class strategy():
                 idx_weight.loc[symbol,'weight']=float(idx_weight.loc[symbol]['weight'])*math.pow(row['pred'],hold_n)
             
 
+
+        # print(idx_weight.loc['000520.SZ']['weight'])
+        # print(sr.loc['000520.SZ']['pred'])
+        # exit()
+
+
             
             #i用来控制持仓数据
         i=0
@@ -89,42 +97,74 @@ class strategy():
             weight=float(row['weight'])
             if code in del_list:
                 continue
-            pos_cash=total_value*weight*0.01*1.05
+            target_pos_cash=total_value*weight*0.01*1.05
+            
+            
+            
+
                 
-            if pos_cash<100:
+            if target_pos_cash<100:
                 continue
             now_pos_cash=0
         
             if code in instance['positions'].keys():
                 now_pos_cash=instance['positions'][code]['total_value']
-            x_cash=pos_cash-now_pos_cash
-            
+            x_cash=target_pos_cash-now_pos_cash
+     
+     
+            # print(weight)
+            # print(total_value)
+            # print(x_cash)
+            # print(now_pos_cash)
+            # print(target_pos_cash)
+            # if code=="000059.SZ" and now_pos_cash>0:
+            #     exit()            
             
             if x_cash<0:
-                bt.sell(instance=instance,ts_code=code,price=x_cash,time='open')
+                bt.sell(instance=instance,ts_code=code,price=-x_cash,time='open')
+ 
+        
                 
                 
                 
         for idx,row in idx_weight.iterrows():
             code=idx
+            amount=0
             weight=float(row['weight'])
             if code in del_list:
                 continue
-            pos_cash=total_value*weight*0.01*1.05
+            target_pos_cash=total_value*weight*0.01*1.05
                 
-            if pos_cash<100:
+            if target_pos_cash<100:
                 continue
             now_pos_cash=0
         
             if code in instance['positions'].keys():
                 now_pos_cash=instance['positions'][code]['total_value']
-            x_cash=pos_cash-now_pos_cash
+                amount=instance['positions'][code]['amount']
+            x_cash=target_pos_cash-now_pos_cash
             
+            
+            if code in ['600239.SH']:
+                continue
             
             if x_cash>0:
                 bt.buy(instance=instance,ts_code=code,price=x_cash,time='open')
                 
                 
+            info={
+                "code":code,
+                "amount":amount,
+                "total_value":total_value,
+                "weight":weight,
+                "now_pos_cash":now_pos_cash,
+                "target_pos_cash":target_pos_cash,
+                "x_cash":x_cash
+            }
+            print(info)
+
+            # if code=="300378.SZ" and now_date=="20180208":
+            #     exit()                    
                 
         #instance['data'].drop(index=now_date)
         #print(instance['data'])

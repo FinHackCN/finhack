@@ -28,7 +28,8 @@ class ProcessPoolExecutor2(ProcessPoolExecutor):
 
 class AStock:
     def getStockCodeList(db='tushare'):
-        sql = "select ts_code from astock_basic;";
+        #sql = "select ts_code from astock_basic;";
+        sql="select ts_code from astock_price_daily GROUP BY ts_code"
         try:
             df_code=mydb.selectToDf(sql,'tushare')
             return df_code
