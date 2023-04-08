@@ -13,10 +13,9 @@ import pickle
 
 index_list=mydb.selectToDf("select con_code from astock_index_weight where ts_code='000852.SH'",'tushare')
 index_list=list(set(index_list['con_code'].to_list()))
-#print(index_list)
 
 
-model_hash="3d7f01c6a3f25143029533c904efe7a8"
+model_hash="4cc29a3522864b947bf5d31f8c44f84d"
 
 pkl_file="/data/code/finhack/data/preds/lgb_model_"+model_hash+"_pred.pkl"
 with open(pkl_file,'rb') as f:

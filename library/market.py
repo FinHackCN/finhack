@@ -23,7 +23,7 @@ class market:
         cfg=config.getConfig('db','redis')
         redisPool = redis.ConnectionPool(host=cfg['host'],port=int(cfg['port']),password=cfg['password'],db=int(cfg['db']))
         client = redis.Redis(connection_pool=redisPool)           
-        df=mydb.selectToDf('SELECT ts_code,record_date,ex_date,pay_date,stk_div,cash_div_tax FROM `tushare`.`astock_finance_dividend` where not ISNULL(pay_date) and div_proc="实施"','tushare')
+        df=mydb.selectToDf('SELECT ts_code,record_date,ex_date,pay_date,stk_div,cash_div_tax FROM `tushare`.`astock_finance_dividend` where  div_proc="实施"','tushare')
         grouped=df.groupby("record_date")
         for date,group in grouped:
             group=group.drop_duplicates('ts_code',keep='last')
@@ -97,10 +97,12 @@ class market:
             'close':value[6],
             'volume':value[10],
             'stop':value[15],
-            'upLimit':value[17],
-            'downLimit':value[18],
+            'upLimit':float(value[16]),
+            'downLimit':float(value[17]),
             'name':value[12]
             }
+            
+ 
         
         #df_price[['high','low','open','close','volume','stop','upLimit','downLimit','name']]
         return price

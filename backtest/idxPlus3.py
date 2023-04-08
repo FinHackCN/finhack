@@ -13,7 +13,7 @@ import time
 import math
 from astock.indexHelper import indexHelper
 
-model_hash="4cc29a3522864b947bf5d31f8c44f84d"
+model_hash="2f7e300923464846f55f5f399f83ace4"
 n=12
 benchmark="000852.XSHG"
 
@@ -24,12 +24,12 @@ if len(sys.argv)>=3:
 if len(sys.argv)>=4:
     benchmark=sys.argv[3]
 
-
+hook=False
 
 
 def diff_bt(context,buy_str):
-  
-    instance_id="378dc88cddd0672a19190b0146f9a800"
+
+    instance_id="now"
     file="/data/code/finhack/data/logs/backtest/bt_%s.log" % instance_id
     if context.diff['content']=="":
       f=open(file, 'r') 
@@ -40,7 +40,7 @@ def diff_bt(context,buy_str):
       context.diff['n']=context.diff['n']+1
       if "无法" not in context.diff['content'][context.diff['n']+start] and "warn" not in context.diff['content'][context.diff['n']+start]:
         finhack_log=context.diff['content'][context.diff['n']+start].strip().split('[trade')[0]
-        rqalpha_log=buy_str.split('[trade')[0]+""+str(round(total_value,3))+" "
+        rqalpha_log=buy_str.split('[trade')[0]+""+str(round(total_value/10000,0))+" "
       else:
         continue
       
@@ -61,9 +61,9 @@ def diff_bt(context,buy_str):
 
 
 def on_settlement_handler(context,event):
-  
+  return
   now_date=context.now.strftime("%Y%m%d")
-  if now_date!="20180315":
+  if now_date<"20191213":
     return
 
   print(event)
@@ -84,9 +84,9 @@ def on_trade_handler(context,event):
     account = event.account
     
     code=order.order_book_id
-    print("after trade")
-    print(get_position(code, POSITION_DIRECTION.LONG).quantity)
-    print(get_position(code, POSITION_DIRECTION.LONG).market_value)   
+    # print("after trade")
+    # print(get_position(code, POSITION_DIRECTION.LONG).quantity)
+    # print(get_position(code, POSITION_DIRECTION.LONG).market_value)   
     
     code=code.replace('XSHG','SH') 
     code=code.replace('XSHE','SZ')
@@ -100,23 +100,23 @@ def on_trade_handler(context,event):
       side="卖出"
     buy_str="%s %s %s%s股，当前价格%s [trade-rqalpha]" %(now_date,code,side,vol,price)
     
-    print(trade)
-    print(order)
+    # print(trade)
+    # print(order)
     # print(account.cash)
     # print(account.management_fees)
     # print(account.position_equity)
     # print(account.market_value)
  
-    info={
-          "total_value":context.stock_account.total_value,
-          "position_equity":context.stock_account.position_equity,
-          "cash":context.stock_account.cash
+    # info={
+    #       "total_value":context.stock_account.total_value,
+    #       "position_equity":context.stock_account.position_equity,
+    #       "cash":context.stock_account.cash
           
-    }
-    print(info)  
+    # }
+    # print(info)  
     
-    if '000036' in code:
-      pass
+    # if '000971' in code and now_date=="20180426":
+    #   exit()
     #   print(get_position(code, POSITION_DIRECTION.LONG).quantity)
     #   print(get_position(code, POSITION_DIRECTION.LONG).market_value)     
     diff_bt(context,buy_str)
@@ -137,8 +137,9 @@ def init(context):
     
     context.n=n
     context.benchmark=benchmark
-    subscribe_event(EVENT.TRADE,on_trade_handler)
-    subscribe_event(EVENT.SETTLEMENT,on_settlement_handler)
+    if hook:
+      subscribe_event(EVENT.TRADE,on_trade_handler)
+      subscribe_event(EVENT.SETTLEMENT,on_settlement_handler)
  
     context.diff={
       "n":0,
@@ -165,15 +166,15 @@ def open_auction(context, bar_dict):
     now_date=context.now.strftime("%Y%m%d")
     
     n=0
-    if now_date=="20180316":
-        for pos in get_positions():
-          code=pos.order_book_id  
-          value=pos.market_value
-          amount=pos.quantity
-          n=n+value
-          print("%s,%s,%s" % (code,amount,value))
-        print("n=%s" % n)
-        print('-------------------')
+    # if now_date=="20180316":
+    #     for pos in get_positions():
+    #       code=pos.order_book_id  
+    #       value=pos.market_value
+    #       amount=pos.quantity
+    #       n=n+value
+    #       print("%s,%s,%s" % (code,amount,value))
+    #     print("n=%s" % n)
+    #     print('-------------------')
     
     
     
@@ -224,16 +225,23 @@ def open_auction(context, bar_dict):
         if target_pos_cash<100:
           continue
  
-        info={
-          "total_value":context.stock_account.total_value,
-          "position_equity":context.stock_account.position_equity,
-          "cash":context.stock_account.cash,
-          "code":code,
-          "quantity":get_position(code, POSITION_DIRECTION.LONG).quantity,
-          "market_value":get_position(code, POSITION_DIRECTION.LONG).market_value
-          
-        }
-        print(info) 
+ 
+ 
+        # info={
+        #   "total_value":context.stock_account.total_value,
+        #   "position_equity":context.stock_account.position_equity,
+        #   "cash":context.stock_account.cash,
+        #   "code":code,
+        #   "quantity":get_position(code, POSITION_DIRECTION.LONG).quantity,
+        #   "market_value":get_position(code, POSITION_DIRECTION.LONG).market_value,
+
+        #   "weight":weight,
+        #   "now_pos_cash":now_pos_cash,
+        #   "target_pos_cash":target_pos_cash,
+        #   "x_cash":now_pos_cash-target_pos_cash
+     
+        # }
+        # print(info) 
         
         #先减仓
         if now_pos_cash-target_pos_cash>0:
@@ -254,37 +262,43 @@ def open_auction(context, bar_dict):
           continue
         
         
-        info={
-          "total_value":context.stock_account.total_value,
-          "position_equity":context.stock_account.position_equity,
-          "code":code,
-          "cash":context.stock_account.cash,
-          "quantity":get_position(code, POSITION_DIRECTION.LONG).quantity,
-          "market_value":get_position(code, POSITION_DIRECTION.LONG).market_value
+        # info={
+        #   "total_value":context.stock_account.total_value,
+        #   "position_equity":context.stock_account.position_equity,
+        #   "code":code,
+        #   "cash":context.stock_account.cash,
+        #   "quantity":get_position(code, POSITION_DIRECTION.LONG).quantity,
+        #   "market_value":get_position(code, POSITION_DIRECTION.LONG).market_value
           
-        }
-        print(info)       
+        # }
+        # print(info)       
+
         
-        
-        if code in ['600239.XSHG']:
-          continue
+
         
         
         #后加仓
         if now_pos_cash-target_pos_cash<0:
-
-  
-          info={
-                "code":code,
-                "total_value":total_value,
-                "weight":weight,
-                "now_pos_cash":now_pos_cash,
-                "target_pos_cash":target_pos_cash,
-                "x_cash":now_pos_cash-target_pos_cash
-          }
-          print(info)          
-          
           order_value(code, target_pos_cash-now_pos_cash)
+  
+        
+          
+          #if True:  
+          # if '001914' in code :#and now_date=="20190506":
+          #   info={
+          #         "code":code,
+          #         "total_value":total_value,
+          #         "weight":weight,
+          #         "now_pos_cash":now_pos_cash,
+          #         "target_pos_cash":target_pos_cash,
+          #         "x_cash":now_pos_cash-target_pos_cash
+          #   }
+          #   print("------------------------------------------------")
+            
+          #   print(info)         
+          #   #input('按任意键继续') 
+          
+          
           
 
 

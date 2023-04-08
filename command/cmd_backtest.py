@@ -47,6 +47,7 @@ def start_bt(features_list,model_hash,loss,algorithm,init_cash,hold_day,hold_n,f
                         bt_instance=bt.run(
                             cash=init_cash,
                             start_date='20180101',
+                            end_date='20230401',
                             strategy_name=strategy,
                             data_path="lgb_model_"+model_hash+"_pred.pkl",
                             args=args,
@@ -94,7 +95,7 @@ while True:
                 #print(model_hash)
                 for init_cash in [10000000]:
                         for hold_day in  [10]:
-                                for hold_n in  [12,2,4,6,8,10]:
+                                for hold_n in  [2,4,6,8,10]:
                                         for strategy in ['IndexPlus3']:
                                                 for row in model_list.itertuples():
                                                         features_list=getattr(row,'features')
@@ -103,8 +104,8 @@ while True:
                                                         # if model_hash in tested_list:
                                                         #         print('model_hash in tested_list')
                                                         #         continue
-                                                        if model_hash !="4cc29a3522864b947bf5d31f8c44f84d":
-                                                                continue
+                                                        # if model_hash !="4cc29a3522864b947bf5d31f8c44f84d":
+                                                        #         continue
                                                         
                                                         
                                                         if not os.path.exists(PREDS_DIR+"lgb_model_"+model_hash+"_pred.pkl"):
@@ -118,10 +119,10 @@ while True:
                         
 
                                                         time.sleep(1)
-                                                        #mytask=pool.submit(start_bt,features_list,model_hash,loss,algorithm,init_cash,hold_day,hold_n,filters_name,strategy)
+                                                        mytask=pool.submit(start_bt,features_list,model_hash,loss,algorithm,init_cash,hold_day,hold_n,filters_name,strategy)
                                                                 
-                                                        start_bt(features_list,model_hash,loss,algorithm,init_cash,hold_day,hold_n,filters_name,strategy)
-                                                        exit()
+                                                        # start_bt(features_list,model_hash,loss,algorithm,init_cash,hold_day,hold_n,filters_name,strategy)
+                                                        # exit()
                                                                 #tasklist.append(mytask)
                                 #wait(tasklist, return_when=ALL_COMPLETED)
         time.sleep(60)
