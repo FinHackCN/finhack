@@ -184,7 +184,7 @@ class AStock:
             
             df_price=AStock.getTableDataByCode('astock_price_daily',code,where)
             df_price.drop_duplicates(subset='trade_date',keep='first',inplace=True)
-    
+            #df_price['ts_code']=code
             if(df_price.empty):
                 return df_price
 
@@ -200,6 +200,8 @@ class AStock:
             df_adj = pd.merge(calendar,df_adj, on='trade_date',how='left')
             df_adj = df_adj.fillna(method='ffill')
             df_adj=df_adj.drop('ts_code',axis=1)
+
+            
             
             
             df_name=AStock.getTableDataByCode('astock_namechange',code,datewhere.replace('trade_date','ann_date'))
@@ -219,84 +221,43 @@ class AStock:
 
             
             
-            if(df_adj.empty): 
-                    adj_factor=1
-                    df=df_price
-                    df["adj_factor"]=1
-            else:
-                if fq=='qfq':
-                    adj_factor=float(last_adj)
-                else:
-                    adj_factor=1
-                    
-                    
-                if fq=='no':#不赋权
-                    df=df_price
-                    df["adj_factor"]=1
-                    df["open"]=df["open"].astype(float)
-                    df["high"]=df["high"].astype(float)
-                    df["low"]=df["low"].astype(float)
-                    df["close"]=df["close"].astype(float)
-                    df["pre_close"]=df["pre_close"].astype(float)
-                    df["change"]=df["change"].astype(float)
-                    df["pct_chg"]=df["pct_chg"].astype(float)
-                    df["vol"]=df["vol"].astype(float)
-                    df['amount']=df['amount'].astype(float)
-                    df["vwap"]=(df['amount'].astype(float)*1000)/(df['vol'].astype(float)*100+1) 
-                    df["stop"]=pd.isna(df['close']).astype(int)
-                    df["lh_limit"]=pd.isna(df['high']==df['low']).astype(int)
-                    df.rename(columns={'vol':'volume','pct_chg':'returns'}, inplace = True)
-                else:
-                    df = pd.merge(df_price,df_adj,how = 'right',on=['trade_date'])
-                    df["open"]=df["open"].astype(float)*df["adj_factor"].astype(float)/adj_factor
-                    df["high"]=df["high"].astype(float)*df["adj_factor"].astype(float)/adj_factor
-                    df["low"]=df["low"].astype(float)*df["adj_factor"].astype(float)/adj_factor
-                    df["close"]=df["close"].astype(float)*df["adj_factor"].astype(float)/adj_factor
-                    df["pre_close"]=df["pre_close"].astype(float)*df["adj_factor"].astype(float)/adj_factor
-                    df["change"]=df["change"].astype(float)*df["adj_factor"].astype(float)/adj_factor
-                    df["pct_chg"]=df["pct_chg"].astype(float)
-                    df["vol"]=df["vol"].astype(float)
-                    df['amount']=df['amount'].astype(float)
-                    df["vwap"]=(df['amount'].astype(float)*1000)/(df['vol'].astype(float)*100+1) 
-                    df["stop"]=pd.isna(df['close']).astype(int)
-                    df["lh_limit"]=pd.isna(df['high']==df['low']).astype(int)
-                    df.rename(columns={'vol':'volume','pct_chg':'returns'}, inplace = True)
-
-
-
-
-
-            df['ts_code']=code
-            df.drop_duplicates('trade_date',inplace = True)
-            df=df.sort_values(by='trade_date', ascending=True)
-            df=df.fillna(method='ffill')
-            df=df.dropna(subset=['adj_factor'])
-    
-    
-            df['name']=df['name'].fillna(method='bfill')
-            df['name']=df['name'].fillna("")
-            
-            # if code[0:3]=='300' or code[0:3]=='688':
-            #     limit=0.20
-            #     df["upLimit"]=limit       
-            #     df["downLimit"]=limit                
-            # elif code[0:1]=='7' or code[0:1]=='8':
-            #     limit=0.30
-            #     df["upLimit"]=limit       
-            #     df["downLimit"]=limit                
-            # else:
-            #     limit=0.10
-            #     df["upLimit"]=limit       
-            #     df["downLimit"]=limit
-            #     df["upLimit"] =np.where(df.name.str.contains('ST'),0.05,limit)
-            #     df["downLimit"] =np.where(df.name.str.contains('ST'),0.05,limit)
-                
+               
+            df_updown=AStock.getTableDataByCode('astock_price_stk_limit',code,'')
             
             
+            if df_updown.empty or df_price.empty:
+                return pd.DataFrame()
+            df_price = pd.merge(df_price,df_updown, on='trade_date',how='left')
+            
+            df_price.rename(columns={'ts_code_x':'ts_code'}, inplace = True)
+
+
+            df_price['name']=df_price['name'].fillna(method='bfill')
+            df_price['name']=df_price['name'].fillna("")
+
+
+            df=df_price
+            df["adj_factor"]=1
+            df["open"]=df["open"].astype(float)
+            df["high"]=df["high"].astype(float)
+            df["low"]=df["low"].astype(float)
+            df["close"]=df["close"].astype(float)
+            df["pre_close"]=df["pre_close"].astype(float)
+            df["change"]=df["change"].astype(float)
+            df["pct_chg"]=df["pct_chg"].astype(float)
+            df["vol"]=df["vol"].astype(float)
+            df['amount']=df['amount'].astype(float)
+            df["vwap"]=(df['amount'].astype(float)*1000)/(df['vol'].astype(float)*100+1) 
+            df["stop"]=pd.isna(df['close']).astype(int)
+            #df["lh_limit"]=pd.isna(df['high']==df['low']).astype(int)
+            df.rename(columns={'vol':'volume','pct_chg':'returns'}, inplace = True)
+
+
             df["upLimit"]=df['close'].shift(1)
             df["downLimit"]=df['close'].shift(1)
             
             def updown(x,t="up"):
+                
                 if x.ts_code[0:3]=='300':
                     limit=0.20
                     if x.trade_date<"2020824":
@@ -310,21 +271,74 @@ class AStock:
                     if "ST" in x['name'] or "st" in x['name']:
                         limit=0.05
                      
+                     
                 if t=="up":
-                    return round(x.upLimit*(1+limit),2)
+                    if pd.isnull(x.up_limit)  and not pd.isnull(x.upLimit):
+                        return round(x.upLimit*(1+limit),2)
+                    else:
+                        return x.up_limit
                 else:
-                    return round(x.downLimit*(1-limit),2)
+                    if pd.isnull(x.down_limit) and not pd.isnull(x.downLimit) :
+                        return round(x.downLimit*(1-limit),2)
+                    else:
+                        return x.down_limit
             
+            
+            # df_price.at[0,'upLimit']=9999
+            # df_price.at[0,'downLimit']=0
+ 
+ 
+
+ 
             df["upLimit"]= df.apply(lambda x:updown(x,"up") , axis=1)
             df["downLimit"]= df.apply(lambda x:updown(x,"down") , axis=1)
             
-            
-            
-            # df["upLimit"]=round(df['close'].shift(1)*(1+df["upLimit"]),2)
-            # df["downLimit"]=round(df['close'].shift(1)*(1-df["downLimit"]),2)
-            
+                    
+
+
+             
+            if(df_adj.empty): 
+                    adj_factor=1
+                    df=df_price
+                    df["adj_factor"]=1
+            else:
+                if fq=='qfq':
+                    adj_factor=float(last_adj)
+                else:
+                    adj_factor=1
+                    
+                    
+                if fq=='no':#不赋权
+                    pass
+                else:
+                    df=df.drop("adj_factor",axis=1)
+                    df = pd.merge(df,df_adj,how = 'right',on=['trade_date'])
+ 
+                    
+                    df["open"]=df["open"].astype(float)*df["adj_factor"].astype(float)/adj_factor
+                    df["high"]=df["high"].astype(float)*df["adj_factor"].astype(float)/adj_factor
+                    df["low"]=df["low"].astype(float)*df["adj_factor"].astype(float)/adj_factor
+                    df["close"]=df["close"].astype(float)*df["adj_factor"].astype(float)/adj_factor
+                    df["pre_close"]=df["pre_close"].astype(float)*df["adj_factor"].astype(float)/adj_factor
+                    df["change"]=df["change"].astype(float)*df["adj_factor"].astype(float)/adj_factor
+                    df["vwap"]=(df['amount'].astype(float)*1000)/(df['volume'].astype(float)*100+1) 
+                    df["stop"]=pd.isna(df['close']).astype(int)
+                    df["upLimit"]=df["upLimit"].astype(float)*df["adj_factor"].astype(float)/adj_factor
+                    df["downLimit"]=df["downLimit"].astype(float)*df["adj_factor"].astype(float)/adj_factor
+                    
+            df=df.drop('ts_code_y', axis=1)
+            df=df.drop(labels='up_limit', axis=1)
+            df=df.drop(labels='down_limit', axis=1)
+
+            df.drop_duplicates('trade_date',inplace = True)
+            df=df.sort_values(by='trade_date', ascending=True)
+            df=df.fillna(method='ffill')
+            df=df.dropna(subset=['adj_factor'])
             del df_adj
             del calendar
+         
+         
+            #print(df.columns)
          
             df.to_pickle(cache_path )
             return df

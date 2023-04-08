@@ -15,19 +15,73 @@ from library.backtest import bt
 from library.market import market
 
 
-#market.load_dividend()
-
-df=AStock.getStockDailyPriceByCode('300476.SZ',fq='no')
-print(df[df.trade_date=='20180316'])
 
 
-# x=market.get_price("600803.SH",'20180212')
-# print(x)
+
+
+
+def traverse_datasets(hdf_file):
+    print("---"+hdf_file)
+    import h5py
+ 
+    def h5py_dataset_iterator(g, prefix=''):
+        for key in g.keys():
+            item = g[key]
+            path = '{}/{}'.format(prefix, key)
+            if isinstance(item, h5py.Dataset): # test for dataset
+                yield (path, item)
+            elif isinstance(item, h5py.Group): # test for group (go down)
+                yield from h5py_dataset_iterator(item, path)
+ 
+    with h5py.File(hdf_file, 'r') as f:
+        for (path, dset) in h5py_dataset_iterator(f):
+            #print(path, dset)
+            print(path)
+            dataset = f[path][:]
+            df = pd.DataFrame(dataset)
+            print(df)
+            if not df.empty:
+                return
+ 
+    return None
+ 
+# 传入路径即可
+
+h5list=['stocks.h5','indexes.h5','futures.h5','st_stock_days.h5','funds.h5','dividends.h5','ex_cum_factor.h5','suspended_days.h5'
+,'split_factor.h5']
+for file in h5list:
+    traverse_datasets('/root/.rqalpha/bundle/'+file)
+# traverse_datasets('/root/.rqalpha/bundle/split_factor.h5')
+# traverse_datasets('/root/.rqalpha/bundle/yield_curve.h5')
+# traverse_datasets('/root/.rqalpha/bundle/suspended_days.h5')
+
+
+
 exit()
+
+
+
+
+market.load_dividend()
 exit()
 
+# df=AStock.getStockDailyPriceByCode('600354.SH',fq='no')
+# print(df[df.trade_date=='20180326'])
 
-# df_price=market.load_price()
+
+# df=AStock.getStockDailyPriceByCode('600354.SH',fq='qfq')
+# print(df[df.trade_date=='20180326'])
+
+# df=AStock.getStockDailyPriceByCode('600354.SH',fq='hfq')
+# print(df[df.trade_date=='20180326'])
+
+# # x=market.get_price("600803.SH",'20180212')
+# # print(x)
+# exit()
+# exit()
+
+
+df_price=market.load_price()
  
 # x=market.get_price("000043.SZ",'20180102')
 # print(x)

@@ -81,6 +81,12 @@ class strategy():
         i=0
         for code,postion in instance['positions'].copy().items():
              #不在指数中
+             
+            # if code=="300157.SZ" and now_date=="20200102":
+            #     print(postion['amount'])
+            #     exit()
+                          
+             
             if code not in idx_weight.index.values:
                 bt.sell(instance=instance,ts_code=code,amount=postion['amount'],time='open')
             elif code in del_list:
@@ -88,8 +94,7 @@ class strategy():
             else:
                 weight=idx_weight.loc[code]['weight']  
                 
-                        
-         
+  
                         
                         
         for idx,row in idx_weight.iterrows():
@@ -112,13 +117,19 @@ class strategy():
             x_cash=target_pos_cash-now_pos_cash
      
      
-            # print(weight)
-            # print(total_value)
-            # print(x_cash)
-            # print(now_pos_cash)
-            # print(target_pos_cash)
-            # if code=="000059.SZ" and now_pos_cash>0:
-            #     exit()            
+
+            
+            # if code=="300378.SZ" and now_date=="20200708":
+            #     info={
+            #         "code":code,
+            #         "total_value":total_value,
+            #         "weight":weight,
+            #         "now_pos_cash":now_pos_cash,
+            #         "target_pos_cash":target_pos_cash,
+            #         "x_cash":x_cash
+            #     }
+            #     print(info)
+            #     input('按任意键继续')           
             
             if x_cash<0:
                 bt.sell(instance=instance,ts_code=code,price=-x_cash,time='open')
@@ -145,26 +156,24 @@ class strategy():
             x_cash=target_pos_cash-now_pos_cash
             
             
-            if code in ['600239.SH']:
-                continue
+            # if code in ['600239.SH']:
+            #     continue
             
             if x_cash>0:
                 bt.buy(instance=instance,ts_code=code,price=x_cash,time='open')
                 
                 
-            info={
-                "code":code,
-                "amount":amount,
-                "total_value":total_value,
-                "weight":weight,
-                "now_pos_cash":now_pos_cash,
-                "target_pos_cash":target_pos_cash,
-                "x_cash":x_cash
-            }
-            print(info)
-
-            # if code=="300378.SZ" and now_date=="20180208":
-            #     exit()                    
+            # info={
+            #     "code":code,
+            #     "amount":amount,
+            #     "total_value":total_value,
+            #     "weight":weight,
+            #     "now_pos_cash":now_pos_cash,
+            #     "target_pos_cash":target_pos_cash,
+            #     "x_cash":x_cash
+            # }
+            # print(info)
+ 
                 
         #instance['data'].drop(index=now_date)
         #print(instance['data'])
