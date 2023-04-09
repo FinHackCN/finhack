@@ -95,8 +95,8 @@ while True:
                 #print(model_hash)
                 for init_cash in [10000000]:
                         for hold_day in  [10]:
-                                for hold_n in  [2,4,6,8,10]:
-                                        for strategy in ['IndexPlus3']:
+                                for hold_n in  [12,2,4,6,8,10]:
+                                        for strategy in ['IndexPlus2']:
                                                 for row in model_list.itertuples():
                                                         features_list=getattr(row,'features')
                                                         model_hash=getattr(row,'hash')

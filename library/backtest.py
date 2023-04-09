@@ -16,6 +16,7 @@ import multiprocessing
 import redis
 from library.config import config
 import json
+import memcache
 
 class bt:
     # def load_price(cache=True):
@@ -114,10 +115,14 @@ class bt:
         #     df_price=bt.load_price()
         # bt_instance['df_price']=df_price
         
+
         cfg=config.getConfig('db','redis')
         redisPool = redis.ConnectionPool(host=cfg['host'],port=int(cfg['port']),password=cfg['password'],db=int(cfg['db']))
-        client = redis.Redis(connection_pool=redisPool)      
-        bt_instance['client']=client
+        client = redis.Redis(connection_pool=redisPool)   
+        # if True:
+        #     cfg=config.getConfig('db','memcached')
+        #     client=memcache.Client([cfg['host']+':'+cfg['port']], debug=0)
+        bt_instance['cache']=client
         
 
         #bt.log(instance=bt_instance,msg="行情数据读取完毕！",type='info')
@@ -254,7 +259,7 @@ class bt:
         
         #print("%s,%s,%s"% (now_date,ts_code,price))
         
-        now_price=market.get_price(ts_code,now_date,instance['client'])
+        now_price=market.get_price(ts_code,now_date,instance['cache'])
         
         if now_price!=None and "退" in now_price['name']: 
             bt.log(instance=instance,ts_code=ts_code,msg="即将退市，不买入！",type='warn')
@@ -370,7 +375,12 @@ class bt:
         
 
         if ts_code in instance['positions'].keys():
-            last_price=instance['positions'][ts_code]['last_close']*amount
+            try:
+                last_price=instance['positions'][ts_code]['last_close']*amount
+            except Exception as e:
+                print(ts_code)
+                print(now_date)
+                print(instance['positions'][ts_code])
         else:
             last_price=value*amount
         
@@ -388,7 +398,8 @@ class bt:
                 instance['positions'][ts_code]={
                     "amount":amount,
                     "avg_price":value+fees/amount,
-                    "total_value":price+fees
+                    "total_value":price+fees,
+                    "last_close":value
                 }
             else:
                 #if instance['positions'][ts_code]['amount']==0:
@@ -423,7 +434,7 @@ class bt:
        
 
         
-        now_price=market.get_price(ts_code,now_date,instance['client'])
+        now_price=market.get_price(ts_code,now_date,instance['cache'])
         if now_price==None:
             bt.log(instance=instance,ts_code=ts_code,msg="无法获取价格！",type='warn')
             return False               
@@ -589,7 +600,7 @@ class bt:
         #instance['position_value']=positions_value
         #instance['total_value']=instance['cash']+instance['position_value']
         
-            now_price=market.get_price(ts_code,now_date,instance['client'])
+            now_price=market.get_price(ts_code,now_date,instance['cache'])
             if now_price!=None and "退" in now_price['name']: 
                 sell_list.append(ts_code)
                 # print(now_price)
@@ -614,7 +625,7 @@ class bt:
         
         
         key="dividend_"+now_date
-        div_info=instance['client'].get(key)
+        div_info=instance['cache'].get(key)
         if div_info==None:
             df_div=pd.DataFrame()
         else:
@@ -685,7 +696,7 @@ class bt:
                     
             
             try:
-                now_price=market.get_price(ts_code,now_date,instance['client'])
+                now_price=market.get_price(ts_code,now_date,instance['cache'])
                 value=now_price['close']
             except Exception as e:
                 value=0
