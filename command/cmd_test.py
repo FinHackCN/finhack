@@ -17,7 +17,14 @@ from library.market import market
 
 
 
+df_price=market.load_dividend()
+x=market.get_price("000043.SZ",'20180102')
+print(x)
+x=market.get_price("600803.SH",'20180212')
 
+print(x)
+
+exit()
 
 
 def traverse_datasets(hdf_file):

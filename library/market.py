@@ -15,6 +15,7 @@ from library.globalvar import *
 import multiprocessing
 import redis
 import json
+import memcache
 
 class market:
     
@@ -23,6 +24,10 @@ class market:
         cfg=config.getConfig('db','redis')
         redisPool = redis.ConnectionPool(host=cfg['host'],port=int(cfg['port']),password=cfg['password'],db=int(cfg['db']))
         client = redis.Redis(connection_pool=redisPool)           
+
+        # cfg=config.getConfig('db','memcached')
+        # client=memcache.Client([cfg['host']+':'+cfg['port']], debug=0)  
+
         df=mydb.selectToDf('SELECT ts_code,record_date,ex_date,pay_date,stk_div,cash_div_tax FROM `tushare`.`astock_finance_dividend` where  div_proc="实施"','tushare')
         grouped=df.groupby("record_date")
         for date,group in grouped:
@@ -40,6 +45,10 @@ class market:
         cfg=config.getConfig('db','redis')
         redisPool = redis.ConnectionPool(host=cfg['host'],port=int(cfg['port']),password=cfg['password'],db=int(cfg['db']))
         client = redis.Redis(connection_pool=redisPool)        
+        
+        # cfg=config.getConfig('db','memcached')
+        # client=memcache.Client([cfg['host']+':'+cfg['port']], debug=0)        
+        
         
         cache_path=PRICE_CACHE_DIR+"/bt_price"
         df_price=None
@@ -79,6 +88,10 @@ class market:
             cfg=config.getConfig('db','redis')
             redisPool = redis.ConnectionPool(host=cfg['host'],port=int(cfg['port']),password=cfg['password'],db=int(cfg['db']))
             client = redis.Redis(connection_pool=redisPool)   
+
+        # cfg=config.getConfig('db','memcached')
+        # client=memcache.Client([cfg['host']+':'+cfg['port']], debug=0)  
+
         key='market_no_'+trade_date+'_'+ts_code
         value=client.get(key)
         
