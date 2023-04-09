@@ -39,8 +39,8 @@ export default {
   },
   methods: {
     handleShowDetail(vc){
-      const instance_id=vc.row.instance_id;
-      this.$router.push({path:'/backtest/show',query: {instance_id:instance_id}});
+      const id=vc.row.id;
+      this.$router.push({path:'/backtest/show',query: {id:id}});
     },
     getCrudOptions () {
       return crudOptions(this)

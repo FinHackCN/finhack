@@ -1,24 +1,47 @@
 <template>
-  <d2-container :class="{ 'page-compact': crud.pageOptions.compact }">
-    <template slot="header">测试页面1</template>
-    
+  <d2-container>
+    <template slot="header">回测详情</template>
+    <template>
+      
+    <div>
+    <el-row :gutter="20">
+      <el-col :span="6">
+        <div>
+          <el-statistic title="夏普比率">
+            <template slot="formatter"> {{ sharpe }} </template>
+          </el-statistic>
+        </div>
+      </el-col>
+      <el-col :span="6">
+
+      </el-col>
+    </el-row>
+  </div>   
+      
+    </template>
   </d2-container>
 </template>
 
 <script>
 import * as api from './api'
-import { crudOptions } from './crud'
-import { d2CrudPlus } from 'd2-crud-plus'
 export default {
   name: 'page1',
-  mixins: [d2CrudPlus.crud],
   data () {
-    return {}
+    return {
+      sharpe:0
+    }
   },
   methods: {
-    pageRequest (query) {
-      return api.GetList(query)
-    }
+
+  },
+  mounted() {
+    api.GetDetail(this.$route.query.id).then((res)=>{
+      const bt=res.data
+      this.sharpe=bt.sharpe
+
+    })
+    
+
   }
 }
 </script>

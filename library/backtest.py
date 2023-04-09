@@ -92,6 +92,7 @@ class bt:
             "init_cash":cash,
             "position_value":0,
             "total_value":cash,
+            "old_value":cash,
             "trade_num":0,
             "win":0,
             "type":type
@@ -617,7 +618,7 @@ class bt:
     #收盘后进行更新
     def after_market(instance):
         now_date=instance['now_date']
-        old_value=instance['total_value']
+        old_value=instance['old_value']
         positions_value=0
         
         # if instance['positions']=={}:
@@ -720,6 +721,7 @@ class bt:
         
         instance['position_value']=positions_value
         instance['total_value']=instance['cash']+positions_value
+        instance['old_value']=instance['cash']+positions_value
         
         instance['returns'].append([now_date,instance['total_value']/old_value])
 
