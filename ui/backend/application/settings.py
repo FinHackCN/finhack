@@ -58,6 +58,7 @@ INSTALLED_APPS = [
     "drf_yasg",
     "captcha",
     'channels',
+    'finhack'
 ]
 
 MIDDLEWARE = [
@@ -105,10 +106,27 @@ DATABASES = {
         "PASSWORD": DATABASE_PASSWORD,
         "HOST": DATABASE_HOST,
         "PORT": DATABASE_PORT,
-    }
+    },
+    "finhack": {
+        "ENGINE": FINHACK_DATABASE_ENGINE,
+        "NAME": FINHACK_DATABASE_NAME,
+        "USER": FINHACK_DATABASE_USER,
+        "PASSWORD": FINHACK_DATABASE_PASSWORD,
+        "HOST": FINHACK_DATABASE_HOST,
+        "PORT": FINHACK_DATABASE_PORT,
+    }    
+    
 }
 AUTH_USER_MODEL = "system.Users"
 USERNAME_FIELD = "username"
+
+
+DATABASE_ROUTERS = ['application.database_router.DatabaseAppsRouter']
+DATABASE_APPS_MAPPING = {
+    'dvadmin': 'default',
+    'finhack': 'finhack'
+}
+
 
 # Password validation
 # https://docs.djangoproject.com/en/3.2/ref/settings/#auth-password-validators

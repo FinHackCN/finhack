@@ -27,3 +27,4 @@ research/.ipynb_checkpoints/
 *.log
 /datalogs/
 logs/
+ui/backend/conf/env.py

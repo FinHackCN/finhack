@@ -6,8 +6,8 @@
 
       </el-avatar>
       <div class="title">
-        <h1>早安, DVAdmin, 开始您一天的工作吧！</h1>
-        <span> 今日晴，20℃ - 32℃！ </span>
+        <h1>早安, 量化人, 开始您一天的工作吧！</h1>
+        <span> ---- </span>
       </div>
     </div>
 
