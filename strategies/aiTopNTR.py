@@ -24,8 +24,9 @@ class strategy():
         
         for date in instance['date_range']:
             instance['now_date']=date
+            bt.before_market(instance)
             strategy.every_bar(instance)
-            bt.update(instance)
+            bt.after_market(instance)
             instance['g']['n']=instance['g']['n']+1
             if instance['g']['n']>=hold_day:
                 instance['g']['n']=0

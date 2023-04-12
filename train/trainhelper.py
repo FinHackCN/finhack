@@ -13,7 +13,16 @@ from strategies.filters import filters
 from library.globalvar import *
 
 class trainhelper:
-    def getTrainData(start_date='20000101',valid_date="20080101",end_date='20100101',features=[],label='abs',shift=10,filter_name=''):
+    def getLGBTrainData(start_date='20100101',valid_date="20180101",end_date='20200101',features=[],label='abs',shift=10,filter_name=''):
+        x_train,y_train,x_valid,y_valid,df_pred,data_path=trainhelper.getTrainData(start_date,valid_date,end_date,features,label,shift,filter_name)
+        data_train = lgb.Dataset(x_train, y_train)
+        data_valid = lgb.Dataset(x_valid, y_valid)  
+
+        return data_train,data_valid,df_pred,data_path        
+        
+        
+        
+    def getTrainData(start_date='20000101',valid_date="20080101",end_date='20100101',features=[],label='abs',shift=10,filter_name='',dropna=False):
             data_path=DATA_DIR
             df=factorManager.getFactors(factor_list=features+['open','close'])
             df.reset_index(inplace=True)
@@ -45,13 +54,31 @@ class trainhelper:
     
             df_pred=df[df.trade_date>=end_date]
             
-            df_train=df_train.drop('trade_date', axis=1)   
-            df_valid=df_valid.drop('trade_date', axis=1)  
+            if dropna:
+                df_train=df_train.replace([np.inf, -np.inf], np.nan).dropna(axis=0)
+                df_valid=df_train.replace([np.inf, -np.inf], np.nan).dropna(axis=0)
             
-            df_train=df_train.drop('ts_code', axis=1)   
-            df_valid=df_valid.drop('ts_code', axis=1)  
+            # df_train=df_train.drop('ts_code', axis=1)   
+            # df_valid=df_valid.drop('ts_code', axis=1)  
+            
+            print(df_valid)
+            print('111111')
+            
+            print(df_valid.columns)
+            columns = features
+            g = df_valid.groupby('trade_date')[columns]
+            df_valid[columns] = (df_valid[columns] - g.transform('min')) / (g.transform('max') - g.transform('min'))
+
+
+            #exit()            
             
             
+            df_train=df_train.set_index(["trade_date","ts_code"])
+            df_valid=df_valid.set_index(["trade_date","ts_code"])
+            df_pred=df_pred.set_index(["trade_date","ts_code"])
+            
+
+
             y_train=df_train['label']
             x_train=df_train.drop('label', axis=1)
             x_train=x_train.drop('close', axis=1)
@@ -60,10 +87,5 @@ class trainhelper:
             x_valid=df_valid.drop('label', axis=1)  
             x_valid=x_valid.drop('close', axis=1)  
             x_valid=x_valid.drop('open', axis=1) 
-            data_train = lgb.Dataset(x_train, y_train)
-            data_valid = lgb.Dataset(x_valid, y_valid)  
-            
-            # print(df.columns)
-            # print(features)
-            
-            return data_train,data_valid,df_pred,data_path
+
+            return x_train,y_train,x_valid,y_valid,df_pred,data_path  

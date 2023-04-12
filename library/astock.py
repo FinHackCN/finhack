@@ -195,13 +195,21 @@ class AStock:
             calendar=calendar[calendar.trade_date<=last_date]  
         
             df_adj = AStock.getTableDataByCode('astock_price_adj_factor',code,'')
+            
+            # print(111)
+            # print(df_adj)
+                       
+            
+            
             last_adj=df_adj.tail(1).adj_factor
             
             df_adj = pd.merge(calendar,df_adj, on='trade_date',how='left')
+            
+
             df_adj = df_adj.fillna(method='ffill')
             df_adj=df_adj.drop('ts_code',axis=1)
 
-            
+            # print(df_adj)
             
             
             df_name=AStock.getTableDataByCode('astock_namechange',code,datewhere.replace('trade_date','ann_date'))
@@ -314,6 +322,7 @@ class AStock:
                     df=df.drop("adj_factor",axis=1)
                     df = pd.merge(df,df_adj,how = 'right',on=['trade_date'])
  
+                    print(df["adj_factor"])
                     
                     df["open"]=df["open"].astype(float)*df["adj_factor"].astype(float)/adj_factor
                     df["high"]=df["high"].astype(float)*df["adj_factor"].astype(float)/adj_factor
