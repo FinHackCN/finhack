@@ -200,8 +200,8 @@ class AStock:
             # print(df_adj)
                        
             
-            
-            last_adj=df_adj.tail(1).adj_factor
+            first_adj=float(df_adj.head(1).adj_factor)
+            last_adj=float(df_adj.tail(1).adj_factor)
             
             df_adj = pd.merge(calendar,df_adj, on='trade_date',how='left')
             
@@ -306,43 +306,62 @@ class AStock:
 
              
             if(df_adj.empty): 
-                    adj_factor=1
                     df=df_price
                     df["adj_factor"]=1
             else:
-                if fq=='qfq':
-                    adj_factor=float(last_adj)
-                else:
-                    adj_factor=1
-                    
-                    
-                if fq=='no':#不赋权
-                    pass
-                else:
                     df=df.drop("adj_factor",axis=1)
-                    df = pd.merge(df,df_adj,how = 'right',on=['trade_date'])
- 
-                    print(df["adj_factor"])
+                    df = pd.merge(df,df_adj,how = 'right',on=['trade_date'])     
+                    if fq=="no":
+                        df["open"]=df["open"].astype(float)
+                        df["high"]=df["high"].astype(float)
+                        df["low"]=df["low"].astype(float)
+                        df["close"]=df["close"].astype(float)
+                        df["pre_close"]=df["pre_close"].astype(float)
+                        
+                        df["upLimit"]=df["upLimit"].astype(float)
+                        df["downLimit"]=df["downLimit"].astype(float)
+                        
+                    elif fq=="qfq":
+                        #前复权价格 = close * adj_factor / last_adj
+
+                        df["open"]=df["open"].astype(float)*df["adj_factor"].astype(float)/last_adj
+                        df["high"]=df["high"].astype(float)*df["adj_factor"].astype(float)/last_adj
+                        df["low"]=df["low"].astype(float)*df["adj_factor"].astype(float)/last_adj
+                        df["close"]=df["close"].astype(float)*df["adj_factor"].astype(float)/last_adj
+                        df["pre_close"]=df["pre_close"].astype(float)*df["adj_factor"].astype(float)/last_adj
+                        
+                        df["upLimit"]=df["upLimit"].astype(float)*df["adj_factor"].astype(float)/last_adj
+                        df["downLimit"]=df["downLimit"].astype(float)*df["adj_factor"].astype(float)/last_adj
+                        
+    
+                    else:
+                        #后复权价格 = close × (first_adj × adj_factor / last_adj)
+    
+                        df["open"]=df["open"].astype(float)*df["adj_factor"].astype(float)/first_adj
+                        df["high"]=df["high"].astype(float)*df["adj_factor"].astype(float)/first_adj
+                        df["low"]=df["low"].astype(float)*df["adj_factor"].astype(float)/first_adj
+                        df["close"]=df["close"].astype(float)*df["adj_factor"].astype(float)/first_adj
+                        df["pre_close"]=df["pre_close"].astype(float)*df["adj_factor"].astype(float)/first_adj
+                        
+                        df["upLimit"]=df["upLimit"].astype(float)*df["adj_factor"].astype(float)/first_adj
+                        df["downLimit"]=df["downLimit"].astype(float)*df["adj_factor"].astype(float)/first_adj
                     
-                    df["open"]=df["open"].astype(float)*df["adj_factor"].astype(float)/adj_factor
-                    df["high"]=df["high"].astype(float)*df["adj_factor"].astype(float)/adj_factor
-                    df["low"]=df["low"].astype(float)*df["adj_factor"].astype(float)/adj_factor
-                    df["close"]=df["close"].astype(float)*df["adj_factor"].astype(float)/adj_factor
-                    df["pre_close"]=df["pre_close"].astype(float)*df["adj_factor"].astype(float)/adj_factor
-                    df["change"]=df["change"].astype(float)*df["adj_factor"].astype(float)/adj_factor
-                    df["vwap"]=(df['amount'].astype(float)*1000)/(df['volume'].astype(float)*100+1) 
-                    df["stop"]=pd.isna(df['close']).astype(int)
-                    df["upLimit"]=df["upLimit"].astype(float)*df["adj_factor"].astype(float)/adj_factor
-                    df["downLimit"]=df["downLimit"].astype(float)*df["adj_factor"].astype(float)/adj_factor
+                    
+            df["change"]=df["change"].astype(float)
+            df["vwap"]=(df['amount'].astype(float)*1000)/(df['volume'].astype(float)*100+1) 
+            df["stop"]=pd.isna(df['close']).astype(int)
+
                     
             df=df.drop('ts_code_y', axis=1)
             df=df.drop(labels='up_limit', axis=1)
             df=df.drop(labels='down_limit', axis=1)
 
+
+            df=df.fillna(method='ffill')
+            df=df.dropna(subset=['adj_factor','ts_code'])
             df.drop_duplicates('trade_date',inplace = True)
             df=df.sort_values(by='trade_date', ascending=True)
-            df=df.fillna(method='ffill')
-            df=df.dropna(subset=['adj_factor'])
+            df=df.reset_index(drop=True)
             del df_adj
             del calendar
          
