@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor,ProcessPoolExecutor, wait, ALL
 
 
 class factorManager:
-    
+    #获取
     def getAnalysedIndicatorsList(valid=True):
         flist=mydb.selectToDf('select * from factors_analysis where factor_name not like "alpha%"','finhack')
         flist=flist['factor_name'].tolist()
@@ -90,6 +90,8 @@ class factorManager:
             factor=factor.replace('$','')
             if os.path.isfile(SINGLE_FACTORS_DIR+factor+'.csv'):
                 df=pd.read_csv(SINGLE_FACTORS_DIR+factor+'.csv',names=['ts_code','trade_date',factor], dtype={'ts_code': str,'trade_date': str, factor: np.float64},low_memory=False)
+                df=df.dropna(subset=['ts_code','trade_date'])
+                #df=df.dropna()
                 #df=df.set_index(['ts_code','trade_date'])
                 
                 df=df.sort_values(['ts_code','trade_date'])
@@ -130,6 +132,8 @@ class factorManager:
         df_factor=df_factor.set_index(['ts_code','trade_date'])  
         if cache:
             df_factor.to_pickle(cache_file)
+            
+ 
         return df_factor    
     
     

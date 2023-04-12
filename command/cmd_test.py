@@ -14,8 +14,22 @@ from astock.indexHelper import indexHelper
 from library.backtest import bt
 from library.market import market
 
+from train.nntrain import nntrain
 
 
+
+# df=AStock.getStockDailyPriceByCode('600611.SH',fq='hfq',cache=False)
+# print(df)
+
+# exit()
+nntrain.run(features=['alphaA_005','alphaA_016','alphaA_021'])
+
+
+#nntrain.run(features=['ADOSC_14_0','HTTRENDMODE_0','MFI_14_0','MOM_0','ROCR_0','ROC_14_0','alphaA_002','alphaA_005','alphaA_016','alphaA_021','alphaA_026','alphaA_027','pb_0','ps_0'])
+
+
+
+exit()
 
 df_price=market.load_dividend()
 x=market.get_price("000043.SZ",'20180102')

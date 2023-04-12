@@ -17,13 +17,6 @@ from library.globalvar import *
 class lgbtrain:
     def score_mv(x,shift,md5):
         pass
-
-        
-        
-
-
-
-        
         
     def run(start_date='20000101',valid_date="20080101",end_date='20100101',features=[],label='abs',shift=10,param={},loss='ds',filter_name='',replace=False):
         print("start log_train:loss=%s" % (loss))
@@ -40,7 +33,7 @@ class lgbtrain:
                 if replace==False:
                     return md5
                     
-            data_train,data_valid,df_pred,data_path=trainhelper.getTrainData(start_date=start_date,valid_date=valid_date,end_date=end_date,features=features,label=label,shift=shift,filter_name='')
+            data_train,data_valid,df_pred,data_path=trainhelper.getLGBTrainData(start_date=start_date,valid_date=valid_date,end_date=end_date,features=features,label=label,shift=shift,filter_name='')
 
       
             

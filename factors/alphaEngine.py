@@ -491,7 +491,7 @@ def save_lastdate(res,name):
     return res
 
 class alphaEngine():
-    def calc(formula='',df=pd.DataFrame(),name="alpha",check=False):
+    def calc(formula='',df=pd.DataFrame(),name="alpha",check=False,replace=False):
         # print(formula)
         try:
             #根据 $符号匹配列名
