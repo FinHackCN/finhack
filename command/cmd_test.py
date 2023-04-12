@@ -22,10 +22,10 @@ from train.nntrain import nntrain
 # print(df)
 
 # exit()
-nntrain.run(features=['alphaA_005','alphaA_016','alphaA_021'])
+#nntrain.run(features=['alphaA_005','alphaA_016','alphaA_021'])
 
-
-#nntrain.run(features=['ADOSC_14_0','HTTRENDMODE_0','MFI_14_0','MOM_0','ROCR_0','ROC_14_0','alphaA_002','alphaA_005','alphaA_016','alphaA_021','alphaA_026','alphaA_027','pb_0','ps_0'])
+#'CMO_0','ROCR100_14_0','T3_14_0','TRIX_0','alpha101_026','alpha101_030','alpha101_032','alpha101_040','alpha101_041','alpha191_036','alpha191_057','alpha191_071','alpha191_109','alpha191_158','alphaA_002','alphaA_005','alphaA_015','alphaA_021','alphaA_030','dvRatio_0'
+nntrain.run(features=['CMO_0','ROCR100_14_0','T3_14_0','TRIX_0','alpha101_026','alpha101_030','alpha101_032','alpha101_040','alpha101_041','alpha191_036','alpha191_057','alpha191_071','alpha191_109','alpha191_158'])
 
 
 

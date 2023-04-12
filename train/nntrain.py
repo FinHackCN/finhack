@@ -505,10 +505,7 @@ class ICLoss(nn.Module):
 
         diff_point.append(None)
         # The lengths of diff_point will be one more larger then diff_point
-
-
-        print(pred)
-        print(y)
+ 
 
         ic_all = 0.0
         skip_n = 0

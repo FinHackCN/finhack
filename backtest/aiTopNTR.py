@@ -231,8 +231,8 @@ def open_auction(context, bar_dict):
 
 config = {
   "base": {
-    "start_date": "2020-02-04",
-    "end_date": "2023-03-21",
+    "start_date": "2010-01-05",
+    "end_date": "2023-03-22",
     "accounts": {
       "stock": 20000
     }
