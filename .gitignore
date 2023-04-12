@@ -13,7 +13,7 @@ data/logs/*.log
 data/models/*
 data/running/*
 data/preds/*
-
+research/notebook/*
 __pycache__/
 *.log
 *.swp
