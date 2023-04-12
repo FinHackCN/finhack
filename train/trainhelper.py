@@ -13,7 +13,7 @@ from strategies.filters import filters
 from library.globalvar import *
 
 class trainhelper:
-    def getLGBTrainData(start_date='20100101',valid_date="20180101",end_date='20200101',features=[],label='abs',shift=10,filter_name=''):
+    def getLGBTrainData(start_date='20000101',valid_date="20080101",end_date='20100101',features=[],label='abs',shift=10,filter_name=''):
         x_train,y_train,x_valid,y_valid,df_pred,data_path=trainhelper.getTrainData(start_date,valid_date,end_date,features,label,shift,filter_name)
         data_train = lgb.Dataset(x_train, y_train)
         data_valid = lgb.Dataset(x_valid, y_valid)  
