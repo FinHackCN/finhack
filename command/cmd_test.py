@@ -17,24 +17,24 @@ from library.market import market
 from train.nntrain import nntrain
 
 
-ts_code='002624.SZ'
-print("前复权")
-df=AStock.getStockDailyPriceByCode(ts_code,fq='qfq',cache=False)
-print(df)
-print("\n-------")
-print("后复权")
-df=AStock.getStockDailyPriceByCode(ts_code,fq='hfq',cache=False)
-print(df)
-print("\n-------")
-print("不复权")
-df=AStock.getStockDailyPriceByCode(ts_code,fq='no',cache=False)
-print(df)
+# ts_code='002624.SZ'
+# print("前复权")
+# df=AStock.getStockDailyPriceByCode(ts_code,fq='qfq',cache=False)
+# print(df)
+# print("\n-------")
+# print("后复权")
+# df=AStock.getStockDailyPriceByCode(ts_code,fq='hfq',cache=False)
+# print(df)
+# print("\n-------")
+# print("不复权")
+# df=AStock.getStockDailyPriceByCode(ts_code,fq='no',cache=False)
+# print(df)
 
-exit()
+# exit()
 #nntrain.run(features=['alphaA_005','alphaA_016','alphaA_021'])
 
 #'CMO_0','ROCR100_14_0','T3_14_0','TRIX_0','alpha101_026','alpha101_030','alpha101_032','alpha101_040','alpha101_041','alpha191_036','alpha191_057','alpha191_071','alpha191_109','alpha191_158','alphaA_002','alphaA_005','alphaA_015','alphaA_021','alphaA_030','dvRatio_0'
-nntrain.run(features=['alphaA_021','dvRatio_0'])
+nntrain.run(features=['alphaA_021','alphaA_030'])
 
 
 
