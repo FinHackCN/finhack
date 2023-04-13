@@ -84,12 +84,15 @@ class indicatorCompute():
                 #TODO 未处理停牌票
                 df_price=AStock.getStockDailyPriceByCode(ts_code,where=where,fq='hfq',db=db)
                 df_price=df_price.reset_index(drop=True)
+                if type(df_price) == bool:
+                    print(ts_code+"empty!")
             df_all=df_price.copy()
             df_250=df_all.tail(500)
             df_250=df_250.reset_index(drop=True)
             diff_col=[]
             
-            if(df_price.empty) :
+            if(df_price.empty) or type(df_all) == bool:
+                print(ts_code+"empty!")
                 return False
 
     
@@ -144,6 +147,8 @@ class indicatorCompute():
 
             
             #exit()
+            
+ 
 
 
             #日期没有变化
@@ -179,7 +184,7 @@ class indicatorCompute():
            
                     return True
                 else:
-                    print(ts_code)
+                    print(ts_code+"  no change")
 
            
             #下面是日期发生过变化的
@@ -274,6 +279,7 @@ class indicatorCompute():
                 gc.collect()                  
                 return True
         except Exception as e:
+            print(ts_code+" error!")
             print("err exception is %s" % traceback.format_exc())
             
 
