@@ -70,8 +70,8 @@ with ProcessPoolExecutor(max_workers=32) as pool:
         if 'max_depth' in param.keys():
             param['num_leaves']=int(math.pow(2,param['max_depth'])-1)
         
-        if not PREDS_DIR+"lgb_model_"+model+"_pred.pkl"):
-            if not MODELS_DIR+"lgb_model_"+model+".txt"):
+        if not os.path.isfile(PREDS_DIR+"lgb_model_"+model+"_pred.pkl"):
+            if not os.path.isfile(MODELS_DIR+"lgb_model_"+model+".txt"):
                 lgbtrain.run('20000101','20080101','20100101',features=features.split(","),label='abs',shift=10,param=param,loss=loss,replace=True)
             else:
                 print('nopred')
