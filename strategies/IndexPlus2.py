@@ -1,4 +1,4 @@
-from  library.backtest import bt
+from  backtest.backtest import bt
 import time
 from astock.indexHelper import indexHelper
 #chunzhizeng

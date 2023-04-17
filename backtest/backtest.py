@@ -1,5 +1,5 @@
 import numpy as np
-from library.astock import AStock
+from astock.astock import AStock
 import pandas as pd
 import importlib
 import os
@@ -10,13 +10,14 @@ import datetime
 import empyrical as ey
 import hashlib
 from library.mydb import mydb
-from library.market import market
+from astock.market import market
 from library.globalvar import *
 import multiprocessing
 import redis
 from library.config import config
 import json
 import memcache
+import backtest
 
 class bt:
     # def load_price(cache=True):
@@ -124,6 +125,18 @@ class bt:
         #     cfg=config.getConfig('db','memcached')
         #     client=memcache.Client([cfg['host']+':'+cfg['port']], debug=0)
         bt_instance['cache']=client
+
+
+
+
+        if 'filter' in bt_instance['args'].keys():
+            filter_name=bt_instance['args']['filter']  
+            filter_module = importlib.import_module('.btfilter',package='backtest')
+            bt_instance['filter_func']=getattr(filter_module, filter_name)       
+        
+
+
+
         
 
         #bt.log(instance=bt_instance,msg="行情数据读取完毕！",type='info')
@@ -133,6 +146,10 @@ class bt:
         else:
             print(PREDS_DIR+data_path+' not found!')
             return False
+        
+        
+        # print(data[data.ts_code=='301187.SZ'])
+        # exit()
         
         data=data[data.trade_date>=start_date]
         data=data[data.trade_date<=end_date]
@@ -212,15 +229,15 @@ class bt:
         
         if bt_instance['type']=='bt':
         
-            tv=0.03 #阈值
-            if risk['annual_return']<tv:
+            tv=0.2 #阈值
+            if risk['annual_return']<tv or risk['sharpe']<2:
                 returns='returns'
                 bench_returns='bench_returns'
        
             sql="INSERT INTO `finhack`.`backtest`(`instance_id`,`features_list`, `train`, `model`, `strategy`, `start_date`, `end_date`, `init_cash`, `args`, `history`, `returns`, `logs`, `total_value`, `alpha`, `beta`, `annual_return`, `cagr`, `annual_volatility`, `info_ratio`, `downside_risk`, `R2`, `sharpe`, `sortino`, `calmar`, `omega`, `max_down`, `SQN`,filter,win,server,trade_num,runtime,starttime,endtime,benchReturns,roto) VALUES ( '%s','%s', '%s', '%s', '%s', '%s', '%s', %s, '%s', '%s', '%s', '%s', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,'%s',%s,'%s',%s,'%s','%s','%s','%s','%s')" % (bt_instance['instance_id'],features_list,train,model,strategy,bt_instance['start_date'],bt_instance['end_date'],str(init_cash),str(bt_instance['args']).replace("'",'"'),'history',returns,'logs',str(bt_instance['total_value']),str(risk['alpha']),str(risk['beta']),str(risk['annual_return']),str(risk['cagr']),str(risk['annual_volatility']),str(risk['info_ratio']),str(risk['downside_risk']),str(risk['R2']),str(risk['sharpe']),str(risk['sortino']),str(risk['calmar']),str(risk['omega']),str(risk['max_down']),str(risk['sqn']),filters_name,str(risk['win_ratio']),'woldy-PC',str(bt_instance['trade_num']),str(runtime),str(starttime),str(endtime),bench_returns,str(risk['roto']))       
 
     
-            if risk['annual_return']>tv:
+            if risk['annual_return']>tv and risk['sharpe']>2:
                 mydb.exec('delete from backtest where instance_id="%s"' % (bt_instance['instance_id']),'woldycvm')
                 mydb.exec(sql,'woldycvm')                
             mydb.exec('delete from backtest where instance_id="%s"' % (bt_instance['instance_id']),'finhack')
@@ -251,6 +268,11 @@ class bt:
     
     def buy(instance,ts_code,amount=0,price=0,time='open'):
         
+
+            
+ 
+        
+        
         flag688=False
         if ts_code[:3]=='688':
             flag688=True
@@ -258,9 +280,17 @@ class bt:
         now_date=instance['now_date']
         value=0
         
-        #print("%s,%s,%s"% (now_date,ts_code,price))
         
         now_price=market.get_price(ts_code,now_date,instance['cache'])
+        
+        
+        if 'filter' in instance['args'].keys():
+            a=instance['filter_func'](now_price)
+            if not a:
+                #bt.log(instance=instance,ts_code=ts_code,msg="触发规则过滤，不买入！",type='warn')
+                return False                   
+            
+        
         
         if now_price!=None and "退" in now_price['name']: 
             bt.log(instance=instance,ts_code=ts_code,msg="即将退市，不买入！",type='warn')
@@ -416,7 +446,8 @@ class bt:
             #bt.log(instance=instance,ts_code=ts_code,msg="钱不够，无法买入！",type='warn')
             return False     
 
-        
+        #print(now_price)
+        #print("---"+str(value))
         bt.log(instance=instance,ts_code=ts_code,msg="买入"+str(amount)+"股，当前价格"+str(round(value,2)),type='trade')
         return True
     
@@ -738,16 +769,22 @@ class bt:
         #     exit()
         
         
+        
+        #print(positions_value)
+        
         bt.log(instance,"账户余额："+str(instance['total_value'])+","+now_date)
         if instance['total_value']<0 :
             exit()
+            
+        # if now_date>'20180105':
+        #     exit()
         return True
        
        
   
     
     def log(instance,msg,ts_code='',type='info'):
-        return
+        #return
         #print(msg)
   
         #type=warn,info,err,trade,sell
@@ -768,11 +805,12 @@ class bt:
         
         # log_path=LOGS_DIR+"backtest/bt_now.log"
 
-        # with open(log_path,'a') as f:
-        #     f.writelines(msgstr+xstr+"\n")      
-        # instance['logs'].append(msgstr)        
+        with open(log_path,'a') as f:
+            f.writelines(msgstr+xstr+"\n")      
+        instance['logs'].append(msgstr)        
         
-        print(msgstr)
+        #print(msgstr)
+        
         return True
         
         

@@ -88,8 +88,67 @@ try:
         print("login in fail")
         exit()
 
-    #  Ispandas获取专题报表使用范例
-    data = c.ctr("INDEXCOMPOSITION", "", "IndexCode=000300.SH,EndDate=2017-01-13,Ispandas=1")
+    # #  Ispandas获取专题报表使用范例
+    # data = c.ctr("INDEXCOMPOSITION", "", "IndexCode=000300.SH,EndDate=2017-01-13,Ispandas=1")
+    # if not isinstance(data, c.EmQuantData):
+    #     print(data)
+    # else:
+    #     if (data.ErrorCode != 0):
+    #         print("request ctr Error, ", data.ErrorMsg)
+    #     else:
+    #         print("ctr输出结果======分割线======")
+    #         for indicator in data.Indicators:
+    #             print(indicator, " ", end="")
+    #         print()
+    #         for key, value in data.Data.items():
+    #             for v in value:
+    #                 print(v, " ", end="")
+    #             print()
+                
+
+
+    #行情快照使用范例
+    data = c.csq("000005.SZ,600602.SH,600652.SH,600653.SH,600654.SH,600601.SH,600651.SH,000004.SZ,000002.SZ,000001.SZ,000009.SZ", "PRECLOSE,OPEN,HIGH,LOW,NOW,AMOUNT", "Ispandas=0")
+    print(data)
+    if not isinstance(data, c.EmQuantData):
+        print(data)
+    else:
+        if(data.ErrorCode != 0):
+            print("request csqsnapshot Error, ", data.ErrorMsg)
+        else:
+            print("csqsnapshot输出结果======分割线======")
+            for key,value in data.Data.items():
+                print(key, ">>> ", end="")
+                for v in value:
+                    print(v, " ", end="")
+                print()       
+      
+      
+    #行情快照使用范例
+    data = c.csqsnapshot("000005.SZ,600602.SH,600652.SH,600653.SH,600654.SH,600601.SH,600651.SH,000004.SZ,000002.SZ,000001.SZ,000009.SZ", "PRECLOSE,OPEN,HIGH,LOW,NOW,AMOUNT", "Ispandas=0")
+    if not isinstance(data, c.EmQuantData):
+        print(data)
+    else:
+        if(data.ErrorCode != 0):
+            print("request csqsnapshot Error, ", data.ErrorMsg)
+        else:
+            print("csqsnapshot输出结果======分割线======")
+            for key,value in data.Data.items():
+                print(key, ">>> ", end="")
+                for v in value:
+                    print(v, " ", end="")
+                print()      
+      
+        
+    exit()
+    
+    # data=c.sector("028031001001","2023-04-15")
+    # print(data)
+    # exit()       
+                
+    #获取专题报表使用范例
+    #data = c.ctr("INDEXCOMPOSITION", "", "IndexCode=000300.SH,EndDate=2017-01-13")
+    data=data=c.ctr("INDEXCOMPOSITION","INDEXCODE,SECUCODE,TRADEDATE,NAME,CLOSE,PCTCHANGE,WEIGHT,CONTRIBUTEPT,SHRMARKETVALUE,MV,TOTALTRADABLE,SHARETOTAL","IndexCode=000300.SH,EndDate=2016-06-30")
     if not isinstance(data, c.EmQuantData):
         print(data)
     else:
@@ -103,7 +162,14 @@ try:
             for key, value in data.Data.items():
                 for v in value:
                     print(v, " ", end="")
-                print()
+                print()                
+                
+                
+    exit()         
+                
+                
+                
+                
 
     # sector Ispandas使用范例
     data = c.sector("001004", "2022-05-26", "RowIndex=1,Ispandas=1")

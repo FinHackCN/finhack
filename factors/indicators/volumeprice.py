@@ -1,5 +1,5 @@
 import numpy as np
-from library.astock import AStock
+from astock.astock import AStock
 
 class volumeprice:
 

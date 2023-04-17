@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor,ProcessPoolExecutor, wait, ALL
 import pandas as pd
 from library.config import config
 from library.mydb import mydb
-from library.astock import AStock
+from astock.astock import AStock
 
 from factors.factorAnalyzer import factorAnalyzer
 from factors.factorManager import factorManager

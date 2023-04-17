@@ -13,7 +13,7 @@ import gplearn as gp
 
 from library.config import config
 from library.mydb import mydb
-from library.astock import AStock
+from astock.astock import AStock
 from factors.indicatorCompute import indicatorCompute
 from concurrent.futures import ThreadPoolExecutor,ProcessPoolExecutor, wait, ALL_COMPLETED
 from factors.factorAnalyzer import factorAnalyzer

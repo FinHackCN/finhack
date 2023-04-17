@@ -3,7 +3,7 @@ from library.config import config
 from factors.preCheck import preCheck
 from factors.indicatorCompute import indicatorCompute
 from factors.alphaEngine import alphaEngine
-from library.astock import AStock
+from astock.astock import AStock
 from concurrent.futures import ThreadPoolExecutor,ProcessPoolExecutor, wait, ALL_COMPLETED
 import pandas as pd
 from library.globalvar import *

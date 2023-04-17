@@ -1,6 +1,6 @@
 from library.config import config
 from library.mydb import mydb
-from library.astock import AStock
+from astock .astock import AStock
 import time
 import hashlib
 import pandas as pd

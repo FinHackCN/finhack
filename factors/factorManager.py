@@ -129,6 +129,7 @@ class factorManager:
         if end_date!="":
             df_factor=df_factor[df_factor.trade_date<=end_date]
           
+        #print(df_factor)
         df_factor=df_factor.set_index(['ts_code','trade_date'])  
         if cache:
             df_factor.to_pickle(cache_file)

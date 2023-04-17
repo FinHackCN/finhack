@@ -1,5 +1,5 @@
 import numpy as np
-from library.astock import AStock
+from astock.astock import AStock
 
 class financial:
     #财务指标，anndate需要加1，防止未来函数

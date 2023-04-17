@@ -5,17 +5,16 @@ import sys
 import datetime
 import time
 sys.path.append('/data/code/finhack')
-from library.backtest import bt
+from backtest.backtest import bt
 import traceback
 from library.mydb import mydb
 import hashlib
 from concurrent.futures import ThreadPoolExecutor,ProcessPoolExecutor, wait, ALL_COMPLETED
-from library.astock import AStock
+from astock.astock import AStock
 import json
 import math
 from train.lgbtrain import lgbtrain
 from factors.factorManager import factorManager
-from library.backtest import bt
 from library.mydb import mydb
 from concurrent.futures import ThreadPoolExecutor,ProcessPoolExecutor, wait, ALL_COMPLETED
 from itertools import product

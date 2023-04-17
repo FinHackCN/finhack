@@ -15,6 +15,12 @@ from library.globalvar import *
 class trainhelper:
     def getLGBTrainData(start_date='20000101',valid_date="20080101",end_date='20100101',features=[],label='abs',shift=10,filter_name=''):
         x_train,y_train,x_valid,y_valid,df_pred,data_path=trainhelper.getTrainData(start_date,valid_date,end_date,features,label,shift,filter_name)
+        
+        x_train=x_train.drop('ts_code', axis=1)   
+        x_valid=x_valid.drop('ts_code', axis=1)  
+        x_train=x_train.drop('trade_date', axis=1)   
+        x_valid=x_valid.drop('trade_date', axis=1)          
+        
         data_train = lgb.Dataset(x_train, y_train)
         data_valid = lgb.Dataset(x_valid, y_valid)  
 
@@ -65,22 +71,24 @@ class trainhelper:
             # df_train=df_train.drop('ts_code', axis=1)   
             # df_valid=df_valid.drop('ts_code', axis=1)  
  
-            print(df_train.describe(include='all') )
-            print(df_valid.describe(include='all') )
-            print('111111')
+            # print(df_train.describe(include='all') )
+            # print(df_valid.describe(include='all') )
+            # print('111111')
             
-            print(df_valid.columns)
-            columns = features
-            g = df_valid.groupby('trade_date')[columns]
-            df_valid[columns] = (df_valid[columns] - g.transform('min')) / (g.transform('max') - g.transform('min'))
+            
+            #归一化
+            # print(df_valid.columns)
+            # columns = features
+            # g = df_valid.groupby('trade_date')[columns]
+            # df_valid[columns] = (df_valid[columns] - g.transform('min')) / (g.transform('max') - g.transform('min'))
 
 
             #exit()            
             
             
-            df_train=df_train.set_index(["trade_date","ts_code"])
-            df_valid=df_valid.set_index(["trade_date","ts_code"])
-            df_pred=df_pred.set_index(["trade_date","ts_code"])
+            # df_train=df_train.set_index(["trade_date","ts_code"])
+            # df_valid=df_valid.set_index(["trade_date","ts_code"])
+            # df_pred=df_pred.set_index(["trade_date","ts_code"])
             
 
 

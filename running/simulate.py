@@ -5,12 +5,12 @@ import sys
 import datetime
 import time
 sys.path.append('/data/code/finhack')
-from library.backtest import bt
+from backtest.backtest import bt
 import traceback
 from library.mydb import mydb
 import hashlib
 from concurrent.futures import ThreadPoolExecutor,ProcessPoolExecutor, wait, ALL_COMPLETED
-from library.astock import AStock
+from astock.astock import AStock
 import json
 from running.running import running
 from library.globalvar import *
@@ -62,9 +62,12 @@ class simulate:
 
             for date in diff_date:
                 pred=running.pred_bt(instance_id=instance_id,trade_date=date)
+                print(pred)
                 pred['trade_date']=date
                 pred.to_csv(running_pred_path,mode='a',encoding='utf-8',header=False,index=False)
                 pass
+            
+            
             
             
             pred_df=pd.read_csv(running_pred_path,names=['ts_code','pred','trade_date'])

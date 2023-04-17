@@ -16,14 +16,6 @@ import threading
 # 股票信息获取模块
 from datetime import timedelta
 
-class ProcessPoolExecutor2(ProcessPoolExecutor):
-    '''
-    重写线程池修改队列数
-	'''
-    def __init__(self, max_workers=None, thread_name_prefix=''):
-        super().__init__(max_workers, thread_name_prefix)
-        # 队列大小为最大线程数的两倍
-        self._work_queue = queue.Queue(self._max_workers * 2)
 
 
 class AStock:
@@ -188,6 +180,11 @@ class AStock:
             if(df_price.empty):
                 return df_price
 
+
+
+
+
+
             calendar=AStock.getTableData('astock_trade_cal',datewhere.replace('trade_date','cal_date')+' and is_open=1')
             calendar.rename(columns={'cal_date':'trade_date'}, inplace = True)
             calendar=calendar[['trade_date']]
@@ -199,11 +196,15 @@ class AStock:
             # print(111)
             # print(df_adj)
                        
+          
+          
             
             first_adj=float(df_adj.head(1).adj_factor)
             last_adj=float(df_adj.tail(1).adj_factor)
             
             df_adj = pd.merge(calendar,df_adj, on='trade_date',how='left')
+            
+            
             
 
             df_adj = df_adj.fillna(method='ffill')
@@ -310,7 +311,9 @@ class AStock:
                     df["adj_factor"]=1
             else:
                     df=df.drop("adj_factor",axis=1)
-                    df = pd.merge(df,df_adj,how = 'right',on=['trade_date'])     
+                    df = pd.merge(df,df_adj,how = 'right',on=['trade_date'])   
+                    df=df.dropna(subset=['ts_code'])
+                    
                     if fq=="no":
                         df["open"]=df["open"].astype(float)
                         df["high"]=df["high"].astype(float)

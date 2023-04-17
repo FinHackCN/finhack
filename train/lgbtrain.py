@@ -35,7 +35,7 @@ class lgbtrain:
                     
             data_train,data_valid,df_pred,data_path=trainhelper.getLGBTrainData(start_date=start_date,valid_date=valid_date,end_date=end_date,features=features,label=label,shift=shift,filter_name='')
 
-      
+
             
             lgbtrain.train(data_train,data_valid,data_path,md5,loss,param)
             lgbtrain.pred(df_pred,data_path,md5)

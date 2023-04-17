@@ -8,7 +8,7 @@ import pandas as pd
 from library.config import config
 from library.mydb import mydb
 import lightgbm as lgb
-from library.astock import AStock
+from astock.astock import AStock
 from factors.factorManager import factorManager
 
 
@@ -26,6 +26,7 @@ class running():
         df=pd.DataFrame()
         df_list=[]
         print(lastdate)
+        #将当日所有因子拼成很长的一行
         for subfile in os.listdir(path):
             if not '__' in subfile:
                 alpha_name=subfile.split('.')[0]
@@ -39,10 +40,10 @@ class running():
                 if df.empty:
                     df=df_tmp
                 #数不对，删掉这个文件
-                elif len(df_tmp)<5000:
+                elif len(df_tmp)<4000:
                     #os.remove(path+'/'+subfile)
-                    print(df_tmp)
-                    print(alpha_name)
+                    # print(df_tmp)
+                    # print(alpha_name)
                     print("数据不对，删除"+path+'/'+subfile)
                 else:
                     df[alpha_name]=df_tmp[alpha_name]
@@ -81,7 +82,8 @@ class running():
         
         df=pd.read_csv(SINGLE_FACTORS_DIR+'/'+factor_name+'.csv',encoding="utf-8-sig", names=["ts_code",'trade_date',factor_name])
         df=df[df['trade_date']==int(trade_date)]
-        if df.empty:
+        if df.empty or len(df)<1000:
+            print(df)
             print(factor_name+"因子修复失败，请先尝试重新计算")
         else:
             print("当日因子行数"+str(len(df)))
@@ -104,21 +106,27 @@ class running():
                 running.repair(factor,trade_date)
             df=running.prepare(lastdate=trade_date)
             trytimes=trytimes+1
+            
+        print(df)
         df=df.reset_index(drop=False)
         
         diff_list=list(set(features) - set(df.columns.tolist()))
         if diff_list!=[]:
+            print(trade_date)
             print("修复失败！")
             print(diff_list)
+            print(model)
+            return
             exit()
+        
         
         
         df_pred=df[['ts_code']+features]
         gbm = lgb.Booster(model_file='/home/woldy/finhack/data/models/lgb_model_'+model+'.txt')
         pred=df_pred[['ts_code']]
 
-
-        
+        print('pred')
+        print(pred)
 
         #print(df_pred.columns.tolist())
 
