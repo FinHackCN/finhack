@@ -1,5 +1,5 @@
 import numpy as np
-from library.astock import AStock
+from astock.astock import AStock
 import pandas as pd
 import importlib
 import os
@@ -62,6 +62,8 @@ class market:
             df_price=df_price.reset_index(drop=True)
             df_price.to_pickle(cache_path)
         
+        
+ 
  
  
         for row in df_price.itertuples():
@@ -104,18 +106,26 @@ class market:
  
         
         price={
+            'ts_code':value[1],
             'open':value[3],
             'high':value[4],
             'low':value[5],
             'close':value[6],
             'volume':value[10],
-            'stop':value[15],
-            'upLimit':float(value[16]),
-            'downLimit':float(value[17]),
-            'name':value[12]
+            'amount':value[11],
+            'name':value[12],
+            'vwap':value[13],
+            'stop':value[14],
+            'upLimit':float(value[15]),
+            'downLimit':float(value[16]),
+            
             }
             
  
+ 
+        # print(value)
+        # print(price)
+        # #exit()
         
         #df_price[['high','low','open','close','volume','stop','upLimit','downLimit','name']]
         return price

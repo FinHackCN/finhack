@@ -1,6 +1,6 @@
 from library.config import config
 from library.mydb import mydb
-from library.astock import AStock
+from astock.astock import AStock
 import pandas as pd
 import traceback
 import os
@@ -33,7 +33,7 @@ class indicatorCompute():
         #mydb.exec("drop table if exists factors_"+list_name+"_tmp",'factors')
         
         
-        n=10
+        n=30
         # if cpu_count()>2:
         #     n=cpu_count()-2
         tasklist=[]
@@ -50,11 +50,13 @@ class indicatorCompute():
                 yield origin_list[i*cnt:(i+1)*cnt]
  
         
-        #单进程断点调试用
+        #x单进程断点调试用
         # for ts_code in code_list:
+        #     if ts_code!='301187.SZ':
+        #         continue
         #     indicatorCompute.computeListByStock(ts_code,list_name,'',factor_list,c_list)
-        #     #exit()
-        
+        #     exit()
+        # exit()
         code_lists = split_list_n_list(code_list, n)
         for code_list in code_lists:
             with ProcessPoolExecutor(max_workers=n) as pool:
@@ -91,7 +93,7 @@ class indicatorCompute():
             df_250=df_250.reset_index(drop=True)
             diff_col=[]
             
-            if(df_price.empty) or type(df_all) == bool:
+            if type(df_all) == bool or (df_price.empty):
                 print(ts_code+"empty!")
                 return False
 
@@ -184,11 +186,13 @@ class indicatorCompute():
            
                     return True
                 else:
-                    print(ts_code+"  no change")
+                    print(ts_code+"  date no change")
 
            
             #下面是日期发生过变化的
             #增加shift_0
+            
+
             for row in factor_list:
                 factor_name=row
                 if(isinstance(row,(dict))):
@@ -201,9 +205,17 @@ class indicatorCompute():
                     
                 #clist，chenged factor_list，代码发生变化
                 #print(first_time)
+                
+                
+                
                 if (not factor_name in df_factor.columns or diff_date>100) and (not factor_name in c_list):
                     if not factor_name in df_all.columns:
-                        df_all=indicatorCompute.computeFactorByStock(ts_code,factor_name,df_all,where=where,db='factors')
+                        df_all_tmp=indicatorCompute.computeFactorByStock(ts_code,factor_name,df_all.copy(),where=where,db='factors')
+                        if type(df_all_tmp) == bool or (df_all_tmp.empty) :
+                            df_all[factor_name]=np.nan
+                        else:
+                            df_all=df_all_tmp
+                            
                 #否则计算250日数据
                 else:
                     if not factor_name in df_250.columns:
@@ -240,6 +252,9 @@ class indicatorCompute():
 
             df_factor=df_factor.loc[:,~df_factor.columns.duplicated()]
             
+            #df_factor=df_factor.sort_values(by='trade_date')
+            df_factor=df_factor.dropna(subset=['ts_code','trade_date'])
+            #print(df_factor)
             
             #objgraph.show_most_common_types(limit=50)
             if check:
@@ -279,8 +294,10 @@ class indicatorCompute():
                 gc.collect()                  
                 return True
         except Exception as e:
+            
             print(ts_code+" error!")
             print("err exception is %s" % traceback.format_exc())
+            exit()
             
 
 

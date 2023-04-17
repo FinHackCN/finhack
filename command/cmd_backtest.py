@@ -5,17 +5,18 @@ import sys
 import datetime
 import time
 sys.path.append('/data/code/finhack')
-from library.backtest import bt
+from backtest.backtest import bt
 import traceback
 from library.mydb import mydb
 import hashlib
 from concurrent.futures import ThreadPoolExecutor,ProcessPoolExecutor, wait, ALL_COMPLETED
-from library.astock import AStock
+from astock.astock import AStock
 import json
 from train.trainhelper import trainhelper
 import lightgbm as lgb
 from library.globalvar import *
 import redis
+from astock.market import market
 
 def start_bt(features_list,model_hash,loss,algorithm,init_cash,hold_day,hold_n,filters_name,strategy):
                 try:
@@ -84,7 +85,8 @@ def start_bt(features_list,model_hash,loss,algorithm,init_cash,hold_day,hold_n,f
 
 
 
-
+# market.load_dividend()
+# market.load_price()
 
 while True:
         with ProcessPoolExecutor(max_workers=28) as pool:
@@ -100,7 +102,7 @@ while True:
                                                 for row in model_list.itertuples():
                                                         features_list=getattr(row,'features')
                                                         model_hash=getattr(row,'hash')
-                                                        filters_name=getattr(row,'filter')
+                                                        filters_name='MainBoard' #只交易主板
                                                         # if model_hash in tested_list:
                                                         #         print('model_hash in tested_list')
                                                         #         continue
@@ -119,9 +121,9 @@ while True:
                         
 
                                                         time.sleep(1)
-                                                        mytask=pool.submit(start_bt,features_list,model_hash,loss,algorithm,init_cash,hold_day,hold_n,filters_name,strategy)
+                                                        # mytask=pool.submit(start_bt,features_list,model_hash,loss,algorithm,init_cash,hold_day,hold_n,filters_name,strategy)
                                                                 
-                                                        # start_bt(features_list,model_hash,loss,algorithm,init_cash,hold_day,hold_n,filters_name,strategy)
+                                                        start_bt(features_list,model_hash,loss,algorithm,init_cash,hold_day,hold_n,filters_name,strategy)
                                                         # exit()
                                                                 #tasklist.append(mytask)
                                 #wait(tasklist, return_when=ALL_COMPLETED)

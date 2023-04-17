@@ -1,5 +1,5 @@
-rm -f /data/code/finhack/cache/factors/*
-rm -f /data/code/finhack/cache/price/*
+rm -f /data/code/finhack//data/cache/factors/*
+rm -f /data/code/finhack/data/cache/price/*
 rm -f /data/code/finhack/data/factors/single_factors/*
 rm -f /data/code/finhack/data/factors/code_factors/*
 rm -f /data/code/finhack/data/cache/single_factors_tmp1/*

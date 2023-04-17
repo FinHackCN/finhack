@@ -11,7 +11,7 @@ import hashlib
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from train.lgbtrain import lgbtrain
 from factors.factorManager import factorManager
-from library.backtest import bt
+from backtest.backtest import bt
 from library.mydb import mydb
 from concurrent.futures import ThreadPoolExecutor,ProcessPoolExecutor, wait, ALL_COMPLETED
 from itertools import product

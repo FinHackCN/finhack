@@ -3,7 +3,7 @@ import os
 import time
 import random
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-from library.astock import AStock
+from astock.astock import AStock
 from factors.indicatorCompute import indicatorCompute
 from library.mydb import mydb
 from library.config import config
@@ -11,26 +11,30 @@ from library.globalvar import *
 import pandas as pd
 import pickle
 from astock.indexHelper import indexHelper
-from library.backtest import bt
-from library.market import market
+from backtest.backtest import bt
+from astock.market import market
 
 from train.nntrain import nntrain
-
-
-# ts_code='002624.SZ'
-# print("前复权")
-# df=AStock.getStockDailyPriceByCode(ts_code,fq='qfq',cache=False)
-# print(df)
-# print("\n-------")
-# print("后复权")
-# df=AStock.getStockDailyPriceByCode(ts_code,fq='hfq',cache=False)
-# print(df)
-# print("\n-------")
-# print("不复权")
-# df=AStock.getStockDailyPriceByCode(ts_code,fq='no',cache=False)
-# print(df)
-
+#market.load_price()
+# ts_code='301138.SZ'
+# market.get_price(ts_code,'20211215',client=None)
+# market.get_price(ts_code,'20230414',client=None)
 # exit()
+
+ts_code='301187.SZ'
+print("前复权")
+df=AStock.getStockDailyPriceByCode(ts_code,fq='qfq',cache=False)
+print(df)
+print("\n-------")
+print("后复权")
+df=AStock.getStockDailyPriceByCode(ts_code,fq='hfq',cache=False)
+print(df)
+print("\n-------")
+print("不复权")
+df=AStock.getStockDailyPriceByCode(ts_code,fq='no',cache=False)
+print(df)
+
+exit()
 #nntrain.run(features=['alphaA_005','alphaA_016','alphaA_021'])
 
 #'CMO_0','ROCR100_14_0','T3_14_0','TRIX_0','alpha101_026','alpha101_030','alpha101_032','alpha101_040','alpha101_041','alpha191_036','alpha191_057','alpha191_071','alpha191_109','alpha191_158','alphaA_002','alphaA_005','alphaA_015','alphaA_021','alphaA_030','dvRatio_0'
@@ -92,7 +96,7 @@ exit()
 
 
 
-market.load_dividend()
+
 exit()
 
 # df=AStock.getStockDailyPriceByCode('600354.SH',fq='no')

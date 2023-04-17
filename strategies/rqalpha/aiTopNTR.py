@@ -11,9 +11,9 @@ from rqalpha.apis import *
 from rqalpha import run_func
 import time
 import math
-from astock.indexHelper import indexHelper
 
-model_hash="d3e89d33336960f4ecb9d08f4a2f3124"
+
+model_hash="b00a2f5b2d3b55d2b2ccd3ec0fc14003"
 hold_day=3
 hold_n=3
 benchmark="000001.XSHG"
@@ -130,7 +130,7 @@ def on_trade_handler(context,event):
 
 def init(context):
     
-    pred_path="/data/code/finhack/data/preds/nn_model_%s_pred.pkl" % model_hash
+    pred_path="/data/code/finhack/data/preds/lgb_model_%s_pred.pkl" % model_hash
     pred=pickle.load(open(pred_path, "rb"))  
     pred=pred.set_index(['trade_date','ts_code'])
     logger.info("init")
@@ -213,6 +213,7 @@ def open_auction(context, bar_dict):
             ai=N-(i-1)*(N/i)
             Sn=N*N/2
             wi=ai/Sn
+            
             order_value(ts_code,context.stock_account.cash*wi)
             i=i+1       
     
@@ -231,8 +232,8 @@ def open_auction(context, bar_dict):
 
 config = {
   "base": {
-    "start_date": "2010-01-05",
-    "end_date": "2023-03-22",
+    "start_date": "2018-01-01",
+    "end_date": "2023-04-01",
     "accounts": {
       "stock": 20000
     }
@@ -248,8 +249,8 @@ config = {
     "sys_analyser": {
       "enabled": True,
       "plot": True,
-      "output_file": "data/backtest/"+model_hash+'_aitop'+str(hold_n)+"_"+benchmark+".pkl",
-      "plot_save_file":"data/backtest/"+model_hash+'_aitop'+str(hold_n)+"_"+benchmark+".png",
+      "output_file": "data/logs/backtest/"+model_hash+".pkl",
+      "plot_save_file":"data/logs/backtest/"+model_hash+".png",
       "benchmark":benchmark
     },
     "sys_transaction_cost":{
@@ -268,12 +269,12 @@ run_func(init=init, before_trading=before_trading,open_auction=open_auction, han
 
 
 
-result_dict = pickle.load(open("data/backtest/"+model_hash+'_aitop'+str(hold_n)+"_"+benchmark+".pkl", "rb"))   # 从输出pickle中读取数据
+result_dict = pickle.load(open("data/logs/backtest/"+model_hash+".pkl", "rb"))   # 从输出pickle中读取数据
 
 print(result_dict["summary"])
 
-print("data/backtest/"+model_hash+'_aitop'+str(hold_n)+"_"+benchmark+".pkl")
-print("data/backtest/"+model_hash+'_aitop'+str(hold_n)+"_"+benchmark+".png")
+print("data/logs/backtest/"+model_hash+".pkl")
+print("data/logs/backtest/"+model_hash+".png")
 
 
 

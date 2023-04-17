@@ -1,6 +1,6 @@
 import talib as ta
 import numpy as np
-from library.astock import AStock
+from astock.astock import AStock
 
 class ta_lib:
     def BBANDS(df,p):
@@ -345,71 +345,51 @@ class ta_lib:
         return df
 
     def TRANGE(df,p):
-        if len(p)<=2:
-            p=[p,90]
         df['TRANGE']=ta.TRANGE(df.high, df.low, df.close)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
     def AVGPRICE(df,p):
-        if len(p)<=2:
-            p=[p,90]
         df['AVGPRICE']     = ta.AVGPRICE(df.open, df.high, df.low, df.close)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
     def MEDPRICE(df,p):
-        if len(p)<=2:
-            p=[p,90]
         df['MEDPRICE']     = ta.MEDPRICE(df.high, df.low)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
     def TYPPRICE(df,p):
-        if len(p)<=2:
-            p=[p,90]
         df['TYPPRICE']     = ta.TYPPRICE(df.high, df.low, df.close)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
     def WCLPRICE(df,p):
-        if len(p)<=2:
-            p=[p,90]
         df['WCLPRICE']     = ta.WCLPRICE(df.high, df.low, df.close)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
     def HT_DCPERIOD(df,p):
-        if len(p)<=2:
-            p=[p,90]
         df['HTDCPERIOD']  = ta.HT_DCPERIOD(df.close)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
     def HT_DCPHASE(df,p):
-        if len(p)<=2:
-            p=[p,90]
         df['HTDCPHASE']   = ta.HT_DCPHASE(df.close)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
     def HT_PHASOR(df,p):
-        if len(p)<=2:
-            p=[p,90]
         df['INPHASE'], df['QUADRATURE'] = ta.HT_PHASOR(df.close)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
     def HT_SINE(df,p):
-        if len(p)<=2:
-            p=[p,90]
         df['SINE'] , df['LEADSINE'] = ta.HT_SINE(df.close)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
     def HT_TRENDMODE(df,p):
-        if len(p)<=2:
-            p=[p,90]
         df['HTTRENDMODE'] = ta.HT_TRENDMODE(df.close)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df

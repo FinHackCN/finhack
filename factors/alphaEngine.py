@@ -169,15 +169,7 @@ def tan(x):
     return np.tan(x)
     
         
-        
-        
-        
-        
-        
-        
-        
-        
-        
+
         
         
 def where(c,t,f):
@@ -399,7 +391,7 @@ def decaylinear(A,n):
     w = np.arange(n,0,-1) 
     w = w/w.sum()
     for name,group in grouped:
-        dl=group.rolling(n).apply(lambda x: (x * w).sum()).fillna(method = 'ffill').fillna(method='bfill')
+        dl=group.rolling(n).apply(lambda x: (x * w).sum()).fillna(method = 'ffill')
         dl_all.append(dl)
     df=pd.concat(dl_all)  
     return df
@@ -410,10 +402,10 @@ def decaylinear(A,n):
 def wma(df,n):
     grouped=df.groupby('ts_code')
     wma_all=[]
+    w = np.arange(1, n+1) * 0.9
+    w = w/w.sum()    
     for name,A in grouped:
-        w = np.arange(1, n+1) * 0.9
-        w = w/w.sum()
-        wma=A.rolling(n).apply(lambda x: (x * w).sum()).fillna(method = 'ffill').fillna(method='bfill')   
+        wma=A.rolling(n).apply(lambda x: (x * w).sum()).fillna(method = 'ffill')
         wma_all.append(wma)
     df=pd.concat(wma_all)      
     return df    
@@ -424,7 +416,7 @@ def lowday(df,window=10):
     grouped=df.groupby('ts_code')
     ld_all=[]
     for name,A in grouped:
-        ld=(window-1) - A.rolling(window).apply(lambda x: np.argsort(x)[0]).fillna(method = 'ffill').fillna(method='bfill')
+        ld=(window-1) - A.rolling(window).apply(lambda x: np.argsort(x)[0]).fillna(method = 'ffill')
         ld_all.append(ld)
     df=pd.concat(ld_all)      
     return df   
@@ -435,7 +427,7 @@ def highday(df,window=10):
     grouped=df.groupby('ts_code')
     hd_all=[]
     for name,A in grouped:
-        hd=(window-1) - A.rolling(window).apply(lambda x: np.argsort(x)[window-1]).fillna(method = 'ffill').fillna(method='bfill')
+        hd=(window-1) - A.rolling(window).apply(lambda x: np.argsort(x)[window-1]).fillna(method = 'ffill')
         hd_all.append(hd)
     df=pd.concat(hd_all)      
     return df   
@@ -445,7 +437,7 @@ def sumac(df, window=10):
     grouped=df.groupby('ts_code')
     s_all=[]
     for name,A in grouped:
-        s=A.rolling(window=window,min_periods = minp(window)).sum().fillna(method = 'ffill').fillna(method='bfill')
+        s=A.rolling(window=window,min_periods = minp(window)).sum().fillna(method = 'ffill')
     s_all.append(s)
     df=pd.concat(s_all)      
     return df   
@@ -467,7 +459,7 @@ def sumif(df, window, condition):
     grouped=df.groupby('ts_code')
     s_all=[]
     for name,A in grouped:
-        s=A*condition.loc[name].rolling(window=window,center = False, min_periods = minp(window)).sum().fillna(method = 'ffill').fillna(method='bfill')
+        s=A*condition.loc[name].rolling(window=window,center = False, min_periods = minp(window)).sum().fillna(method = 'ffill')
     s_all.append(s)
     df=pd.concat(s_all)      
     return df   
