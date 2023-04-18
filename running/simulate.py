@@ -23,7 +23,7 @@ class simulate:
         #     mydb.exec("update backtest set simulate=1 where max_down>-0.3 and annual_return>0 and instance_id in (select t2.instance_id from (SELECT instance_id FROM backtest where features_list='%s' ORDER BY sortino desc limit 10) as t2)" % features,'finhack')
         
         
-        mydb.exec("update backtest set simulate=1 where max_down>-0.4 and annual_return>0 ORDER BY sortino desc limit %s" % str(n),'finhack')
+        mydb.exec("update backtest set simulate=1 where max_down>-0.6 and annual_return>0 ORDER BY sortino desc limit %s" % str(n),'finhack')
         #mydb.exec("update backtest set simulate=1 where instance_id in (select t2.instance_id from (SELECT instance_id FROM backtest  ORDER BY sortino desc limit %s) as t2)" % str(n),'finhack')
 
     def getSimulateList():
