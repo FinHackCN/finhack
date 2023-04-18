@@ -267,7 +267,7 @@ class indicatorCompute():
                 for factor_name in df_factor.columns.tolist():
                     #print(factor_name)
                     single_factors_path1=CACHE_DIR+"single_factors_tmp1/"+factor_name+'.csv'
-                    single_factors_path2=CACHE_DIR+"/data/single_factors_tmp2/"+factor_name+'.csv'
+                    single_factors_path2=CACHE_DIR+"single_factors_tmp2/"+factor_name+'.csv'
                     if factor_name not in ['ts_code','trade_date'] and not os.path.exists(single_factors_path2):
                         
                         # print(df_factor.columns.tolist())

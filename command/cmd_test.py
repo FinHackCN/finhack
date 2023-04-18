@@ -7,6 +7,7 @@ from astock.astock import AStock
 from factors.indicatorCompute import indicatorCompute
 from library.mydb import mydb
 from library.config import config
+from library.util import util
 from library.globalvar import *
 import pandas as pd
 import pickle
@@ -20,6 +21,18 @@ from train.nntrain import nntrain
 # market.get_price(ts_code,'20211215',client=None)
 # market.get_price(ts_code,'20230414',client=None)
 # exit()
+
+
+
+
+
+
+from factors.factorRepair import factorRepair
+factorRepair.deleteDate('20230417')
+
+
+exit()
+
 
 ts_code='301187.SZ'
 print("前复权")
