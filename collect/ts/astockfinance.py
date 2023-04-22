@@ -14,7 +14,7 @@ class tsAStockFinance:
     def getPeriodList(db):
         lastdate_sql="select max(end_date) as max from astock_finance_disclosure_date"
         lastdate=mydb.selectToDf(lastdate_sql,db)
-        if(lastdate.empty):
+        if(type(lastdate) == bool or lastdate.empty):
             lastdate='19980321'            
         else:
             lastdate=lastdate['max'].tolist()[0]
@@ -64,7 +64,10 @@ class tsAStockFinance:
         if(report_type>0):
             table_sql=table_sql+" and report_type="+str(report_type)
         table_res=mydb.selectToDf(table_sql,db)
-        table_count=len(table_res)
+        if type(table_res) == bool:
+            table_count=0
+        else:
+            table_count=len(table_res)
         disclosure_sql="select * from astock_finance_disclosure_date where ts_code='"+ts_code+"' and end_date='"+end_date+"' and not ISNULL(actual_date)"
         disclosure_res=mydb.selectToDf(disclosure_sql,db)
         disclosure_count=len(disclosure_res)
@@ -91,7 +94,7 @@ class tsAStockFinance:
             if(report_type>0):
                 lastdate_sql=lastdate_sql+" and report_type="+str(report_type)
             lastdate=mydb.selectToDf(lastdate_sql,db)
-            if(lastdate.empty):
+            if(type(lastdate) == bool or lastdate.empty):
                 lastdate='20000321'
             else:
                 lastdate=lastdate['max'].tolist()[0]
