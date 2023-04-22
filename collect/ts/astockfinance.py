@@ -40,10 +40,10 @@ class tsAStockFinance:
         disclosure_df=mydb.selectToDf(disclosure_sql,db)
         table_list=[]
         disclosure_list=[]
-        if(not table_df.empty):
+        if(type(table_df) != bool and not table_df.empty):
             table_list=table_df['end_date'].unique().tolist()
        
-        if(not disclosure_df.empty):
+        if(type(disclosure_df) != bool and not disclosure_df.empty):
             disclosure_list=disclosure_df['end_date'].unique().tolist()
         
         #若无计划披露数据，跑个全量
