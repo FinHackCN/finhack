@@ -97,6 +97,12 @@ class indicatorCompute():
                 print(ts_code+"empty!")
                 return False
 
+
+            if type(df_250) == bool or (df_250.empty):
+                df_250=df_all
+                return False
+
+
     
             df_factor=pd.DataFrame()
             td_list_p=df_price['trade_date'].tolist()

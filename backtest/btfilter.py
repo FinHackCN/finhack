@@ -12,3 +12,23 @@ def MainBoard(stock):
             return False
         else:
             return True
+            
+            
+#主板非退市
+def MainBoardNoST(stock):
+    #print(stock)
+    if stock==None:
+        return False
+    else:
+        if '688' in stock['ts_code'][:3]:
+            return False
+        elif  '300' in stock['ts_code'][:3]:
+            return False
+        elif  'BJ' in stock['ts_code']:
+            return False
+        elif 'ST' in stock['name']:
+            return False
+        elif '退' in stock['name']:
+            return False
+        else:
+            return True

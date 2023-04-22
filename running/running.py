@@ -21,43 +21,46 @@ from library.globalvar import *
 #2、把这些因子丢到
 
 class running():
+    
+    
+    def readFactor(factor_name,trade_date,df,n=0):
+        if n>3:
+            print("read factor fail:"+factor_name)
+            exit()
+        path = DATE_FACTORS_DIR+trade_date
+        df_tmp=pd.read_csv(path+'/'+factor_name+'.csv',encoding="utf-8-sig", names=["ts_code",'trade_date',factor_name])
+        df_tmp.drop_duplicates(subset=['ts_code'],keep='first',inplace=True)
+        df_tmp=df_tmp.set_index('ts_code')
+                
+
+        if df.empty:
+            df=df_tmp
+                #数不对，删掉这个文件
+        elif len(df_tmp)<4000:
+            os.remove(path+'/'+factor_name+'.csv')
+            print("数据不对，删除"+path+'/'+factor_name+'.csv')
+            running.repair(factor_name,trade_date)
+            df=running.readFactor(factor_name,trade_date,df,n+1)
+        else:
+            df[factor_name]=df_tmp[factor_name]
+            if factor_name not in ['name','lLastTime_0','lFirstTime_0','lLimit_0']:
+                try:
+                    df[factor_name]=df[factor_name].astype('float')
+                except Exception as e:
+                    print(factor_name)
+                    print(str(e))     
+        return df
+        
+    
     def prepare(lastdate=''):
         path = DATE_FACTORS_DIR+lastdate
         df=pd.DataFrame()
         df_list=[]
-        print(lastdate)
         #将当日所有因子拼成很长的一行
         for subfile in os.listdir(path):
             if not '__' in subfile:
-                alpha_name=subfile.split('.')[0]
-                df_tmp=pd.read_csv(path+'/'+subfile,encoding="utf-8-sig", names=["ts_code",'trade_date',alpha_name])
-                df_tmp.drop_duplicates(subset=['ts_code'],keep='first',inplace=True)
-                df_tmp=df_tmp.set_index('ts_code')
-                #df_tmp=df_tmp[[alpha_name]]
-                #df_list.append(df_tmp)
-                
-
-                if df.empty:
-                    df=df_tmp
-                #数不对，删掉这个文件
-                elif len(df_tmp)<4000:
-                    #os.remove(path+'/'+subfile)
-                    # print(df_tmp)
-                    # print(alpha_name)
-                    print("数据不对，删除"+path+'/'+subfile)
-                else:
-                    df[alpha_name]=df_tmp[alpha_name]
-                    if alpha_name not in ['name','lLastTime_0','lFirstTime_0','lLimit_0']:
-                        try:
-                            df[alpha_name]=df[alpha_name].astype('float')
-                        except Exception as e:
-                            print(alpha_name)
-                            print(str(e))
-            #df=pd.concat(df_list,axis=1)
-            
-        # print(df.columns.tolist())
-        # exit()
-
+                factor_name=subfile.split('.')[0]
+                df=running.readFactor(factor_name,lastdate,df)
         return df
         
         
@@ -106,8 +109,7 @@ class running():
                 running.repair(factor,trade_date)
             df=running.prepare(lastdate=trade_date)
             trytimes=trytimes+1
-            
-        print(df)
+
         df=df.reset_index(drop=False)
         
         diff_list=list(set(features) - set(df.columns.tolist()))
@@ -125,8 +127,7 @@ class running():
         gbm = lgb.Booster(model_file='/home/woldy/finhack/data/models/lgb_model_'+model+'.txt')
         pred=df_pred[['ts_code']]
 
-        print('pred')
-        print(pred)
+
 
         #print(df_pred.columns.tolist())
 
