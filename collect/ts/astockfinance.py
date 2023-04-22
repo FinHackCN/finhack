@@ -47,9 +47,9 @@ class tsAStockFinance:
             disclosure_list=disclosure_df['end_date'].unique().tolist()
         
         #若无计划披露数据，跑个全量
-        if(table_df.empty):
+        if(type(table_df) == bool or table_df.empty):
             disclosure_df=tsAStockFinance.getPeriodList(db)
-        elif(disclosure_df.empty):
+        elif(type(disclosure_df) == bool or disclosure_df.empty):
             disclosure_df=tsAStockFinance.getPeriodList(db)
             
         diff_list = set(disclosure_list)-set(table_list)

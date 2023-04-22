@@ -53,7 +53,7 @@ class mydb:
         
     def getDBEngine(connection='default'):
         dbcfg=config.getConfig('db',connection)
-        engine=create_engine('mysql+pymysql://'+dbcfg['user']+':'+dbcfg['password']+'@'+dbcfg['host']+':'+dbcfg['port']+'/'+dbcfg['db']+'?charset='+dbcfg['charset'],encoding='utf-8',echo=False)  
+        engine=create_engine('mysql+pymysql://'+dbcfg['user']+':'+dbcfg['password']+'@'+dbcfg['host']+':'+dbcfg['port']+'/'+dbcfg['db']+'?charset='+dbcfg['charset'],echo=False)  
         return engine
     
     def toSql(df,table,connection='default'):
