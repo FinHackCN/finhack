@@ -24,11 +24,17 @@ from train.nntrain import nntrain
 
 
 
+ 
 
+
+print(st_df_code)
+
+
+exit()
 
 
 from factors.factorRepair import factorRepair
-factorRepair.deleteDate('20230417')
+factorRepair.deleteDate('20230418')
 
 
 exit()

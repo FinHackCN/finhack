@@ -32,13 +32,7 @@ class factorRepair():
         #     df.to_csv(SINGLE_FACTORS_DIR+single_factor,mode='w',encoding='utf-8',header=False,index=False)
 
 
-        tasklist=[]
-        with ProcessPoolExecutor(max_workers=30) as pool:
-            for single_factor in single_factors_list:
-                mytask=pool.submit(factorRepair.deleteCsvDate,SINGLE_FACTORS_DIR+single_factor,trade_date)
-                tasklist.append(mytask)
-        
-        wait(tasklist,return_when=ALL_COMPLETED)
+
 
         
         print('deleted all factors in '+trade_date)
@@ -46,8 +40,41 @@ class factorRepair():
         pass
         
         
-    def deleteCsvDate(path,trade_date):
+    def deleteCsvDateFactor(path,trade_date):
         df=pd.read_csv(path, header=None, names=['ts_code','trade_date','alpha'],dtype={"trade_date": str})
         df=df[df.trade_date!=trade_date]
         df.to_csv(path,mode='w',encoding='utf-8',header=False,index=False)        
+        pass
+    
+    
+    def writeCsvDateFactor(factor,start_date='',end_date=''):
+            df=pd.read_csv(SINGLE_FACTORS_DIR+factor, header=None, names=['ts_code','trade_date','alpha'],dtype={"trade_date": str})
+            if start_date!='':
+                df=df[df.trade_date>=start_date]
+            if end_date!='':
+                df=df[df.trade_date<=start_date]   
+            
+            trade_date_list=set(df['trade_date'].values)
+            for trade_date in trade_date_list:
+                if not os.path.exists(DATE_FACTORS_DIR+trade_date): 
+                    try:
+                        os.mkdir(DATE_FACTORS_DIR+trade_date)
+                    except Exception as e:
+                        print(str(e))  
+                df_date=df[df.trade_date==trade_date]
+                df_date=df_date.to_csv(DATE_FACTORS_DIR+trade_date+'/'+factor,mode='w',encoding='utf-8',header=False,index=False)
+  
+    
+    
+    def setDateFactors(start_date='',end_date=''):
+        single_factors_list=util.getFileList(SINGLE_FACTORS_DIR)
+        tasklist=[]
+        with ProcessPoolExecutor(max_workers=30) as pool:
+            for single_factor in single_factors_list:
+                factorRepair.writeCsvDateFactor(single_factor,start_date,end_date)
+                mytask=pool.submit(factorRepair.writeCsvDateFactor,single_factor,start_date,end_date)
+                tasklist.append(mytask)
+        wait(tasklist,return_when=ALL_COMPLETED)
+        print('setDateFactors done')
+            
         pass

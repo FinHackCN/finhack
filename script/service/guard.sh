@@ -13,10 +13,10 @@ while true ; do
 # 0 -> 标准输入，1 -> 标准输出，2 - > 标准错误信息输出
 # /dev/null --> Linux的特殊文件，它就像无底洞，所有重定向到它的信息数据都会消失！
 # 2 > /dev/null --> 重定向 stderr 到 /dev/null，1 >& 2 --> 重定向 stdout 到 stderr
-    PRO_NOW=$(ps aux|grep "command/cmd_autotrain.py 10 20" | grep -v grep | wc -l)
-    if [ $PRO_NOW -lt 3 ]; then
+    PRO_NOW=$(ps aux|grep "command/cmd_autotrain.py 10 30" | grep -v grep | wc -l)
+    if [ $PRO_NOW -lt 2 ]; then
         cd /home/woldy/finhack
-        nohup python -u command/cmd_autotrain.py >>data/logs/autotrain.log 10 20 &
+        nohup python -u command/cmd_autotrain.py >>data/logs/autotrain.log 10 30 &
     fi
     
     sleep 60   

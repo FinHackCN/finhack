@@ -85,24 +85,21 @@ def start_bt(features_list,model_hash,loss,algorithm,init_cash,hold_day,hold_n,f
 
 
 
-# market.load_dividend()
-# market.load_price()
+market.load_dividend()
+market.load_price()
 
 while True:
-        with ProcessPoolExecutor(max_workers=28) as pool:
+        with ProcessPoolExecutor(max_workers=27) as pool:
                 model_list=mydb.selectToDf('select * from auto_train','finhack')
-                #print(model_list)
-
                 tasklist=[]
-                #print(model_hash)
                 for init_cash in [20000]:
-                        for hold_day in  [3,5,7,9,11]:
-                                for hold_n in  [3,5,7,9,11]:
+                        for hold_day in  [3,5,7]:
+                                for hold_n in  [3,5,7]:
                                         for strategy in ['aiTopN','aiTopNTR']:
                                                 for row in model_list.itertuples():
                                                         features_list=getattr(row,'features')
                                                         model_hash=getattr(row,'hash')
-                                                        filters_name='MainBoard' #只交易主板
+                                                        filters_name='MainBoardNoST' #只交易主板
                                                         # if model_hash in tested_list:
                                                         #         print('model_hash in tested_list')
                                                         #         continue
@@ -121,58 +118,9 @@ while True:
                         
 
                                                         time.sleep(1)
-                                                        # mytask=pool.submit(start_bt,features_list,model_hash,loss,algorithm,init_cash,hold_day,hold_n,filters_name,strategy)
-                                                                
-                                                        start_bt(features_list,model_hash,loss,algorithm,init_cash,hold_day,hold_n,filters_name,strategy)
+                                                        mytask=pool.submit(start_bt,features_list,model_hash,loss,algorithm,init_cash,hold_day,hold_n,filters_name,strategy)
+                                                        #start_bt(features_list,model_hash,loss,algorithm,init_cash,hold_day,hold_n,filters_name,strategy)
                                                         # exit()
-                                                                #tasklist.append(mytask)
-                                #wait(tasklist, return_when=ALL_COMPLETED)
+                                                        tasklist.append(mytask)
+                                wait(tasklist, return_when=ALL_COMPLETED)
         time.sleep(60)
-print('all done')
-
-
-
-
-
-
-# while True:
-#         with ProcessPoolExecutor(max_workers=15) as pool:
-#                 model_list=mydb.selectToDf('select * from auto_train','finhack')
-#                 #print(model_list)
-
-
-#                 tasklist=[]
-#                                 #print(model_hash)
-#                 for init_cash in [1000000,2500000,5000000]:
-#                         for hold_day in  [5,10]:
-#                                 for hold_n in  [int(init_cash/10000),int(init_cash/20000),int(init_cash/50000)]:
-#                                         for strategy in ['IndexPlusTR']:#,'aiTopN','IndexPlus','aiTopNTR',]:
-#                                                 for row in model_list.itertuples():
-#                                                         features_list=getattr(row,'features')
-#                                                         model_hash=getattr(row,'hash')
-#                                                         filters_name=getattr(row,'filter')
-#                                                         # if model_hash in tested_list:
-#                                                         #         print('model_hash in tested_list')
-#                                                         #         continue
-                                                        
-                                                        
-#                                                         if not os.path.exists(PREDS_DIR+"lgb_model_"+model_hash+"_pred.pkl"):
-#                                                                 print('preds deleted')
-#                                                                 continue          
-                                                        
-#                                                         #print("backtesting "+model_hash)
-                                                        
-#                                                         loss=getattr(row,'loss')
-#                                                         algorithm=getattr(row,'algorithm')
-                        
-
-#                                                         time.sleep(1)
-#                                                         #mytask=pool.submit(start_bt,features_list,model_hash,loss,algorithm,init_cash,hold_day,hold_n,filters_name,strategy)
-                                                                
-#                                                         start_bt(features_list,model_hash,loss,algorithm,init_cash,hold_day,hold_n,filters_name,strategy)
-#                                                                 #tasklist.append(mytask)
-#                                 #wait(tasklist, return_when=ALL_COMPLETED)
-#         time.sleep(60)
-# print('all done')
-
- 

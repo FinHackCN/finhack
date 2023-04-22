@@ -229,15 +229,15 @@ class bt:
         
         if bt_instance['type']=='bt':
         
-            tv=0.2 #阈值
-            if risk['annual_return']<tv or risk['sharpe']<2:
+            tv=0.3 #阈值
+            if risk['annual_return']<tv:
                 returns='returns'
                 bench_returns='bench_returns'
        
             sql="INSERT INTO `finhack`.`backtest`(`instance_id`,`features_list`, `train`, `model`, `strategy`, `start_date`, `end_date`, `init_cash`, `args`, `history`, `returns`, `logs`, `total_value`, `alpha`, `beta`, `annual_return`, `cagr`, `annual_volatility`, `info_ratio`, `downside_risk`, `R2`, `sharpe`, `sortino`, `calmar`, `omega`, `max_down`, `SQN`,filter,win,server,trade_num,runtime,starttime,endtime,benchReturns,roto) VALUES ( '%s','%s', '%s', '%s', '%s', '%s', '%s', %s, '%s', '%s', '%s', '%s', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,'%s',%s,'%s',%s,'%s','%s','%s','%s','%s')" % (bt_instance['instance_id'],features_list,train,model,strategy,bt_instance['start_date'],bt_instance['end_date'],str(init_cash),str(bt_instance['args']).replace("'",'"'),'history',returns,'logs',str(bt_instance['total_value']),str(risk['alpha']),str(risk['beta']),str(risk['annual_return']),str(risk['cagr']),str(risk['annual_volatility']),str(risk['info_ratio']),str(risk['downside_risk']),str(risk['R2']),str(risk['sharpe']),str(risk['sortino']),str(risk['calmar']),str(risk['omega']),str(risk['max_down']),str(risk['sqn']),filters_name,str(risk['win_ratio']),'woldy-PC',str(bt_instance['trade_num']),str(runtime),str(starttime),str(endtime),bench_returns,str(risk['roto']))       
 
     
-            if risk['annual_return']>tv and risk['sharpe']>2:
+            if risk['annual_return']>tv:
                 mydb.exec('delete from backtest where instance_id="%s"' % (bt_instance['instance_id']),'woldycvm')
                 mydb.exec(sql,'woldycvm')                
             mydb.exec('delete from backtest where instance_id="%s"' % (bt_instance['instance_id']),'finhack')
