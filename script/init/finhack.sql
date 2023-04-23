@@ -89,7 +89,7 @@ CREATE TABLE `backtest` (
   `simulate` int DEFAULT '0',
   PRIMARY KEY (`id`),
   UNIQUE KEY `instence_id` (`instance_id`)
-) ENGINE=InnoDB AUTO_INCREMENT=84931 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=84986 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -175,4 +175,4 @@ CREATE TABLE `factors_mining` (
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
--- Dump completed on 2023-04-23 18:56:21
+-- Dump completed on 2023-04-23 19:02:02
