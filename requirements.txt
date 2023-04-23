@@ -1,6 +1,7 @@
 asgiref==3.5.2
 channels==3.0.5
 DBUtils==3.0.2
+Django==3.2.3
 django_filter==21.1
 django_recaptcha==3.0.0
 django_restql==0.15.1
@@ -12,6 +13,7 @@ empyrical==0.5.5
 gplearn==0.4.2
 h5py==3.6.0
 lightgbm==3.3.5
+mysql_connector_repackaged==0.3.1
 numpy==1.23.1
 objgraph==3.5.0
 openpyxl==3.0.9
