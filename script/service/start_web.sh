@@ -8,3 +8,6 @@ cd http/web
 nohup npm run dev --finhack >> ../../data/logs/ui_frontend.log &
 cd ../backend/
 nohup python3 manage.py runserver 0.0.0.0:8801 >> ../../data/logs/ui_backend.log &
+
+
+#docsify serve 
