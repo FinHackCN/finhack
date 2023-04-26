@@ -349,11 +349,12 @@ class indicatorCompute():
         for i in range(1,len(factor)):
             factor[i]=int(factor[i])
 
-
-        df=func(df_price,factor)
-        if df.empty:
+        try:
+            df=func(df_price,factor)
+            if df.empty:
+                return False
+        except Exception as e:
             return False
-
 
         #给返回的因子加上后缀
         suffix=factor[1:]
