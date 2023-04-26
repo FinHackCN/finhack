@@ -199,8 +199,8 @@ class AStock:
           
           
             
-            first_adj=float(df_adj.head(1).adj_factor)
-            last_adj=float(df_adj.tail(1).adj_factor)
+            first_adj=float(df_adj.iloc[0].adj_factor)
+            last_adj=float(df_adj.iloc[-1].adj_factor)
             
             df_adj = pd.merge(calendar,df_adj, on='trade_date',how='left')
             
