@@ -89,13 +89,13 @@ market.load_dividend()
 market.load_price()
 
 while True:
-        with ProcessPoolExecutor(max_workers=27) as pool:
+        with ProcessPoolExecutor(max_workers=16) as pool:
                 model_list=mydb.selectToDf('select * from auto_train','finhack')
                 tasklist=[]
-                for init_cash in [20000]:
-                        for hold_day in  [3,5,7]:
-                                for hold_n in  [3,5,7]:
-                                        for strategy in ['aiTopN','aiTopNTR']:
+                for init_cash in [10000000]:
+                        for hold_day in  [10]:
+                                for hold_n in  [12,14,16,18,10]:
+                                        for strategy in ['IndexPlus3']:
                                                 for row in model_list.itertuples():
                                                         features_list=getattr(row,'features')
                                                         model_hash=getattr(row,'hash')

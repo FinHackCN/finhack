@@ -37,7 +37,7 @@ class preCheck():
         
         if len(check_list)>0:
             preCheck.checkIndicatorsType(check_list)
-        #preCheck.checkAlphas()  当前Alphas应该不会存在未来函数，跳过检测
+        preCheck.checkAlphas()  #当前Alphas应该不会存在未来函数，跳过检测
         preCheck.afterCheck()    
         print("checkAllFactors--End---")
         return check_list

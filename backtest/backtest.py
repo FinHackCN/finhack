@@ -229,7 +229,7 @@ class bt:
         
         if bt_instance['type']=='bt':
         
-            tv=0.3 #阈值
+            tv=0.1 #阈值
             if risk['annual_return']<tv:
                 returns='returns'
                 bench_returns='bench_returns'
@@ -784,7 +784,7 @@ class bt:
   
     
     def log(instance,msg,ts_code='',type='info'):
-        #return
+        return
         #print(msg)
   
         #type=warn,info,err,trade,sell

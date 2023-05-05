@@ -19,19 +19,16 @@ import gc
 import time
 import objgraph
 from library.globalvar import *
-# class BoundThreadPoolExecutor(ProcessPoolExecutor):
-#     """
-#     对ThreadPoolExecutor 进行重写，给队列设置边界
-#     """
-#     def __init__(self, qsize: int = None, *args, **kwargs):
-#         super(BoundThreadPoolExecutor, self).__init__(*args, **kwargs)
-#         self._work_queue = queue.Queue(qsize)
 
 class indicatorCompute():
-    def computeList(list_name,factor_list,c_list=[],db='tushare'):
+    def computeList(list_name='',factor_list=[],c_list=[],db='tushare'):
         code_list=AStock.getStockCodeList('tushare')
-        #mydb.exec("drop table if exists factors_"+list_name+"_tmp",'factors')
-        
+
+        if factor_list==[] and os.path.exists(CONFIG_DIR+"/factorlist/indicatorlist/"+list_name):
+            with open(CONFIG_DIR+"/factorlist/indicatorlist/"+list_name, 'r', encoding='utf-8') as f:
+                factor_list=[_.rstrip('\n') for _ in f.readlines()]
+
+
         
         n=30
         # if cpu_count()>2:
@@ -408,10 +405,10 @@ class indicatorCompute():
         
 
 
-    @lru_cache(None)
-    def getFactorList():
-        factor_list=mydb.selectToList('select * from factor_list','factors')
-        return factor_list
+    # @lru_cache(None)
+    # def getFactorList():
+    #     factor_list=mydb.selectToList('select * from factor_list','factors')
+    #     return factor_list
 
     
     @lru_cache(None)

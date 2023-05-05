@@ -29,6 +29,13 @@ class myfactors:
         df['totalMv']=df_basic['total_mv']
         df['circMv']=df_basic['circ_mv']
         return df
+        
+        
+    def xx123(df,p):
+        df['xx1']=p[0]
+        df['xx2']=p[1]
+        df['xx3']=df['open']
+        return df
 
     # def rim(df,p):
     #     df_rim=AStock.alignStockFactors(df,'stock_finhack_rim','date',filed='name,industry,value,value_end,value_max,vp,vep,vmp,rcount',conv=1,db='finhack')
