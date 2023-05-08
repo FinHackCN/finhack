@@ -3,7 +3,6 @@ import pandas as pd
 import sys
 import datetime
 import os
-from pandarallel import pandarallel
 sys.path.append("..")
 from concurrent.futures import ThreadPoolExecutor,ProcessPoolExecutor, wait, ALL_COMPLETED
 import traceback

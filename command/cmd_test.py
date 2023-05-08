@@ -14,20 +14,38 @@ import pickle
 from astock.indexHelper import indexHelper
 from backtest.backtest import bt
 from astock.market import market
-
+import bottleneck as bn
 from train.nntrain import nntrain
 #market.load_price()
 # ts_code='301138.SZ'
 # market.get_price(ts_code,'20211215',client=None)
 # market.get_price(ts_code,'20230414',client=None)
 # exit()
+pd.set_option("display.max_rows", 20)
+
+from factors.alphaEngine import alphaEngine
+#
+# df=alphaEngine.calc(formula="rank($low)",name="alpha",check=True)
+
+# print('rank_df')
+# print(df)
+# df=df.reset_index()
+# df=df[df.ts_code=='688981.SH']
+# print('rank_code_df')
+# print(df)
 
 
-
+df=alphaEngine.calc(formula="lowday($open,9)",name="alpha",check=True)
+print('alpha_df')
+print(df)
+df=df.reset_index()
+print('alpha_code_df')
+df=df[df.trade_date=='20230505']
+print(df)
  
 
 
-print(st_df_code)
+#print(st_df_code)
 
 
 exit()

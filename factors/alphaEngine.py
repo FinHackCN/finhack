@@ -6,6 +6,7 @@ import codegen
 import ast
 import time
 import builtins
+import bottleneck as bn
 import numpy as np
 from scipy.stats import rankdata
 from functools import reduce
@@ -18,6 +19,9 @@ np.seterr(all='ignore',over='ignore',divide='ignore')
 import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning) 
 from library.globalvar import *
+import numba
+
+from numba import float64
 
 class RewriteNode(ast.NodeTransformer):
     def visit_IfExp(self, node):
@@ -58,17 +62,6 @@ def and_trans(formula):
     return formula
 
 
-def rank(df):
-    if type(df)==type(()):
-        df=df[0]
-    df=df.groupby('trade_date').rank(pct=True)
-    if len(df.index.names)==3:
-        df=df.droplevel(1)
-    return df
-
-
-
-
 def coviance(x, y, window=10):
     return covariance(x, y, window)
     
@@ -86,6 +79,38 @@ def covariance(x, y, window=10):
         cov_all.append(cov)
     df=pd.concat(cov_all)
     return df
+    
+#   np的慢很多
+# def np_covariance(arr1,arr2, window):
+#     result = [0] * (window-1)
+#     n=len(arr1) - window + 1
+#     for i in range(n):
+#         xcov=np.cov(arr1[i:i+window],arr2[i:i+window])
+#         if not isinstance(xcov, bool):
+#             result.append(xcov[0, 1])
+#         else:
+#             result.append(0)
+#     return result
+ 
+# def covariance(x,y,window):
+#     window=int(window)
+#     grouped=x.groupby('ts_code')
+#     ts_all=[]
+#     for name,group in grouped:
+#         if len(group)<window:
+#             ts_array=np_covariance(np.nan_to_num(group.values),y.loc[name].values,len(group))
+#         else:
+#             ts_array=np_covariance(np.nan_to_num(group.values),y.loc[name].values,window)
+    
+#         ts_series=group
+#         ts_series.values[:] = ts_array
+#         ts_all.append(ts_series)
+        
+#     df=pd.concat(ts_all)    
+#     return df     
+    
+    
+    
 
 def corr(x, y, window=10):
     return correlation(x, y, window)
@@ -186,12 +211,32 @@ def sum(x,y=None):
         return builtins.sum(x)
     return ts_sum(x,y)
 
+# def ts_sum(df, window=10):
+#     window=int(window)
+#     df=df.groupby('ts_code').rolling(window=window,min_periods=minp(window)).sum()
+#     if len(df.index.names)==3:
+#         df=df.droplevel(1)
+#     return df
+
+
+
+
 def ts_sum(df, window=10):
     window=int(window)
-    df=df.groupby('ts_code').rolling(window=window,min_periods=minp(window)).sum()
-    if len(df.index.names)==3:
-        df=df.droplevel(1)
-    return df
+    grouped=df.groupby('ts_code')
+    ts_all=[]
+    for name,group in grouped:
+        if len(group)<window:
+            ts_array=bn.move_sum(group.values,len(group))
+        else:
+            ts_array=bn.move_sum(group.values,window)
+    
+        ts_series=group
+        ts_series.values[:] = ts_array
+        ts_all.append(ts_series)
+        
+    df=pd.concat(ts_all)    
+    return df     
 
 
 def delta(df, period=1):
@@ -215,57 +260,134 @@ def scale(df, k=1):
 def prod(df, window=10):
     return product(df,window)
 
+# def product(df, window=10):
+#     window=int(window)
+#     df=df.groupby('ts_code').rolling(window=window,min_periods = minp(window)).apply(np.prod)
+#     if len(df.index.names)==3:
+#         df=df.droplevel(1)
+#     return df
+
+
+#@numba.jit(nopython=True)
+def np_ts_prod(arr, window):
+    result = [0] * (window-1)
+    n=len(arr) - window + 1
+    for i in range(n):
+        # x=1
+        # arr2=arr[i:i+window]
+        # for number in arr2:
+        #     x = x*np.float64(number)
+        result.append(np.prod(arr[i:i+window]))
+    return result
+ 
+
+
 def product(df, window=10):
     window=int(window)
-    df=df.groupby('ts_code').rolling(window=window,min_periods = minp(window)).apply(np.prod)
-    if len(df.index.names)==3:
-        df=df.droplevel(1)
-    return df
+    grouped=df.groupby('ts_code')
+    ts_all=[]
+    for name,group in grouped:
+        if len(group)<window:
+            ts_array=np_ts_prod(np.nan_to_num(group.values),len(group))
+        else:
+            ts_array=np_ts_prod(np.nan_to_num(group.values),window)
+    
+        ts_series=group
+        ts_series.values[:] = ts_array
+        ts_all.append(ts_series)
+        
+    df=pd.concat(ts_all)    
+    return df   
 
+
+
+# def mean(df, window=10):
+#     window=int(window)
+#     df=df.groupby('ts_code').rolling(window).mean()
+#     if len(df.index.names)==3:
+#         df=df.droplevel(1)
+#     return df
+    
+    
 def mean(df, window=10):
     window=int(window)
-    df=df.groupby('ts_code').rolling(window).mean()
-    if len(df.index.names)==3:
-        df=df.droplevel(1)
-    return df
- 
-def smean(x,n,m):
-    return sma(x,n,m)   
-def sma(x,n,m=2):
-    x = x.fillna(0)
-    sma_all=[]
-    grouped=x.groupby('ts_code')
+    grouped=df.groupby('ts_code')
+    ts_all=[]
     for name,group in grouped:
-        res = group.copy()
-        for i in range(1,len(group)):
-            res.iloc[i] = (group.iloc[i]*m+group.iloc[i-1]*(n-m))/float(n)
-        res=pd.Series(res,index=group.index)
-        sma_all.append(res)
-    df=pd.concat(sma_all)    
-    return df
+        if len(group)<window:
+            ts_array=bn.move_mean(group.values,len(group))
+        else:
+            ts_array=bn.move_mean(group.values,window)
+    
+        ts_series=group
+        ts_series.values[:] = ts_array
+        ts_all.append(ts_series)
+        
+    df=pd.concat(ts_all)    
+    return df         
+    
+ 
+
 
 
 
 def tsmin(df, window=10):
     return ts_min(df,window)
     
-def ts_min(df, window=10):
-    window=int(window)
-    df=df.groupby('ts_code').rolling(window).min()
-    if len(df.index.names)==3:
-        df=df.droplevel(1)
-    return df
+# def ts_min(df, window=10):
+#     window=int(window)
+#     df=df.groupby('ts_code').rolling(window).min()
+#     if len(df.index.names)==3:
+#         df=df.droplevel(1)
+#     return df
     
     
 def tsmax(df, window=10):
     return ts_max(df,window)
     
+# def ts_max(df, window=10):
+#     window=int(window)
+#     df=df.groupby('ts_code').rolling(window).max()
+#     if len(df.index.names)==3:
+#         df=df.droplevel(1)
+#     return df 
+
+
+def ts_min(df, window=10):
+    window=int(window)
+    grouped=df.groupby('ts_code')
+    ts_all=[]
+    for name,group in grouped:
+        if len(group)<window:
+            ts_array=bn.move_min(group.values,len(group))
+        else:
+            ts_array=bn.move_min(group.values,window)
+    
+        ts_series=group
+        ts_series.values[:] = ts_array
+        ts_all.append(ts_series)
+        
+    df=pd.concat(ts_all)    
+    return df       
+
+
+
 def ts_max(df, window=10):
     window=int(window)
-    df=df.groupby('ts_code').rolling(window).max()
-    if len(df.index.names)==3:
-        df=df.droplevel(1)
-    return df 
+    grouped=df.groupby('ts_code')
+    ts_all=[]
+    for name,group in grouped:
+        if len(group)<window:
+            ts_array=bn.move_max(group.values,len(group))
+        else:
+            ts_array=bn.move_max(group.values,window)
+    
+        ts_series=group
+        ts_series.values[:] = ts_array
+        ts_all.append(ts_series)
+        
+    df=pd.concat(ts_all)    
+    return df     
 
 
 def delay_1(df):
@@ -293,14 +415,33 @@ def delay(df, period=1):
 
 def std(df, window=10):
     return stddev(df,window)
-def stddev(df, window=10):
-    df=df.groupby('ts_code').rolling(window).std()
-    if len(df.index.names)==3:
-        df=df.droplevel(1)
-    return df
+# def stddev(df, window=10):
+#     df=df.groupby('ts_code').rolling(window).std()
+#     if len(df.index.names)==3:
+#         df=df.droplevel(1)
+#     return df
  
 
- 
+
+
+def stddev(df, window=10):
+    window=int(window)
+    grouped=df.groupby('ts_code')
+    ts_all=[]
+    for name,group in grouped:
+        if len(group)<window:
+            ts_array=bn.move_std(group.values,len(group))
+        else:
+            ts_array=bn.move_std(group.values,window)
+    
+        ts_series=group
+        ts_series.values[:] = ts_array
+        ts_all.append(ts_series)
+        
+    df=pd.concat(ts_all)    
+    return df    
+
+
 
 def rolling_rank(na):
     return rankdata(na)[-1]
@@ -308,35 +449,274 @@ def rolling_rank(na):
 def tsrank(df, window=10):
     return ts_rank(df, window)
 
+
+
+
+
+# @numba.jit(nopython=True)
+# def nb_ts_rank2(np_array, window):
+#     n = len(np_array)
+#     ranks = np.zeros(n)
+
+#     for i in range(window - 1, n):
+#         sorted_data = np.argsort(-np_array[i-window+1:i+1])  # 对窗口内的数据进行降序排序
+#         rank = np.argsort(sorted_data) / (window-1)  # 计算排名百分比
+#         ranks[i] = rank[-1]  # 取最后一个元素作为当前时间点的排名百分比
+#     return ranks
+
+
 def ts_rank(df, window=10):
     window=int(window)
     grouped=df.groupby('ts_code')
-    rank_all=[]
+    ts_rank_all=[]
     for name,group in grouped:
-        rank=group.rolling(window)
-        #rank=group.rolling(window).apply(rolling_rank)
-        #这个好快
-        rank= group.rolling(window).apply(lambda z: np.nan if np.all(np.isnan(z)) else ((rankdata(z[~np.isnan(z)])[-1] -1) * (len(z)-1) / (len(z[~np.isnan(z)]) - 1) + 1), raw = True)
+        # rank=group.rolling(window)
+        # rank= group.rolling(window).apply(lambda z: np.nan if np.all(np.isnan(z)) else ((rankdata(z[~np.isnan(z)])[-1] -1) * (len(z)-1) / (len(z[~np.isnan(z)]) - 1) + 1), raw = True)
+        if len(group)<window:
+            ts_rank_array=bn.move_rank(group.values,len(group))
+        else:
+            ts_rank_array=bn.move_rank(group.values,window)
+    
+        ts_rank_series=group
+        ts_rank_series.values[:] = ts_rank_array
+        ts_rank_all.append(ts_rank_series)
         
-        rank_all.append(rank)
-    df=pd.concat(rank_all)    
+    df=pd.concat(ts_rank_all)    
     return df
+  
+
+# @numba.jit(nopython=True)
+# def np_rank(arr):
+#     sort_order = arr.argsort()
+#     # 计算元素的排名
+#     ranks = np.empty_like(sort_order)
+#     ranks[sort_order] = np.arange(len(arr))
+#     # 将排名转换为百分位排名
+#     percentile_ranks = ranks / float(len(arr))
+#     return percentile_ranks
+
+# def rank(df, window=10):
+#     if type(df)==type(()):
+#         df=df[0]
+#     grouped=df.groupby('trade_date')
+#     rank_all=[]
+#     for name,group in grouped:
+#         #rank_array=np_rank()
+#         rank_array=bn.rankdata(group.values)
+#         rank_array=rank_array/len(rank_array)
+#         rank_series=group
+#         rank_series.values[:] = rank_array
+#         rank_all.append(rank_series)
+#     df=pd.concat(rank_all)    
+#     return df 
+
+#pandas的rank就挺快
+def rank(df):
+    if type(df)==type(()):
+        df=df[0] 
+    df=df.groupby('trade_date').rank(pct=True)
+    if len(df.index.names)==3:
+        df=df.droplevel(1)
+    return df  
+    
+ 
+
+ 
+ 
+
+# def ts_argmax(df, window=10):
+#     window=int(window)
+#     df=df.groupby('ts_code').rolling(window).apply(np.argmax) + 1 
+#     if len(df.index.names)==3:
+#         df=df.droplevel(1)
+#     return df
+        
+        
+def ts_argmax(df, window=10):
+    window=int(window)
+    grouped=df.groupby('ts_code')
+    ts_all=[]
+    for name,group in grouped:
+        if len(group)<window:
+            ts_array=bn.move_argmax(group.values,len(group))
+        else:
+            ts_array=bn.move_argmax(group.values,window)
+    
+        ts_series=group
+        ts_series.values[:] = ts_array
+        ts_all.append(ts_series)
+        
+    df=pd.concat(ts_all)    
+    return df        
+        
+        
+        
+
+# def ts_argmin(df, window=10):
+#     window=int(window)
+#     df=df.groupby('ts_code').rolling(window).apply(np.argmin) + 1    
+#     if len(df.index.names)==3:
+#         df=df.droplevel(1)    
+#     return df
+    
+def ts_argmin(df, window=10):
+    window=int(window)
+    grouped=df.groupby('ts_code')
+    ts_all=[]
+    for name,group in grouped:
+        if len(group)<window:
+            ts_array=bn.move_argmin(group.values,len(group))
+        else:
+            ts_array=bn.move_argmin(group.values,window)
+    
+        ts_series=group
+        ts_series.values[:] = ts_array
+        ts_all.append(ts_series)
+        
+    df=pd.concat(ts_all)    
+    return df       
+        
+        
+def decay_linear(A,n):
+    return decaylinear(A,n)
     
     
 
-def ts_argmax(df, window=10):
+# def decaylinear(A,n):
+#     n=int(n)
+#     grouped=A.groupby('ts_code')
+#     dl_all=[]
+#     w = np.arange(n,0,-1) 
+#     w = w/w.sum()
+#     for name,group in grouped:
+#         dl=group.rolling(n).apply(lambda x: (x * w).sum()).fillna(method = 'ffill')
+#         dl_all.append(dl)
+#     df=pd.concat(dl_all)  
+#     return df
+    
+    
+def np_decaylinear(arr, window):
+    w = np.arange(window,0,-1) 
+    w = w/w.sum()    
+    result = [0] * (window-1)
+    n=len(arr) - window + 1
+    for i in range(n):
+        result.append((arr[i:i+window] * w).sum())
+    return result
+ 
+
+
+def decaylinear(df,window):
     window=int(window)
-    df=df.groupby('ts_code').rolling(window).apply(np.argmax) + 1 
-    if len(df.index.names)==3:
-        df=df.droplevel(1)
-    return df
+    grouped=df.groupby('ts_code')
+    ts_all=[]
+    for name,group in grouped:
+        if len(group)<window:
+            ts_array=np_decaylinear(np.nan_to_num(group.values),len(group))
+        else:
+            ts_array=np_decaylinear(np.nan_to_num(group.values),window)
+    
+        ts_series=group
+        ts_series.values[:] = ts_array
+        ts_all.append(ts_series)
         
-def ts_argmin(df, window=10):
+    df=pd.concat(ts_all)    
+    return df     
+    
+    
+    
+def sign(x):
+    return np.sign(x)
+
+    
+def signedpower(x,t):
+    return np.sign(x)*(np.abs(x)**t)    
+  
+def sequence(n):
+    return np.arange(1,n+1)    
+    
+    
+    
+    
+    
+def np_wma(arr, window):
+    w = np.arange(window,0,-1) 
+    w = w/w.sum()    
+    result = [0] * (window-1)
+    n=len(arr) - window + 1
+    for i in range(n):
+        result.append((arr[i:i+window] * w).sum())
+    return result
+ 
+
+
+def wma(df,window):
     window=int(window)
-    df=df.groupby('ts_code').rolling(window).apply(np.argmin) + 1    
-    if len(df.index.names)==3:
-        df=df.droplevel(1)    
-    return df
+    grouped=df.groupby('ts_code')
+    ts_all=[]
+    for name,group in grouped:
+        if len(group)<window:
+            ts_array=np_wma(np.nan_to_num(group.values),len(group))
+        else:
+            ts_array=np_wma(np.nan_to_num(group.values),window)
+    
+        ts_series=group
+        ts_series.values[:] = ts_array
+        ts_all.append(ts_series)
+        
+    df=pd.concat(ts_all)    
+    return df      
+    
+    
+    
+    
+    
+def lowday(df,window=10):
+    grouped=df.groupby('ts_code')
+    ld_all=[]
+    for name,A in grouped:
+        ld=(window-1) - A.rolling(window).apply(lambda x: np.argsort(x)[0]).fillna(method = 'ffill')
+        ld_all.append(ld)
+    df=pd.concat(ld_all)      
+    return df   
+    
+    
+    
+    
+# def np_lowday(arr, window):
+#     result = [0] * (window-1)
+#     n=len(arr1) - window + 1
+#     for i in range(n):
+#         x=(window-1) -  np.argsort(arr1[i:i+window])[0]
+#         result.append(x)
+#     return result
+    
+    
+# def lowday(df,window):
+#     window=int(window)
+#     grouped=df.groupby('ts_code')
+#     ts_all=[]
+#     for name,group in grouped:
+#         if len(group)<window:
+#             ts_array=np_lowday(np.nan_to_num(group.values),len(group))
+#         else:
+#             ts_array=np_lowday(np.nan_to_num(group.values),window)
+    
+#         ts_series=group
+#         ts_series.values[:] = ts_array
+#         ts_all.append(ts_series)
+        
+#     df=pd.concat(ts_all)    
+#     return df         
+    
+    
+    
+    
+#--------------------------
+
+    
+    
+    
     
 def count(condition, n):
     grouped=condition.groupby('ts_code')
@@ -349,16 +729,7 @@ def count(condition, n):
     return df
     
     
-def sign(x):
-    return np.sign(x)
 
-
-    
-def signedpower(x,t):
-    return np.sign(x)*(np.abs(x)**t)    
-  
-def sequence(n):
-    return np.arange(1,n+1)
   
 def regbeta(A,B,n=None):
     if n==None:
@@ -381,45 +752,29 @@ def rapply(a, b, c):
     else:
         temp = pd.rolling_apply(a, b, c, min_periods=b)
     return temp
-    
-def decay_linear(A,n):
-    return decaylinear(A,n)
-def decaylinear(A,n):
-    n=int(n)
-    grouped=A.groupby('ts_code')
-    dl_all=[]
-    w = np.arange(n,0,-1) 
-    w = w/w.sum()
+   
+
+
+
+def smean(x,n,m):
+    return sma(x,n,m)   
+def sma(x,n,m=2):
+    x = x.fillna(0)
+    sma_all=[]
+    grouped=x.groupby('ts_code')
     for name,group in grouped:
-        dl=group.rolling(n).apply(lambda x: (x * w).sum()).fillna(method = 'ffill')
-        dl_all.append(dl)
-    df=pd.concat(dl_all)  
+        res = group.copy()
+        for i in range(1,len(group)):
+            res.iloc[i] = (group.iloc[i]*m+group.iloc[i-1]*(n-m))/float(n)
+        res=pd.Series(res,index=group.index)
+        sma_all.append(res)
+    df=pd.concat(sma_all)    
     return df
-    
-    
-    
-    
-def wma(df,n):
-    grouped=df.groupby('ts_code')
-    wma_all=[]
-    w = np.arange(1, n+1) * 0.9
-    w = w/w.sum()    
-    for name,A in grouped:
-        wma=A.rolling(n).apply(lambda x: (x * w).sum()).fillna(method = 'ffill')
-        wma_all.append(wma)
-    df=pd.concat(wma_all)      
-    return df    
 
 
- 
-def lowday(df,window=10):
-    grouped=df.groupby('ts_code')
-    ld_all=[]
-    for name,A in grouped:
-        ld=(window-1) - A.rolling(window).apply(lambda x: np.argsort(x)[0]).fillna(method = 'ffill')
-        ld_all.append(ld)
-    df=pd.concat(ld_all)      
-    return df   
+   
+
+
 
  
 
@@ -510,7 +865,7 @@ class alphaEngine():
             # print(df)
             # print(col_list)
             if df.empty:
-                df=factorManager.getFactors(factor_list=col_list)
+                df=factorManager.getFactors(factor_list=col_list,cache=True)
                 
        
             # print(df)  
