@@ -9,7 +9,6 @@ import pandas as pd
 import numpy as np
 import traceback
 from library.mydb import mydb
-from pandarallel import pandarallel
 sys.path.append("..")
 from library.globalvar import *
 from concurrent.futures import ThreadPoolExecutor,ProcessPoolExecutor, wait, ALL_COMPLETED
@@ -89,15 +88,13 @@ class factorManager:
         for factor in factor_list:
             factor=factor.replace('$','')
             if os.path.isfile(SINGLE_FACTORS_DIR+factor+'.csv'):
-                df=pd.read_csv(SINGLE_FACTORS_DIR+factor+'.csv',names=['ts_code','trade_date',factor], dtype={'ts_code': str,'trade_date': str, factor: np.float64},low_memory=False)
-                df=df.dropna(subset=['ts_code','trade_date'])
-                #df=df.dropna()
-                #df=df.set_index(['ts_code','trade_date'])
+                # df=pd.read_csv(SINGLE_FACTORS_DIR+factor+'.csv',names=['ts_code','trade_date',factor], dtype={'ts_code': str,'trade_date': str, factor: np.float64},low_memory=False)
+                # df=df.dropna(subset=['ts_code','trade_date'])
+                # df=df.sort_values(['ts_code','trade_date'])
+                # df=df.set_index(['ts_code','trade_date'])
                 
-                df=df.sort_values(['ts_code','trade_date'])
-                df=df.set_index(['ts_code','trade_date'])
-                #df[factor]= df[factor].astype('float16')
-             
+                df=pd.read_csv(SINGLE_FACTORS_DIR+factor+'.csv',names=['ts_code','trade_date',factor], dtype={'ts_code': str,'trade_date': str, factor: np.float64},index_col=['ts_code','trade_date'],low_memory=False)
+
                 if df_factor.empty:
                     df_factor=df
                 else:
@@ -111,30 +108,32 @@ class factorManager:
                 print(SINGLE_FACTORS_DIR+factor+'.csv not found')
         
         
-        df_factor=df_factor.reset_index() 
+        
         
         if df_factor.empty:
             return df_factor
-        
-        if stock_list!=[]:
-            df_list=[]
-            for ts_code in stock_list:
-                df_tmp=df_factor[df_factor.ts_code==ts_code]
-                df_list.append(df_tmp)
-            df_factor=pd.concat(df_list)
             
-        if start_date!="":
-            df_factor=df_factor[df_factor.trade_date>=start_date]
-        
-        if end_date!="":
-            df_factor=df_factor[df_factor.trade_date<=end_date]
-          
-        #print(df_factor)
-        df_factor=df_factor.set_index(['ts_code','trade_date'])  
+            
+        if  stock_list!=[] or start_date!="" or end_date!="":
+            df_factor=df_factor.reset_index() 
+            if stock_list!=[]:
+                df_list=[]
+                for ts_code in stock_list:
+                    df_tmp=df_factor[df_factor.ts_code==ts_code]
+                    df_list.append(df_tmp)
+                df_factor=pd.concat(df_list)
+                
+            if start_date!="":
+                df_factor=df_factor[df_factor.trade_date>=start_date]
+            
+            if end_date!="":
+                df_factor=df_factor[df_factor.trade_date<=end_date]
+            df_factor=df_factor.set_index(['ts_code','trade_date'])  
+            
         if cache:
             df_factor.to_pickle(cache_file)
             
- 
+        df_factor=df_factor.sort_index()
         return df_factor    
     
     

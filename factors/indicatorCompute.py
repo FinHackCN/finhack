@@ -7,7 +7,6 @@ import os
 from importlib import import_module
 import re
 import datetime
-from pandarallel import pandarallel
 import numpy as np
 from functools import lru_cache
 import warnings

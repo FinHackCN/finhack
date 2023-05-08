@@ -35,7 +35,7 @@ class factorAnalyzer():
             IR_list=[]
             
             print("factor_name:"+factor_name)
-            
+            df = df.replace([np.inf, -np.inf], np.nan)
             df=df.dropna()
   
             desc=df[factor_name].describe()
