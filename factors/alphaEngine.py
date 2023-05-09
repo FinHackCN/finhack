@@ -521,7 +521,15 @@ def rank(df):
     
  
 
- 
+
+# def rapply(a, b, c):
+#     if str(pd.__version__) >= '0.23.0':
+#         temp = a.rolling(b, min_periods=b).apply(c, raw=True)
+#     elif str(pd.__version__) >= '0.19.0':
+#         temp = a.rolling(b, min_periods=b).apply(c)
+#     else:
+#         temp = pd.rolling_apply(a, b, c, min_periods=b)
+#     return temp
  
 
 # def ts_argmax(df, window=10):
@@ -577,6 +585,21 @@ def ts_argmin(df, window=10):
     return df       
         
         
+
+    
+    
+    
+def sign(x):
+    return np.sign(x)
+
+    
+def signedpower(x,t):
+    return np.sign(x)*(np.abs(x)**t)    
+  
+def sequence(n):
+    return np.arange(1,n+1)    
+    
+    
 def decay_linear(A,n):
     return decaylinear(A,n)
     
@@ -605,7 +628,7 @@ def np_decaylinear(arr, window):
     return result
  
 
-
+#这里decaylinear和wma的实现一样了，待修改
 def decaylinear(df,window):
     window=int(window)
     grouped=df.groupby('ts_code')
@@ -621,22 +644,7 @@ def decaylinear(df,window):
         ts_all.append(ts_series)
         
     df=pd.concat(ts_all)    
-    return df     
-    
-    
-    
-def sign(x):
-    return np.sign(x)
-
-    
-def signedpower(x,t):
-    return np.sign(x)*(np.abs(x)**t)    
-  
-def sequence(n):
-    return np.arange(1,n+1)    
-    
-    
-    
+    return df         
     
     
 def np_wma(arr, window):
@@ -671,91 +679,183 @@ def wma(df,window):
     
     
     
-def lowday(df,window=10):
-    grouped=df.groupby('ts_code')
-    ld_all=[]
-    for name,A in grouped:
-        ld=(window-1) - A.rolling(window).apply(lambda x: np.argsort(x)[0]).fillna(method = 'ffill')
-        ld_all.append(ld)
-    df=pd.concat(ld_all)      
-    return df   
-    
-    
-    
-    
-# def np_lowday(arr, window):
-#     result = [0] * (window-1)
-#     n=len(arr1) - window + 1
-#     for i in range(n):
-#         x=(window-1) -  np.argsort(arr1[i:i+window])[0]
-#         result.append(x)
-#     return result
-    
-    
-# def lowday(df,window):
-#     window=int(window)
+# def lowday(df,window=10):
 #     grouped=df.groupby('ts_code')
-#     ts_all=[]
+#     ld_all=[]
+#     for name,A in grouped:
+#         ld=(window-1) - A.rolling(window).apply(lambda x: np.argsort(x)[0]).fillna(method = 'ffill')
+#         ld_all.append(ld)
+#     df=pd.concat(ld_all)      
+#     return df   
+    
+    
+
+    
+    
+def np_lowday(arr, window):
+    result = [0] * (window-1)
+    n=len(arr) - window + 1
+    for i in range(n):
+        x=(window-1) -  np.argsort(arr[i:i+window])[0]
+        result.append(x)
+    return result
+    
+    
+def lowday(df,window):
+    window=int(window)
+    grouped=df.groupby('ts_code')
+    ts_all=[]
+    for name,group in grouped:
+        if len(group)<window:
+            ts_array=np_lowday(np.nan_to_num(group.values),len(group))
+        else:
+            ts_array=np_lowday(np.nan_to_num(group.values),window)
+    
+        ts_series=group
+        ts_series.values[:] = ts_array
+        ts_all.append(ts_series)
+        
+    df=pd.concat(ts_all)    
+    return df         
+    
+    
+    
+    
+# def highday(df,window=10):
+#     grouped=df.groupby('ts_code')
+#     hd_all=[]
+#     for name,A in grouped:
+#         hd=(window-1) - A.rolling(window).apply(lambda x: np.argsort(x)[window-1]).fillna(method = 'ffill')
+#         hd_all.append(hd)
+#     df=pd.concat(hd_all)      
+#     return df       
+    
+    
+    
+def np_highday(arr, window):
+    result = [0] * (window-1)
+    n=len(arr) - window + 1
+    for i in range(n):
+        x=(window-1) -  np.argsort(arr[i:i+window])[window-1]
+        result.append(x)
+    return result
+    
+    
+def highday(df,window):
+    window=int(window)
+    grouped=df.groupby('ts_code')
+    ts_all=[]
+    for name,group in grouped:
+        if len(group)<window:
+            ts_array=np_highday(np.nan_to_num(group.values),len(group))
+        else:
+            ts_array=np_highday(np.nan_to_num(group.values),window)
+    
+        ts_series=group
+        ts_series.values[:] = ts_array
+        ts_all.append(ts_series)
+        
+    df=pd.concat(ts_all)    
+    return df         
+    
+    
+    
+
+#这个实现可能有问题  
+# def sumif(df, window, condition):
+#     grouped=df.groupby('ts_code')
+#     s_all=[]
+#     for name,A in grouped:
+#         s=A*condition.loc[name].rolling(window=window,center = False, min_periods = minp(window)).sum().fillna(method = 'ffill')
+#     s_all.append(s)
+#     df=pd.concat(s_all)      
+#     return df       
+
+ 
+def np_sumif(arr,condition,window):
+    result = [0] * (window-1)
+    n=len(arr) - window + 1
+    for i in range(n):
+        x=np.sum(condition[i:i+window]*arr[i:i+window])
+        result.append(x)
+    return result
+
+def sumif(df,window,condition):
+    window=int(window)
+    grouped=df.groupby('ts_code')
+    ts_all=[]
+    for name,group in grouped:
+        if len(group)<window:
+            ts_array=np_sumif(np.nan_to_num(group.values),condition.loc[name].values,len(group))
+        else:
+            ts_array=np_sumif(np.nan_to_num(group.values),condition.loc[name].values,window)
+    
+        ts_series=group
+        ts_series.values[:] = ts_array
+        ts_all.append(ts_series)
+        
+    df=pd.concat(ts_all)    
+    return df    
+    
+    
+    
+# def regbeta(A,B,n=None):
+#     if n==None:
+#         n=len(B)
+        
+#     grouped=A.groupby('ts_code')
+#     rb_all=[]
 #     for name,group in grouped:
-#         if len(group)<window:
-#             ts_array=np_lowday(np.nan_to_num(group.values),len(group))
-#         else:
-#             ts_array=np_lowday(np.nan_to_num(group.values),window)
-    
-#         ts_series=group
-#         ts_series.values[:] = ts_array
-#         ts_all.append(ts_series)
-        
-#     df=pd.concat(ts_all)    
-#     return df         
+#         rb = group.rolling(window = n, center = False).apply(lambda x: np.cov(x, B)[0][1]/np.var(B))
+#         rb_all.append(rb)
+#     df=pd.concat(rb_all)  
+#     return df    
     
     
     
     
-#--------------------------
+def np_regbeta(arr,B,window):
+    result = [0] * (window-1)
+    n=len(arr) - window + 1
+    try:
+        for i in range(n):
+            if len(arr[i:i+window])<len(B):
+                x=np.cov(arr[i:i+window], B[:len(arr[i:i+window])])[0][1]/np.var(B[:len(arr[i:i+window])])
+            else:
+                x=np.cov(arr[i:i+window], B)[0][1]/np.var(B)
+            result.append(x)
+    except Exception as e:
+        print(arr)
+        print(B)
+        print(window)
+    return result
 
-    
-    
-    
-    
-def count(condition, n):
-    grouped=condition.groupby('ts_code')
-    c_all=[]
-    for name,group in grouped:
-        cache = group.fillna(0)#now condition is the boolean DataFrame/Series/Array
-        c=cache.rolling(window = n, center = False, min_periods=minp(n) ).sum()    
-        c_all.append(c)
-    df=pd.concat(c_all) 
-    return df
-    
-    
-
-  
-def regbeta(A,B,n=None):
-    if n==None:
-        n=len(B)
-        
+def regbeta(A,B,window=0):
+    window=int(window)
     grouped=A.groupby('ts_code')
-    rb_all=[]
+    ts_all=[]
     for name,group in grouped:
-        rb = group.rolling(window = n, center = False).apply(lambda x: np.cov(x, B)[0][1]/np.var(B))
-        rb_all.append(rb)
-    df=pd.concat(rb_all)  
-    return df
+        if window==0:
+            tmp_window=len(B)
+        else:
+            tmp_window=window
+        if len(group)<tmp_window:
+            tmp_window=len(group)
+        
+        ts_array=np_regbeta(np.nan_to_num(group.values),B,tmp_window)
     
-
-def rapply(a, b, c):
-    if str(pd.__version__) >= '0.23.0':
-        temp = a.rolling(b, min_periods=b).apply(c, raw=True)
-    elif str(pd.__version__) >= '0.19.0':
-        temp = a.rolling(b, min_periods=b).apply(c)
-    else:
-        temp = pd.rolling_apply(a, b, c, min_periods=b)
-    return temp
-   
-
-
-
+        ts_series=group
+        ts_series.values[:] = ts_array
+        ts_all.append(ts_series)
+        
+    df=pd.concat(ts_all)    
+    return df      
+    
+    
+    
+    
+    
+    
 def smean(x,n,m):
     return sma(x,n,m)   
 def sma(x,n,m=2):
@@ -769,33 +869,58 @@ def sma(x,n,m=2):
         res=pd.Series(res,index=group.index)
         sma_all.append(res)
     df=pd.concat(sma_all)    
-    return df
-
-
-   
-
-
-
+    return df    
+    
+    
+    
+    
+    
+    
+def np_sma(arr, n,m):
+    result=[arr[0]]
+    for i in range(1,len(arr)):
+        result.append((arr[i]*m+arr[i-1] * (n-m))/float(n))
+    return result
  
 
-def highday(df,window=10):
+
+def sma(df,n,m=2):
     grouped=df.groupby('ts_code')
-    hd_all=[]
-    for name,A in grouped:
-        hd=(window-1) - A.rolling(window).apply(lambda x: np.argsort(x)[window-1]).fillna(method = 'ffill')
-        hd_all.append(hd)
-    df=pd.concat(hd_all)      
-    return df   
+    ts_all=[]
+    for name,group in grouped:
+        ts_array=np_sma(group.values,n,m)
+    
+        ts_series=group
+        ts_series.values[:] = ts_array
+        ts_all.append(ts_series)
+        
+    df=pd.concat(ts_all)    
+    return df       
+    
+#--------------------------
 
-
+#这些速度还行，暂不优化
+def count(condition, n):
+    grouped=condition.groupby('ts_code')
+    c_all=[]
+    for name,group in grouped:
+        cache = group.fillna(0)#now condition is the boolean DataFrame/Series/Array
+        c=cache.rolling(window = n, center = False, min_periods=minp(n) ).sum()    
+        c_all.append(c)
+    df=pd.concat(c_all) 
+    return df
+    
+    
 def sumac(df, window=10):
     grouped=df.groupby('ts_code')
     s_all=[]
     for name,A in grouped:
         s=A.rolling(window=window,min_periods = minp(window)).sum().fillna(method = 'ffill')
-    s_all.append(s)
+        s_all.append(s)
     df=pd.concat(s_all)      
-    return df   
+    return df     
+
+    
 
 
 def minp(d):
@@ -810,14 +935,7 @@ def minp(d):
     else:
         return d * 2 // 3
  
-def sumif(df, window, condition):
-    grouped=df.groupby('ts_code')
-    s_all=[]
-    for name,A in grouped:
-        s=A*condition.loc[name].rolling(window=window,center = False, min_periods = minp(window)).sum().fillna(method = 'ffill')
-    s_all.append(s)
-    df=pd.concat(s_all)      
-    return df   
+
  
 
 
@@ -866,7 +984,8 @@ class alphaEngine():
             # print(col_list)
             if df.empty:
                 df=factorManager.getFactors(factor_list=col_list,cache=True)
-                
+            else:
+                df=df.sort_index()
        
             # print(df)  
             # print(diff_date)

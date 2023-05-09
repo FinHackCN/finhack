@@ -35,7 +35,12 @@ from factors.alphaEngine import alphaEngine
 # print(df)
 
 
-df=alphaEngine.calc(formula="lowday($open,9)",name="alpha",check=True)
+df=alphaEngine.calc(formula="mean($volume,20)",name="alpha",check=True)
+df2=alphaEngine.calc(formula="$volume",name="alpha",check=True)
+print(df>df2)
+exit()
+
+
 print('alpha_df')
 print(df)
 df=df.reset_index()
