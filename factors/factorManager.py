@@ -130,10 +130,12 @@ class factorManager:
                 df_factor=df_factor[df_factor.trade_date<=end_date]
             df_factor=df_factor.set_index(['ts_code','trade_date'])  
             
+  
+        df_factor=df_factor.sort_index()
         if cache:
             df_factor.to_pickle(cache_file)
             
-        df_factor=df_factor.sort_index()
+        
         return df_factor    
     
     
