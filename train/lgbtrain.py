@@ -5,6 +5,7 @@ import math
 from library.mydb import mydb
 import hashlib
 import lightgbm as lgb
+#from lightgbm import numpy_interface as lgb
 from math import e
 import traceback
 import os
@@ -13,6 +14,7 @@ from factors.alphaEngine import alphaEngine
 from strategies.filters import filters
 from train.trainhelper import trainhelper
 from library.globalvar import *
+from library.config import config
 
 class lgbtrain:
     def score_mv(x,shift,md5):
@@ -65,6 +67,8 @@ class lgbtrain:
 
 
     def train(data_train,data_valid,data_path='/tmp',md5='test',loss="ds",param={}):
+        
+        cfg=config.getConfig('train','lightgbm')
         # 参数设置
         params = {
                 'boosting_type': 'gbdt',
@@ -78,7 +82,7 @@ class lgbtrain:
                 'verbose': -1,  # <0 显示致命的, =0 显示错误 (警告), >0 显示信息
                 # 'lambda_l1':0,
                 # 'lambda_l2':0, 
-                "device" : "gpu"
+                "device" : cfg['device']
         }   
         
         

@@ -31,6 +31,10 @@ class factorAnalyzer():
             df=df.set_index(['ts_code','trade_date'])
             
             
+            # print(df)
+            
+            
+            
             IC_list=[]
             IR_list=[]
             
@@ -40,6 +44,8 @@ class factorAnalyzer():
   
             desc=df[factor_name].describe()
             
+            # print(df)
+            # exit()
             
             if desc['mean']==desc['max']:
                 if factor_name!='alpha':

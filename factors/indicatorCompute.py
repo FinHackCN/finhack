@@ -26,6 +26,10 @@ class indicatorCompute():
         if factor_list==[] and os.path.exists(CONFIG_DIR+"/factorlist/indicatorlist/"+list_name):
             with open(CONFIG_DIR+"/factorlist/indicatorlist/"+list_name, 'r', encoding='utf-8') as f:
                 factor_list=[_.rstrip('\n') for _ in f.readlines()]
+        
+        for i in range(len(factor_list)):
+            if not '_' in factor_list[i]:
+                factor_list[i]=factor_list[i]+'_0'
 
 
         
@@ -314,6 +318,7 @@ class indicatorCompute():
             #df_result=df_price.copy()
         if(df_price.empty):
             return pd.DataFrame()
+        
 
         indicators,func_name,code,return_fileds=indicatorCompute.getFactorInfo(factor_name)
 
