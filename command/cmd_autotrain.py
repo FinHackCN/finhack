@@ -32,10 +32,10 @@ print(sys.argv)
 
 while True:
         try:
-            #flist=factorManager.getTopAnalysedFactorsList(top=300)
+            flist=factorManager.getTopAnalysedFactorsList(top=200)
             
-            with open(CONFIG_DIR+"/factorlist/trainlist/autotrain", 'r', encoding='utf-8') as f:
-                flist=[_.rstrip('\n') for _ in f.readlines()]
+            # with open(CONFIG_DIR+"/factorlist/trainlist/autotrain", 'r', encoding='utf-8') as f:
+            #     flist=[_.rstrip('\n') for _ in f.readlines()]
 
             
             random.shuffle(flist)
