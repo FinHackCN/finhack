@@ -16,50 +16,67 @@ from concurrent.futures import ThreadPoolExecutor,ProcessPoolExecutor, wait, ALL
 
 class factorManager:
     #获取
-    def getAnalysedIndicatorsList(valid=True):
-        flist=mydb.selectToDf('select * from factors_analysis where factor_name not like "alpha%"','finhack')
-        flist=flist['factor_name'].tolist()
-        return flist
+    def getAnalysedIndicatorsList(top=200,valid=True):
+        flist1=mydb.selectToDf('select * from factors_analysis where factor_name not like "alpha%"','finhack')
+        flist1=flist1['factor_name'].tolist()
+        result=[]
+        if valid==True:
+            flist2=mydb.selectToDf('select * from factors_list where check_type=11','finhack')   
+            flist2=flist2['factor_name'].values
+            
+            for factor in flist1:
+                factor_name=factor.split('_')[0]
+                if factor_name in flist2:
+                    result.append(factor)
+            
+        else:
+            result=flist1
+        return result
         
-    def getTopAnalysedFactorsList(valid=True,top=200):
-        flist=mydb.selectToDf('select * from factors_analysis order by score desc limit '+str(top),'finhack')
-        flist=flist['factor_name'].tolist()
-        return flist 
+    def getTopAnalysedFactorsList(top=200,valid=True):
+        flist1=mydb.selectToDf('select * from factors_analysis order by score desc limit '+str(top),'finhack')
+        flist1=flist1['factor_name'].tolist()
+        result=[]
+        if valid==True:
+            flist2=mydb.selectToDf('select * from factors_list where check_type=11','finhack')   
+            flist2=flist2['factor_name'].values
+            
+            for factor in flist1:
+                factor_name=factor.split('_')[0]
+                if factor_name in flist2:
+                    result.append(factor)
+            
+        else:
+            result=flist1
+        return result
     
     
     #获取因子列表
     def getFactorsList(valid=True,ignore=True):
-        factorslist=[]
+        flist1=[]
         result=[]
         ignore_list=[]
         if ignore:
             ignore_list=['close','vol','volume','open','low','high','pct_chg','amount','pre_close','vwap','stop','lh']
         for subfile in os.listdir(SINGLE_FACTORS_DIR):
             if not '__' in subfile and not subfile.replace('.csv','') in ignore_list:
-                factorslist.append(subfile.replace('.csv',''))
+                flist1.append(subfile.replace('.csv',''))
                 
  
                 
+        result=[]
         if valid==True:
-            flist=mydb.selectToDf('select * from factors_list where check_type=11','finhack')
- 
+            flist2=mydb.selectToDf('select * from factors_list where check_type=11','finhack')   
+            flist2=flist2['factor_name'].values
             
-            for factor in factorslist:
-                if 'alpha' in factor:
-                    factor_name=factor
-                    pass
-                else:
-                    factor_name=factor.split('_')[0]
-                factor_df=flist[flist.factor_name==factor_name]
-                if factor_df.empty:
-                    continue
-                else:
-                    check_type=factor_df['check_type'].values
-                    if len(check_type)==0 or check_type[0]!=11:
-                        continue
-                result.append(factor)
-            factorslist=result
-        return factorslist
+            for factor in flist1:
+                factor_name=factor.split('_')[0]
+                if factor_name in flist2:
+                    result.append(factor)
+            
+        else:
+            result=flist1
+        return result
     
     
     
