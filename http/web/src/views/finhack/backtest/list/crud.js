@@ -101,7 +101,7 @@ export const crudOptions = (vm) => {
       },
       {
         title: '最大回撤',
-        key: 'max_down',
+        key: 'p_max_down',
         width: 90,
         form: {
           disabled: true

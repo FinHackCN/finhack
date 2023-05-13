@@ -17,6 +17,7 @@
     "axios": "^0.19.0",
     "axios-mock-adapter": "^1.18.1",
     "better-scroll": "^1.15.2",
+    "chart.js": "^2.7.2",
     "china-division": "^2.4.0",
     "core-js": "^3.4.3",
     "cropperjs": "^1.5.6",

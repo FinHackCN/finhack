@@ -8,6 +8,8 @@ router.register("backtest", BacktestModelViewSet)
 
 #path('my-view/', my_view, {'http_method': 'get'}, name='my-view-get'),
 urlpatterns = [
-    path('signal/', signal)
+    path('signal/', signal),
+    # path("backtest/", BacktestModelViewSet.as_view({'get': 'list'}))
+    # path("backtest/<int:id>", BacktestModelViewSet.as_view({'get': 'show'}))
 ]
 urlpatterns += router.urls
