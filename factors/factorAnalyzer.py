@@ -88,7 +88,7 @@ class factorAnalyzer():
             # print(IC_list)
             # print(IR_list)
             
-            
+            return factor_name,IC,IR,IRR,score
     
         except Exception as e:
             print(factor_name+" error:"+str(e))
