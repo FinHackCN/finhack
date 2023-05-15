@@ -17,8 +17,11 @@ import lightgbm as lgb
 from library.globalvar import *
 import redis
 from astock.market import market
+import argparse
+from library.config import config
+import itertools
 
-def start_bt(features_list,model_hash,loss,algorithm,init_cash,hold_day,hold_n,filters_name,strategy):
+def start_bt(features_list,model_hash,loss,algorithm,init_cash,strategy,strategy_args,params):
                 try:
                         train=algorithm+'_'+loss
  
@@ -27,15 +30,12 @@ def start_bt(features_list,model_hash,loss,algorithm,init_cash,hold_day,hold_n,f
                                 "train":train,
                                 "model":model_hash,
                                 "loss":loss,
-                                "strategy_args":{
-                                        "hold_day":hold_day,
-                                        "hold_n":hold_n,
-                                }
+                                "strategy_args":strategy_args
                         }
               
                         
-                        if filters_name!='':
-                                args['filter']=filters_name
+                        if params['filter_name']!='':
+                                args['filter']=params['filter_name']
                                 
                                 
                                 
@@ -43,17 +43,22 @@ def start_bt(features_list,model_hash,loss,algorithm,init_cash,hold_day,hold_n,f
                                 data_train,data_valid,df_pred,data_path=trainhelper.getTrainData('20000101','20100101','20130101',features=features.split(","),label='abs',shift=10)
                                 lgbtrain.pred(df_pred,data_path,model_hash)
                                 
-                                
                 
                         bt_instance=bt.run(
-                            cash=init_cash,
-                            start_date='20180101',
-                            end_date='20230401',
-                            strategy_name=strategy,
-                            data_path="lgb_model_"+model_hash+"_pred.pkl",
-                            args=args,
-                            benchmark='000852.SH',
-                            slip=0, #无滑点
+                                cash=init_cash,
+                                strategy_name=strategy,
+                                data_path="lgb_model_"+model_hash+"_pred.pkl",
+                                args=args,
+                                start_date=params['start_date'],
+                                end_date=params['end_date'],
+                                benchmark=params['benchmark'],
+                                fees=params['fees'],
+                                min_fees=params['min_fees'],
+                                tax=params['tax'],
+                                slip=params['slip'],
+                                replace=params['replace'],
+                                log=params['log'],
+                                record=params['record']
                         )
 
                         return True
@@ -61,66 +66,97 @@ def start_bt(features_list,model_hash,loss,algorithm,init_cash,hold_day,hold_n,f
                         print(str(e))
                         print("err exception is %s" % traceback.format_exc())        
                 
-                
-
-# df_all=AStock.getStockDailyPrice(fq='qfq')
-# df_all=AStock.getStockDailyPrice(fq='hfq')
-# bt.load_price()
 
 
 
-# tested_list=mydb.selectToDf('select model from  (select model,COUNT(model) as c from backtest GROUP BY (model) ) as x where c>=50','finhack')
-# if not tested_list.empty:
-#         tested_list=tested_list['model'].to_list()
-# else:
-#         tested_list=[]
+def grid_search(params):
+    param_list = list(params.values())
+    for values in itertools.product(*param_list):
+        yield {list(params.keys())[i]: value for i, value in enumerate(values)}
 
-#print(tested_list)
-# for tested_model in tested_list:
-#         if os.path.exists('/home/woldy/finhack/data/preds/lgb_model_'+tested_model+'_pred.pkl'):
-#                 os.remove('/home/woldy/finhack/data/preds/lgb_model_'+tested_model+'_pred.pkl')
+cfg=config.getConfig('backtest','backtest')
+
+parser = argparse.ArgumentParser(description='backtest args parser')
+parser.add_argument('--model', type=int,help='model hash')
+parser.add_argument('--thread', type=int,help='thread num')
+parser.add_argument('--cash', type=int,help='init cash')
+parser.add_argument('--strategy', type=int,help='strategy list')
+parser.add_argument('--args', type=int,help='strategy args')
+parser.add_argument('--start', type=str,help='start date')
+parser.add_argument('--end', type=str,help='end date')
+parser.add_argument('--filter', type=str,help='filter name')
+parser.add_argument('--benchmark', type=str,help='benchmark')
+parser.add_argument('--fees', type=float,help='fees')
+parser.add_argument('--min_fees', type=float,help='min_fees')
+parser.add_argument('--tax', type=float,help='tax')
+parser.add_argument('--slip', type=str,help='slip')
+parser.add_argument('--replace', type=int,help='if have,then replace old record')
+parser.add_argument('--log', type=int,help='log all transaction')
+parser.add_argument('--record', type=int,help='record to database')
 
 
+args = parser.parse_args()
+
+model=args.model if args.model!=None else 'all'
+thread=args.thread if args.thread!=None else int(cfg['thread'])
+cash_list=args.cash if args.cash!=None else list(map(int, cfg['cash'].split(',')))
+strategy_list=args.strategy if args.strategy!=None else cfg['strategy'].split(',')
+
+        
+params={
+        'start_date':args.start if args.start!=None else cfg['start'],
+        'end_date':args.end if args.end!=None else cfg['end'],
+        'filter_name':args.filter if args.filter!=None else cfg['filter'] ,
+        'benchmark':args.benchmark if args.benchmark!=None else cfg['benchmark'],
+        'fees':args.fees if args.fees!=None else float(cfg['fees']),
+        'min_fees':args.min_fees if args.min_fees!=None else float(cfg['min_fees']),
+        'tax':args.tax if args.tax!=None else float(cfg['tax']),
+        'replace':args.replace if args.replace!=None else int(cfg['replace']),
+        'slip':args.slip if args.slip!=None else float(cfg['slip']),
+        'log':args.log if args.log!=None else False,#默认不记日志
+        'record':args.record if args.record!=None else 9,#根据配置文件判断
+}
+        
+
+args_list=args.args
+if args_list==None:
+        cfg_arg_list=config.getConfig('backtest','strategy_args')
+        for k in cfg_arg_list:
+                cfg_arg_list[k]=list(map(int, cfg_arg_list[k].split(',')))
+        
+        args_list=grid_search(cfg_arg_list)
 
 
+price_state,dividend_state=market.get_state()
 
-
-market.load_dividend()
-market.load_price()
+if price_state==None or time.time()-price_state>60*60*24:
+        market.load_price() 
+if dividend_state==None or time.time()-dividend_state>60*60*24:
+        market.load_dividend()
 
 while True:
-        with ProcessPoolExecutor(max_workers=16) as pool:
-                model_list=mydb.selectToDf('select * from auto_train','finhack')
+        with ProcessPoolExecutor(max_workers=thread) as pool:
+                if model=='all':
+                        model_list=mydb.selectToDf('select * from auto_train','finhack')
+                else:
+                        model_list=mydb.selectToDf('select * from auto_train where hash="'+model_hash+'"','finhack')
                 tasklist=[]
-                for init_cash in [10000000]:
-                        for hold_day in  [10]:
-                                for hold_n in  [12,14,16,18,10]:
-                                        for strategy in ['IndexPlus3']:
-                                                for row in model_list.itertuples():
-                                                        features_list=getattr(row,'features')
-                                                        model_hash=getattr(row,'hash')
-                                                        filters_name='MainBoardNoST' #只交易主板
-                                                        # if model_hash in tested_list:
-                                                        #         print('model_hash in tested_list')
-                                                        #         continue
-                                                        # if model_hash !="4cc29a3522864b947bf5d31f8c44f84d":
-                                                        #         continue
-                                                        
-                                                        
-                                                        if not os.path.exists(PREDS_DIR+"lgb_model_"+model_hash+"_pred.pkl"):
-                                                                print('preds deleted')
-                                                                continue          
-                                                        
-                                                        #print("backtesting "+model_hash)
-                                                        
-                                                        loss=getattr(row,'loss')
-                                                        algorithm=getattr(row,'algorithm')
-                        
-
-                                                        time.sleep(1)
-                                                        mytask=pool.submit(start_bt,features_list,model_hash,loss,algorithm,init_cash,hold_day,hold_n,filters_name,strategy)
-                                                        #start_bt(features_list,model_hash,loss,algorithm,init_cash,hold_day,hold_n,filters_name,strategy)
-                                                        # exit()
-                                                        tasklist.append(mytask)
-                                wait(tasklist, return_when=ALL_COMPLETED)
+                for init_cash in cash_list:
+                        for strategy_args in args_list:
+                                for strategy in strategy_list:
+                                        for row in model_list.itertuples():
+                                                features_list=getattr(row,'features')
+                                                model_hash=getattr(row,'hash')
+                                                filters_name='MainBoardNoST' #只交易主板
+                                                if not os.path.exists(PREDS_DIR+"lgb_model_"+model_hash+"_pred.pkl"):
+                                                        print('preds deleted')
+                                                        continue          
+                                                loss=getattr(row,'loss')
+                                                algorithm=getattr(row,'algorithm')
+                                                time.sleep(1)
+                                                mytask=pool.submit(start_bt,features_list,model_hash,loss,algorithm,init_cash,strategy,strategy_args,params)
+                                                #start_bt(features_list,model_hash,loss,algorithm,init_cash,hold_day,hold_n,filters_name,strategy)
+                                                # exit()
+                                                tasklist.append(mytask)
+                        wait(tasklist, return_when=ALL_COMPLETED)
         time.sleep(60)
