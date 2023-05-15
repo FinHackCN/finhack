@@ -16,7 +16,6 @@ import multiprocessing
 import redis
 from library.config import config
 import json
-import memcache
 import backtest
 
 class bt:
@@ -50,7 +49,7 @@ class bt:
     def run(instance_id='',start_date='20100101',end_date='20230315',
             fees=0.0003,min_fees=5,tax=0.001,cash=100000,strategy_name="",
             data_path="",args={},df_price=pd.DataFrame(),replace=False,
-            type="bt",g={},slip=0.005,benchmark="000001.SH"):
+            type="bt",g={},slip=0.005,benchmark="000001.SH",log=False,record=9):
         t1=time.time()
         starttime=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         #print(starttime)
@@ -121,13 +120,7 @@ class bt:
         cfg=config.getConfig('db','redis')
         redisPool = redis.ConnectionPool(host=cfg['host'],port=int(cfg['port']),password=cfg['password'],db=int(cfg['db']))
         client = redis.Redis(connection_pool=redisPool)   
-        # if True:
-        #     cfg=config.getConfig('db','memcached')
-        #     client=memcache.Client([cfg['host']+':'+cfg['port']], debug=0)
         bt_instance['cache']=client
-
-
-
 
         if 'filter' in bt_instance['args'].keys():
             filter_name=bt_instance['args']['filter']  
@@ -135,11 +128,6 @@ class bt:
             bt_instance['filter_func']=getattr(filter_module, filter_name)       
         
 
-
-
-        
-
-        #bt.log(instance=bt_instance,msg="行情数据读取完毕！",type='info')
         
         if os.path.isfile(PREDS_DIR+data_path):
             data=pd.read_pickle(PREDS_DIR+data_path)
@@ -147,9 +135,6 @@ class bt:
             print(PREDS_DIR+data_path+' not found!')
             return False
         
-        
-        # print(data[data.ts_code=='301187.SZ'])
-        # exit()
         
         data=data[data.trade_date>=start_date]
         data=data[data.trade_date<=end_date]
@@ -225,10 +210,9 @@ class bt:
             filters_name=bt_instance['args']['filter']
 
         
- 
+
         
         if bt_instance['type']=='bt':
-        
             tv=0.1 #阈值
             if risk['annual_return']<tv:
                 returns='returns'
@@ -242,37 +226,9 @@ class bt:
                 mydb.exec(sql,'woldycvm')                
             mydb.exec('delete from backtest where instance_id="%s"' % (bt_instance['instance_id']),'finhack')
             mydb.exec(sql,'finhack')
-        else:
-            
-            pred=bt_instance['data'].loc[bt_instance['now_date']]
-            pred=pred.sort_values(by='pred',ascending=False, inplace=False) 
-            pred=pred.dropna()
-            pred=pred[pred.pred>1.05]
-            pred=pred[~pred.index.duplicated()]
-            pred=pred.reset_index()
-            next_pool=[]
-            next_list=pred['ts_code'].to_list()[:10]
-            for x in next_list:
-                xx=x.split('.')
-                str_x="<a href=\"https://xueqiu.com/S/%s\" target=\"_blank\">%s</a>" % (xx[1]+xx[0],x)
-                next_pool.append(str_x)
-
-            
-            
-            mydb.exec('delete from simulate_record where instance_id="%s"' % (bt_instance['instance_id']),'woldycvm')
-            sql="INSERT INTO `finhack`.`simulate_record`(`instance_id`,`features_list`, `train`, `model`, `strategy`, `start_date`, `end_date`, `init_cash`, `args`, `history`, `returns`, `logs`, `total_value`, `alpha`, `beta`, `annual_return`, `cagr`, `annual_volatility`, `info_ratio`, `downside_risk`, `R2`, `sharpe`, `sortino`, `calmar`, `omega`, `max_down`, `SQN`,filter,win,server,trade_num,runtime,starttime,endtime,benchReturns,roto,next_pool,now_date,bt_rank) VALUES ( '%s','%s', '%s', '%s', '%s', '%s', '%s', %s, '%s', '%s', '%s', '%s', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,'%s',%s,'%s',%s,'%s','%s','%s','%s','%s','%s','%s',%s)" % (bt_instance['instance_id'],features_list,train,model,strategy,bt_instance['start_date'],bt_instance['end_date'],str(init_cash),str(bt_instance['args']).replace("'",'"'),'history',returns,"\n".join(bt_instance['logs']),str(bt_instance['total_value']),str(risk['alpha']),str(risk['beta']),str(risk['annual_return']),str(risk['cagr']),str(risk['annual_volatility']),str(risk['info_ratio']),str(risk['downside_risk']),str(risk['R2']),str(risk['sharpe']),str(risk['sortino']),str(risk['calmar']),str(risk['omega']),str(risk['max_down']),str(risk['sqn']),filters_name,str(risk['win_ratio']),'woldy-PC',str(bt_instance['trade_num']),str(runtime),str(starttime),str(endtime),bench_returns,str(risk['roto']),','.join(next_pool),bt_instance['now_date'],str(bt_instance['g']['rank']))  
-            # print(risk)
-            # print(sql)
-            # exit()
-            mydb.exec(sql,'woldycvm')  
+  
     
     def buy(instance,ts_code,amount=0,price=0,time='open'):
-        
-
-            
- 
-        
-        
         flag688=False
         if ts_code[:3]=='688':
             flag688=True
@@ -352,13 +308,7 @@ class bt:
         if price> instance['cash']-5:
             price=instance['cash']-5
 
-        # if(ts_code=="600354.SH" and now_date=="20180326"):
- 
-        #     print(now_price)
-        #     print(value)
-        #     exit()
 
-        #print(price)
         if price>0:
             #考虑手续费不够的情况
             if True:#instance['cash']-price<instance['setting']['min_fees'] or instance['cash']-price<price*instance['setting']['fees']:
@@ -370,12 +320,7 @@ class bt:
             amount=price/value
             
             
-        # if ts_code=="600185.SH":
-        #     print(price)
-        #     exit()
-
-
-        # #大于今日成交量的1/100
+        #大于今日成交量的1/4
         if amount>volume*0.25*100:
             amount=int(volume*0.25*100) 
 

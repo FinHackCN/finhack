@@ -80,7 +80,10 @@ export const crudOptions = (vm) => {
         width: 90,
         form: {
           disabled: true
-        }
+        },
+        search: {
+          disabled: true
+        },
       },
       {
         title: '结束资金',
@@ -90,6 +93,32 @@ export const crudOptions = (vm) => {
           disabled: true
         }
       },
+      
+      {
+        title: '所选策略',
+        key: 'strategy',
+        width: 120,
+        form: {
+          disabled: true
+        },
+        search: {
+          disabled: false
+        },
+        
+        type: 'select',
+        dict: {
+          data: [
+            {
+              label: 'IndexPlus3',
+              value: 'IndexPlus3'
+            },
+          ]
+        },        
+        
+        
+      },      
+      
+      
       {
         title: '夏普比率',
         key: 'sharpe',

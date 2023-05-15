@@ -38,6 +38,7 @@ class market:
             client.set(key,df_json)
             # x=json.loads(client.get(key))
             # x=pd.DataFrame(x)
+        client.set('dividend_state',time.time())
         return True
 
     
@@ -51,20 +52,20 @@ class market:
         
         
         cache_path=PRICE_CACHE_DIR+"/bt_price"
-        df_price=None
+        df_price=pd.DataFrame()
         if os.path.isfile(cache_path):
             #print('read cache---'+code)
             t = time.time()-os.path.getmtime(cache_path)
             if t<60*60*24 and cache: #缓存时间为12小时
                 df_price=pd.read_pickle(cache_path)
-        else:
+            else:
+                df_price=pd.DataFrame()
+        
+        if df_price.empty:
             df_price=AStock.getStockDailyPrice(fq='no')
             df_price=df_price.reset_index(drop=True)
             df_price.to_pickle(cache_path)
         
-        
- 
- 
  
         for row in df_price.itertuples():
             key='market_no_'+row[2]+'_'+row[1]
@@ -82,6 +83,7 @@ class market:
     
             # print(json.loads(a)[1])
             # exit()
+        client.set('price_state',time.time())
         return df_price
         
         
@@ -130,4 +132,17 @@ class market:
         #df_price[['high','low','open','close','volume','stop','upLimit','downLimit','name']]
         return price
         
+    
+    #获取行情数据状态，即判断是否需要重新加载
+    def get_state():
+        cfg=config.getConfig('db','redis')
+        redisPool = redis.ConnectionPool(host=cfg['host'],port=int(cfg['port']),password=cfg['password'],db=int(cfg['db']))
+        client = redis.Redis(connection_pool=redisPool)       
+        price_state=client.get('price_state')
+        dividend_state=client.get('dividend_state')
+        if price_state!=None:
+            price_state=float(price_state.decode())
+        if dividend_state!=None:
+            dividend_state=float(dividend_state.decode())
+        return price_state,dividend_state
  

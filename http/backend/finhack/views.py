@@ -30,7 +30,7 @@ class BacktestModelViewSet(CustomModelViewSet):
     create_serializer_class = BacktestModelCreateUpdateSerializer
     update_serializer_class = BacktestModelCreateUpdateSerializer
     #filter_fields = ['strategy','returns','benchreturns']
-    search_fields = ['features_list']
+    search_fields = ['strategy']
     
     
     def list(self, request, *args, **kwargs):
