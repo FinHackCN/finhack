@@ -4,7 +4,7 @@ import os
 import sys
 import datetime
 import time
-sys.path.append('/data/code/finhack')
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from backtest.backtest import bt
 import traceback
 from library.mydb import mydb
