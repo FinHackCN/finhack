@@ -77,11 +77,11 @@ def grid_search(params):
 cfg=config.getConfig('backtest','backtest')
 
 parser = argparse.ArgumentParser(description='backtest args parser')
-parser.add_argument('--model', type=int,help='model hash')
+parser.add_argument('--model', type=str,help='model hash')
 parser.add_argument('--thread', type=int,help='thread num')
 parser.add_argument('--cash', type=int,help='init cash')
-parser.add_argument('--strategy', type=int,help='strategy list')
-parser.add_argument('--args', type=int,help='strategy args')
+parser.add_argument('--strategy', type=str,help='strategy list')
+parser.add_argument('--args', type=str,help='strategy args')
 parser.add_argument('--start', type=str,help='start date')
 parser.add_argument('--end', type=str,help='end date')
 parser.add_argument('--filter', type=str,help='filter name')
@@ -89,18 +89,20 @@ parser.add_argument('--benchmark', type=str,help='benchmark')
 parser.add_argument('--fees', type=float,help='fees')
 parser.add_argument('--min_fees', type=float,help='min_fees')
 parser.add_argument('--tax', type=float,help='tax')
-parser.add_argument('--slip', type=str,help='slip')
+parser.add_argument('--slip', type=float,help='slip')
 parser.add_argument('--replace', type=int,help='if have,then replace old record')
 parser.add_argument('--log', type=int,help='log all transaction')
 parser.add_argument('--record', type=int,help='record to database')
 
 
+#python command/cmd_backtest.py --model=fe13e7d8b3874dda83663d7571aedf85 --thread=1 --cash=100000 --strategy=aiTopN --args="{'hold_n':10,'hold_day':10}" --start=20200101 --end=20230101 --filter=MainBoardNoST --benchmark="000001.SH" --fees=0.0003 --min_fees=5 --tax=0.001 --slip=0.005 --replace=1 --log=1 --record=1
+
 args = parser.parse_args()
 
 model=args.model if args.model!=None else 'all'
 thread=args.thread if args.thread!=None else int(cfg['thread'])
-cash_list=args.cash if args.cash!=None else list(map(int, cfg['cash'].split(',')))
-strategy_list=args.strategy if args.strategy!=None else cfg['strategy'].split(',')
+cash_list=[args.cash] if args.cash!=None else list(map(int, cfg['cash'].split(',')))
+strategy_list=[args.strategy] if args.strategy!=None else cfg['strategy'].split(',')
 
         
 params={
@@ -125,6 +127,8 @@ if args_list==None:
                 cfg_arg_list[k]=list(map(int, cfg_arg_list[k].split(',')))
         
         args_list=grid_search(cfg_arg_list)
+else:
+        args_list=[json.loads(args_list.replace("'", "\""))]
 
 
 price_state,dividend_state=market.get_state()
@@ -133,13 +137,14 @@ if price_state==None or time.time()-price_state>60*60*24:
         market.load_price() 
 if dividend_state==None or time.time()-dividend_state>60*60*24:
         market.load_dividend()
+        
 
 while True:
         with ProcessPoolExecutor(max_workers=thread) as pool:
                 if model=='all':
                         model_list=mydb.selectToDf('select * from auto_train','finhack')
                 else:
-                        model_list=mydb.selectToDf('select * from auto_train where hash="'+model_hash+'"','finhack')
+                        model_list=mydb.selectToDf('select * from auto_train where hash="'+model+'"','finhack')
                 tasklist=[]
                 for init_cash in cash_list:
                         for strategy_args in args_list:
@@ -159,4 +164,6 @@ while True:
                                                 # exit()
                                                 tasklist.append(mytask)
                         wait(tasklist, return_when=ALL_COMPLETED)
+                if model!='all':
+                        break
         time.sleep(60)
