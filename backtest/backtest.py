@@ -106,7 +106,14 @@ class bt:
         bt_instance['date_range']=date_range
         bt_instance['dividend']={} #分红送股数据
 
-        strategy_module = importlib.import_module('.'+strategy_name,package='strategies')
+        
+        #策略在用户目录下
+        #print(USER_DIR+'strategies/'+strategy_name+'.py')
+        if os.path.exists(USER_DIR+'strategies/'+strategy_name+'.py'):
+            
+            strategy_module = importlib.import_module('.'+strategy_name,package='user.strategies')
+        else:
+            strategy_module = importlib.import_module('.'+strategy_name,package='strategies')
 
         strategy_instance = getattr(strategy_module, 'strategy')
         bt.log(instance=bt_instance,msg="开始执行策略！",type='info')
