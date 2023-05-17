@@ -97,6 +97,6 @@ class strategy():
                 ai=N-(i-1)*(N/i)
                 Sn=N*N/2
                 wi=ai/Sn
-                buy=bt.buy(instance=instance,ts_code=ts_code,price=instance['cash']*wi,time='open')
+                buy=bt.buy(instance=instance,ts_code=ts_code,value=instance['cash']*wi,time='open')
                 if buy:
                     i=i+1

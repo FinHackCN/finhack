@@ -66,7 +66,7 @@ class strategy():
             #i用来控制持仓数据
             i=0
             for ts_code, row in pred.iterrows():
-                buy=bt.buy(instance=instance,ts_code=ts_code,price=instance['cash']/(hold_n-i),time='open')
+                buy=bt.buy(instance=instance,ts_code=ts_code,value=instance['cash']/(hold_n-i),time='open')
                 if buy:
                     i=i+1
                 if i==hold_n:
