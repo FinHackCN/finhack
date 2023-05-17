@@ -38,7 +38,7 @@ class BacktestModelViewSet(CustomModelViewSet):
         order=''
         if request.GET.get('orderAsc','0')=='0':
             order='-'
-        queryset = self.filter_queryset(self.get_queryset()).order_by(order+'sharpe').all()
+        queryset = self.filter_queryset(self.get_queryset()).exclude(returns="returns").order_by(order+'sharpe').all()
         page = self.paginate_queryset(queryset)
         if page is not None:
             serializer = self.get_serializer(page, many=True, request=request)

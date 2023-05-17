@@ -8,7 +8,7 @@ export const crudOptions = (vm) => {
       compact: true
     },
     options: {
-      height: '100%'
+      height: '100%',
     },
     viewOptions: {
       componentType: 'row'
@@ -17,6 +17,8 @@ export const crudOptions = (vm) => {
       defaultSpan: 12 // 默认的表单 span
     },
     rowHandle: {
+      width: 100, 
+      title: '回测结果',
       view: {
         thin: true,
         text: '',
@@ -44,7 +46,7 @@ export const crudOptions = (vm) => {
  
       // fixed: 'right',
       custom: [{
-        text: '查看回测',
+        text: '查看',
         size: 'small',
         emit: 'show-emit'
       }]
@@ -75,6 +77,17 @@ export const crudOptions = (vm) => {
 
       },
       {
+        title: '选用模型',
+        key: 'model',
+        width: 220,
+        form: {
+          disabled: true
+        },
+        search: {
+          disabled: true
+        },
+      },
+      {
         title: '初始资金',
         key: 'init_cash',
         width: 90,
@@ -91,32 +104,23 @@ export const crudOptions = (vm) => {
         width: 90,
         form: {
           disabled: true
+        },
+        formatter: function (row, column, cellValue, index) {
+          return parseInt(cellValue)
         }
       },
       
-      {
-        title: '所选策略',
-        key: 'strategy',
-        width: 120,
+       {
+        title: '年化收益',
+        key: 'annual_return',
+        width: 90,
         form: {
           disabled: true
         },
-        search: {
-          disabled: false
-        },
-        
-        type: 'select',
-        dict: {
-          data: [
-            {
-              label: 'IndexPlus3',
-              value: 'IndexPlus3'
-            },
-          ]
-        },        
-        
-        
-      },      
+        formatter: function (row, column, cellValue, index) {
+          return parseInt(cellValue*100)+"%"
+        }
+      },    
       
       
       {
@@ -136,6 +140,30 @@ export const crudOptions = (vm) => {
           disabled: true
         }
       },
+      
+      {
+        title: '所选策略',
+        key: 'strategy_name',
+        width: 120,
+        form: {
+          disabled: true
+        },
+        search: {
+          disabled: false
+        },
+        
+        type: 'select',
+        dict: {
+          data: [
+            {
+              label: 'IndexPlus3',
+              value: 'IndexPlus3'
+            },
+          ]
+        },        
+      },       
+      
+      
     ]
   }
 }

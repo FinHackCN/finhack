@@ -63,32 +63,25 @@
   			padding:{left:5,right:5,top:15,bottom:15}
   		},
   		scales: {
-  			yAxes: [{
-  				ticks: {
-  					fontStyle: "500",
-  					beginAtZero: false,
-  					maxTicksLimit: 5,
-  					padding: 10,
-  					callback: function(value) {
-              			return value*100 + "%"
-          			}
-  
-  				},
-  				gridLines: {
-  					drawTicks: false,
-  					display: false
-  				},
-  				
-  			}],
-  			xAxes: [{
-  				gridLines: {
-  					zeroLineColor: "transparent"
-  				},
-  				ticks: {
-  					padding: 10,
-  					fontStyle: "500"
-  				}
-  			}]
+            xAxes: [{
+                ticks: {
+                    beginAtZero: true
+                }
+            }],
+            yAxes: [{
+                ticks: {
+                    beginAtZero: true
+                },
+                scaleLabel: {
+                    display: true,
+                    labelString: 'Value'
+                },
+                gridLines: {
+                    zeroLineWidth: 1,
+                    zeroLineColor: 'rgba(0, 0, 0, 0.25)',
+                    color: 'rgba(0, 0, 0, 0.1)'
+                }
+            }]
   		}, 
   		legendCallback: function(chart) { 
   			var text = []; 

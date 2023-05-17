@@ -79,7 +79,7 @@ export default {
       var srv=1
       for (var i=0;i<returns.length;i++){
         if (returns[i]==null || returns[i]==0 ||isNaN(parseFloat(returns[i]))){
-         returns[i]=1
+         returns[i]=0
         }
         srv=srv*(1+returns[i])
         sr.push(srv-1)
@@ -89,7 +89,7 @@ export default {
       var brv=1
       for (var i=0;i<benchreturns.length;i++){
         if (benchreturns[i]==null || benchreturns[i]==0 ||isNaN(parseFloat(benchreturns[i]))){
-          benchreturns[i]=1
+          benchreturns[i]=0
         }
         brv=brv*(1+benchreturns[i])
         br.push(brv-1)
