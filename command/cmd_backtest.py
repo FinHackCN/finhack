@@ -57,8 +57,8 @@ def start_bt(features_list,model_hash,loss,algorithm,init_cash,strategy,strategy
                                 tax=params['tax'],
                                 slip=params['slip'],
                                 replace=params['replace'],
-                                log=params['log'],
-                                record=params['record']
+                                log_type=params['log_type'],
+                                record_type=params['record_type']
                         )
 
                         return True
@@ -115,8 +115,8 @@ params={
         'tax':args.tax if args.tax!=None else float(cfg['tax']),
         'replace':args.replace if args.replace!=None else int(cfg['replace']),
         'slip':args.slip if args.slip!=None else float(cfg['slip']),
-        'log':args.log if args.log!=None else False,#默认不记日志
-        'record':args.record if args.record!=None else 9,#根据配置文件判断
+        'log_type':args.log if args.log!=None else False,#默认不记日志
+        'record_type':args.record if args.record!=None else 9,#根据配置文件判断
 }
         
 

@@ -151,7 +151,7 @@ class strategy():
 
             
             if x_cash>0:
-                bt.buy(instance=instance,ts_code=code,price=x_cash,time='open')
+                bt.buy(instance=instance,ts_code=code,value=x_cash,time='open')
                 
                 
 
