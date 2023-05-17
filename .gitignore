@@ -30,3 +30,4 @@ logs/
 ui/backend/conf/env.py
 .ipynb_checkpoints
 */.ipynb_checkpoints/*
+users/*
