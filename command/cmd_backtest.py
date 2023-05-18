@@ -124,7 +124,7 @@ args_list=args.args
 if args_list==None:
         cfg_arg_list=config.getConfig('backtest','strategy_args')
         for k in cfg_arg_list:
-                cfg_arg_list[k]=list(map(int, cfg_arg_list[k].split(',')))
+                cfg_arg_list[k]=list(map(float, cfg_arg_list[k].split(',')))
         
         args_list=grid_search(cfg_arg_list)
 else:
@@ -159,9 +159,10 @@ while True:
                                                 loss=getattr(row,'loss')
                                                 algorithm=getattr(row,'algorithm')
                                                 time.sleep(1)
-                                                mytask=pool.submit(start_bt,features_list,model_hash,loss,algorithm,init_cash,strategy,strategy_args,params)
-                                                #start_bt(features_list,model_hash,loss,algorithm,init_cash,hold_day,hold_n,filters_name,strategy)
-                                                # exit()
+                                                if thread==1:
+                                                        start_bt(features_list,model_hash,loss,algorithm,init_cash,strategy,strategy_args,params)
+                                                else:
+                                                        mytask=pool.submit(start_bt,features_list,model_hash,loss,algorithm,init_cash,strategy,strategy_args,params)
                                                 tasklist.append(mytask)
                         wait(tasklist, return_when=ALL_COMPLETED)
                 if model!='all':

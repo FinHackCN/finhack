@@ -21,6 +21,18 @@ from train.nntrain import nntrain
 # market.get_price(ts_code,'20211215',client=None)
 # market.get_price(ts_code,'20230414',client=None)
 # exit()
+
+
+
+
+
+index=AStock.getIndexPrice(ts_code='000001.SH',start_date='20200101',end_date='20230101')
+index['returns']=index['close']/index['close'].shift(1)
+benchReturns=index['returns']-1
+print(benchReturns)
+
+
+exit()
 pd.set_option("display.max_rows", 20)
 
 from factors.alphaEngine import alphaEngine
