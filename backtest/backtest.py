@@ -73,7 +73,10 @@ class bt:
         has=mydb.selectToDf(hassql,'finhack')
         if(not has.empty):  
             if replace==False:
-                return False                  
+                print("ignore:"+instance_id)
+                return False        
+        
+        
 
         bt_instance["instance_id"]=instance_id
         bt_instance['record_type']=record_type
