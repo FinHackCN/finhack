@@ -60,7 +60,6 @@ def start_bt(features_list,model_hash,loss,algorithm,init_cash,strategy,strategy
                                 log_type=params['log_type'],
                                 record_type=params['record_type']
                         )
-
                         return True
                 except Exception as e:
                         print(str(e))
@@ -129,15 +128,23 @@ if args_list==None:
         args_list=grid_search(cfg_arg_list)
 else:
         args_list=[json.loads(args_list.replace("'", "\""))]
-
+args_list=list(args_list)
 
 price_state,dividend_state=market.get_state()
 
 if price_state==None or time.time()-price_state>60*60*24:
+        print("正在加载行情数据……")
         market.load_price() 
+        print("加载行情数据完毕！")
 if dividend_state==None or time.time()-dividend_state>60*60*24:
+        print("正在加载分红送股数据……")
         market.load_dividend()
+        print("加载分红送股数据完毕！")
         
+print("开始执行策略！")
+
+
+
 
 while True:
         with ProcessPoolExecutor(max_workers=thread) as pool:
@@ -146,10 +153,10 @@ while True:
                 else:
                         model_list=mydb.selectToDf('select * from auto_train where hash="'+model+'"','finhack')
                 tasklist=[]
-                for init_cash in cash_list:
-                        for strategy_args in args_list:
-                                for strategy in strategy_list:
-                                        for row in model_list.itertuples():
+                for row in model_list.itertuples():
+                        for init_cash in cash_list:
+                                for strategy_args in args_list:
+                                        for strategy in strategy_list:
                                                 features_list=getattr(row,'features')
                                                 model_hash=getattr(row,'hash')
                                                 filters_name='MainBoardNoST' #只交易主板
@@ -162,9 +169,12 @@ while True:
                                                 if thread==1:
                                                         start_bt(features_list,model_hash,loss,algorithm,init_cash,strategy,strategy_args,params)
                                                 else:
+                                                        #print('submit')
                                                         mytask=pool.submit(start_bt,features_list,model_hash,loss,algorithm,init_cash,strategy,strategy_args,params)
-                                                tasklist.append(mytask)
-                        wait(tasklist, return_when=ALL_COMPLETED)
+                                                        tasklist.append(mytask)
+                
                 if model!='all':
                         break
+                wait(tasklist, return_when=ALL_COMPLETED)
+        
         time.sleep(60)
