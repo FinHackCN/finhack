@@ -140,7 +140,14 @@ export const crudOptions = (vm) => {
           disabled: true
         }
       },
-      
+      {
+        title: '交易次数',
+        key: 'trade_num',
+        width: 90,
+        form: {
+          disabled: true
+        }
+      },      
       {
         title: '所选策略',
         key: 'strategy_name',

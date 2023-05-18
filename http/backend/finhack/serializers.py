@@ -11,7 +11,7 @@ class BacktestModelListSerializer(CustomModelSerializer):
     
     class Meta:
         model = BacktestModel
-        fields = ["id","model",'init_cash','total_value','annual_return','sharpe','strategy','strategy_name','max_down','p_max_down']
+        fields = ["id","model",'init_cash','total_value','annual_return','sharpe','strategy','strategy_name','max_down','p_max_down','trade_num']
         
     def get_p_max_down(self, obj):
         # 在这里你可以做任何你想做的处理，比如四舍五入
