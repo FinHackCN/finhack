@@ -20,8 +20,10 @@ from astock.market import market
 import argparse
 from library.config import config
 import itertools
+import mmap
 
-def start_bt(features_list,model_hash,loss,algorithm,init_cash,strategy,strategy_args,params):
+
+def start_bt(features_list,model_hash,loss,algorithm,init_cash,strategy,strategy_args,params,slice_type):
                 try:
                         train=algorithm+'_'+loss
  
@@ -47,7 +49,7 @@ def start_bt(features_list,model_hash,loss,algorithm,init_cash,strategy,strategy
                         bt_instance=bt.run(
                                 cash=init_cash,
                                 strategy_name=strategy,
-                                data_path="lgb_model_"+model_hash+"_pred.pkl",
+                                pred_data_path="lgb_model_"+model_hash+"_pred.pkl",
                                 args=args,
                                 start_date=params['start_date'],
                                 end_date=params['end_date'],
@@ -58,7 +60,8 @@ def start_bt(features_list,model_hash,loss,algorithm,init_cash,strategy,strategy
                                 slip=params['slip'],
                                 replace=params['replace'],
                                 log_type=params['log_type'],
-                                record_type=params['record_type']
+                                record_type=params['record_type'],
+                                slice_type=slice_type
                         )
                         return True
                 except Exception as e:
@@ -130,22 +133,19 @@ else:
         args_list=[json.loads(args_list.replace("'", "\""))]
 args_list=list(args_list)
 
-price_state,dividend_state=market.get_state()
+# price_state,dividend_state=market.get_state()
 
-if price_state==None or time.time()-price_state>60*60*24:
-        print("正在加载行情数据……")
-        market.load_price() 
-        print("加载行情数据完毕！")
-if dividend_state==None or time.time()-dividend_state>60*60*24:
-        print("正在加载分红送股数据……")
-        market.load_dividend()
-        print("加载分红送股数据完毕！")
-        
-print("开始执行策略！")
+# if price_state==None or time.time()-price_state>60*60*24:
+#         print("正在加载行情数据……")
+#         market.load_price() 
+#         print("加载行情数据完毕！")
+# if dividend_state==None or time.time()-dividend_state>60*60*24:
+#         print("正在加载分红送股数据……")
+#         market.load_dividend()
+#         print("加载分红送股数据完毕！")
 
-
-
-
+print("正在加载行情数据……")
+slice_type='m'
 while True:
         with ProcessPoolExecutor(max_workers=thread) as pool:
                 if model=='all':
@@ -165,16 +165,16 @@ while True:
                                                         continue          
                                                 loss=getattr(row,'loss')
                                                 algorithm=getattr(row,'algorithm')
-                                                time.sleep(1)
+                                                #time.sleep(1)
                                                 if thread==1:
-                                                        start_bt(features_list,model_hash,loss,algorithm,init_cash,strategy,strategy_args,params)
+                                                        start_bt(features_list,model_hash,loss,algorithm,init_cash,strategy,strategy_args,params,slice_type)
                                                 else:
                                                         #print('submit')
-                                                        mytask=pool.submit(start_bt,features_list,model_hash,loss,algorithm,init_cash,strategy,strategy_args,params)
+                                                        mytask=pool.submit(start_bt,features_list,model_hash,loss,algorithm,init_cash,strategy,strategy_args,params,slice_type)
                                                         tasklist.append(mytask)
-                
+                        
                 if model!='all':
                         break
                 wait(tasklist, return_when=ALL_COMPLETED)
-        
+                
         time.sleep(60)

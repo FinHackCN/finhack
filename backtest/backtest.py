@@ -19,7 +19,7 @@ import json
 import backtest
 
 class bt:
-    def run(instance_id='',start_date='20100101',end_date='20230315',fees=0.0003,min_fees=5,tax=0.001,cash=100000,strategy_name="",data_path="",args={},replace=False,type="bt",g={},slip=0.005,benchmark="000001.SH",log_type=False,record_type=9):
+    def run(instance_id='',start_date='20100101',end_date='20230315',fees=0.0003,min_fees=5,tax=0.001,cash=100000,strategy_name="",pred_data_path="",args={},replace=False,type="bt",g={},slip=0.005,benchmark="000001.SH",log_type=False,record_type=9,slice_type='m'):
         t1=time.time()
         starttime=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         bt_instance={
@@ -27,9 +27,9 @@ class bt:
             "start_date":start_date,
             "end_date":end_date,
             "now_date":'00000000',
-            "data_path":data_path,
+            "pred_data_path":pred_data_path,
             "args":args,
-            "data":None,
+            "pred_data":None,
             "g":g,
             "runtime_info":{},
             "positions":{ #仓位列表
@@ -92,22 +92,26 @@ class bt:
             filter_module = importlib.import_module('.btfilter',package='backtest')
             bt_instance['filter_func']=getattr(filter_module, filter_name)       
         
-        if os.path.isfile(PREDS_DIR+data_path):
-            data=pd.read_pickle(PREDS_DIR+data_path)
+        if os.path.isfile(PREDS_DIR+pred_data_path):
+            pred_data=pd.read_pickle(PREDS_DIR+pred_data_path)
         else:
             print(PREDS_DIR+data_path+' not found!')
             return False
         
         
-        data=data[data.trade_date>=start_date]
-        data=data[data.trade_date<=end_date]
-        date_range=data['trade_date'].to_list()
+        pred_data=pred_data[pred_data.trade_date>=start_date]
+        pred_data=pred_data[pred_data.trade_date<=end_date]
+        date_range=pred_data['trade_date'].to_list()
         date_range=list(set(date_range))
         date_range=sorted(date_range)
-        data=data.set_index(['trade_date','ts_code'])
-        bt_instance['data']=data
+        pred_data=pred_data.set_index(['trade_date','ts_code'])
+        bt_instance['pred_data']=pred_data
         bt_instance['date_range']=date_range
         bt_instance['dividend']={} #分红送股数据
+        
+        bt_instance['slice_type']=slice_type
+        bt_instance['market_data']=market.get_data(start_date=start_date,end_date=end_date,slice_type=slice_type,now_date=start_date)
+
 
         
         #策略在用户目录下
@@ -190,7 +194,11 @@ class bt:
         price=0
         
         
-        now_price=market.get_price(ts_code,now_date,instance['cache'])
+        #now_price=market.get_price(ts_code,now_date,instance['cache'])
+        if 'market_no_'+now_date+'_'+ts_code in instance['market_data'].keys():
+            now_price=instance['market_data']['market_no_'+now_date+'_'+ts_code]
+        else:
+            now_price=None
         
         
         if 'filter' in instance['args'].keys():
@@ -344,7 +352,12 @@ class bt:
             flag688=True        
         now_date=instance['now_date']
 
-        now_price=market.get_price(ts_code,now_date,instance['cache'])
+        #now_price=market.get_price(ts_code,now_date,instance['cache'])
+        if 'market_no_'+now_date+'_'+ts_code in instance['market_data'].keys():
+            now_price=instance['market_data']['market_no_'+now_date+'_'+ts_code]
+        else:
+            now_price=None
+            
         if now_price==None:
             bt.log(instance=instance,ts_code=ts_code,msg="无法获取价格！",type='warn')
             return False               
@@ -449,6 +462,15 @@ class bt:
     def before_market(instance):
         sell_list=[]
         now_date=instance['now_date']
+        
+        #分片加载行情数据
+        if now_date>instance['market_data']['end_date']:
+            start_date=instance['start_date']
+            end_date=instance['end_date']
+            slice_type=instance['slice_type']
+            instance['market_data']=market.get_data(start_date=start_date,end_date=end_date,slice_type=slice_type,now_date=now_date)
+
+        
         positions_value=0
         for ts_code,position in instance['positions'].items():
             amount=position['amount']
@@ -458,7 +480,11 @@ class bt:
                         instance['positions'][ts_code]['amount']=instance['positions'][ts_code]['amount']+instance['dividend']["dt_"+now_date][ts_code]['cash_stk']
                         instance['positions'][ts_code]['last_close']=position['total_value']/instance['positions'][ts_code]['amount']
                         bt.log(instance=instance,ts_code=ts_code,msg="发生送股事件，共%s股" % str(round(instance['dividend']["dt_"+now_date][ts_code]['cash_stk'],2)),type='warn')
-            now_price=market.get_price(ts_code,now_date,instance['cache'])
+            #now_price=market.get_price(ts_code,now_date,instance['cache'])
+            if 'market_no_'+now_date+'_'+ts_code in instance['market_data'].keys():
+                now_price=instance['market_data']['market_no_'+now_date+'_'+ts_code]
+            else:
+                now_price=None
             if now_price!=None and "退" in now_price['name']: 
                 sell_list.append(ts_code)
         for ts_code in sell_list:
@@ -475,12 +501,17 @@ class bt:
 
         
         key="dividend_"+now_date
-        div_info=instance['cache'].get(key)
-        if div_info==None:
-            df_div=pd.DataFrame()
+        #div_info=instance['cache'].get(key)
+        if key in instance['market_data'].keys():
+            div_info=json.loads(instance['market_data'][key])
+            df_div=pd.DataFrame(div_info)            
         else:
-            div_info=json.loads(div_info)
-            df_div=pd.DataFrame(div_info)
+            df_div=pd.DataFrame()
+        # if div_info==None:
+        #     df_div=pd.DataFrame()
+        # else:
+        #     div_info=json.loads(div_info)
+        #     df_div=pd.DataFrame(div_info)
 
         if not df_div.empty:
             try:
@@ -515,7 +546,11 @@ class bt:
                         instance['cash']=instance['cash']+instance['dividend']["dt_"+now_date][ts_code]['cash_tax']
                         bt.log(instance=instance,ts_code=ts_code,msg="发生分红事件，共%s元" % str(round(instance['dividend']["dt_"+now_date][ts_code]['cash_tax'],2)),type='warn')
             try:
-                now_price=market.get_price(ts_code,now_date,instance['cache'])
+                #now_price=market.get_price(ts_code,now_date,instance['cache'])
+                if 'market_no_'+now_date+'_'+ts_code in instance['market_data'].keys():
+                    now_price=instance['market_data']['market_no_'+now_date+'_'+ts_code]
+                else:
+                    now_price=None
                 value=now_price['close']
             except Exception as e:
                 value=0
