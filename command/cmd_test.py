@@ -21,10 +21,63 @@ from train.nntrain import nntrain
 # market.get_price(ts_code,'20211215',client=None)
 # market.get_price(ts_code,'20230414',client=None)
 # exit()
+import cProfile
 
 
 
 
+
+
+market.load_data(slice_type='n')
+
+market.load_data(slice_type='y')
+
+market.load_data(slice_type='m')
+
+exit()
+
+market.load_data()
+exit()
+def start_bt():
+                try:
+                        train='lgb'+'_'+'ds'
+ 
+                        args={
+                                "features_list":'ADOSC_14_0,AD_0,CCI_0,FASTD_0,LOWER_0,MACD_0,MAMA_0,MIDPRICE_0,NATR_14_0,PLUSDI_14_0,PPR1_0,PPR2_0,PPS1_0,ROCR_14_0,RSI_0,TRIMA_14_0,TRIX_0,ULTOSC_14_0,WMA_0,alpha101_021,alpha191_034,alpha191_058,alpha191_081,alpha191_112,alpha191_150,alpha191_187,dvTtm_0,psTtm_0,sellLgAmount_0,turnoverRatef_0,upLimit',
+                                "train":'lgb_ds',
+                                "model":'50796b05ec14c103747de75b59074a2f',
+                                "loss":'ds',
+                                "strategy_args":{"power": 10.0, "change_threshold": 0.3}
+                        }
+              
+                        
+
+                        args['filter']='MainBoardNoST'
+                                
+                                
+ 
+                
+                        bt_instance=bt.run(
+                                cash=10000000,
+                                strategy_name='idxPls3',
+                                data_path="lgb_model_50796b05ec14c103747de75b59074a2f_pred.pkl",
+                                args=args,
+                                start_date='20200101',
+                                end_date='20230101',
+                                benchmark='000852.SH',
+                                log_type=0,
+                                record_type=0
+                        )
+                        return True
+                except Exception as e:
+                        print(str(e))
+                        print("err exception is %s" % traceback.format_exc())    
+
+
+ 
+
+cProfile.run('start_bt()')
+exit()
 
 index=AStock.getIndexPrice(ts_code='000001.SH',start_date='20200101',end_date='20230101')
 index['returns']=index['close']/index['close'].shift(1)
