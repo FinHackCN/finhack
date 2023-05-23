@@ -114,7 +114,7 @@ class lgbtrain:
         gbm.save_model(data_path+'/models/lgb_model_'+md5+'.txt')
         # 模型加载
         
-    def pred(df_pred,data_path='/tmp',md5='test'):
+    def pred(df_pred,data_path='/tmp',md5='test',save=True):
         # df_pred=df_pred.drop('symbol', axis=1)   
         
         gbm = lgb.Booster(model_file=data_path+'/models/lgb_model_'+md5+'.txt')
@@ -133,6 +133,55 @@ class lgbtrain:
         
         pred=pred.dropna()
         
-        pred.to_pickle(data_path+'/preds/lgb_model_'+md5+'_pred.pkl')
+        if save:
+            pred.to_pickle(data_path+'/preds/lgb_model_'+md5+'_pred.pkl')
+        else:
+            return pred
         
         return 
+    
+    
+    
+    def score(md5='test',df_pred=pd.DataFrame()):
+        data_path=DATA_DIR
+        
+        model=mydb.selectToDf('select * from auto_train where hash="'+md5+'"','finhack')
+        model=model.iloc[0]
+        start_date=model['start_date']
+        valid_date=model['valid_date']
+        end_date=model['end_date']
+        features=model['features'].split(',')
+        label=model['label']
+        shift=model['shift']
+        filter_name=model['filter']        
+        
+        
+        
+        pred_file=data_path+'/preds/lgb_model_'+md5+'_pred.pkl'
+        
+        if os.path.exists(pred_file):
+            df_preded=pd.read_pickle(pred_file)
+            df_preded=df_preded.set_index(['ts_code','trade_date']) 
+            
+            df=factorManager.getFactors(factor_list=['open','close'])
+        else:
+            return False
+        
+        if model.empty:
+            return False
+
+        df['pred']=df_preded['pred']
+        df['label']=df.groupby('ts_code',group_keys=False).apply(lambda x: x['close'].shift(-1*shift)/x['open'].shift(-1))
+        df=df.dropna()
+        count = len(df[df['pred'] > df['label']])
+        mean_diff = (df['label'] - df['pred']).mean()
+        
+        std = (df['label'] - df['pred']).std()
+        score=mean_diff/std
+        
+        sql="UPDATE auto_train SET score = %s WHERE hash='%s'" %(score,md5)
+        
+        mydb.exec(sql,'finhack')
+
+        
+        pass
