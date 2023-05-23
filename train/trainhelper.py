@@ -61,37 +61,13 @@ class trainhelper:
             df_pred=df[df.trade_date>=end_date]
             
             if dropna:
-                # df_train.replace(to_replace=r'^\s*$',value=np.nan,regex=True,inplace=True)
-                # df_valid.replace(to_replace=r'^\s*$',value=np.nan,regex=True,inplace=True)
-
                 df_train=df_train.replace([np.inf, -np.inf], np.nan).dropna()
                 df_valid=df_train.replace([np.inf, -np.inf], np.nan).dropna()
-
-            
-            # df_train=df_train.drop('ts_code', axis=1)   
-            # df_valid=df_valid.drop('ts_code', axis=1)  
- 
-            # print(df_train.describe(include='all') )
-            # print(df_valid.describe(include='all') )
-            # print('111111')
-            
-            
             #归一化
             # print(df_valid.columns)
             # columns = features
             # g = df_valid.groupby('trade_date')[columns]
             # df_valid[columns] = (df_valid[columns] - g.transform('min')) / (g.transform('max') - g.transform('min'))
-
-
-            #exit()            
-            
-            
-            # df_train=df_train.set_index(["trade_date","ts_code"])
-            # df_valid=df_valid.set_index(["trade_date","ts_code"])
-            # df_pred=df_pred.set_index(["trade_date","ts_code"])
-            
-
-
             y_train=df_train['label']
             x_train=df_train.drop('label', axis=1)
             x_train=x_train.drop('close', axis=1)

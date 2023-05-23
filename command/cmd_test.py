@@ -16,6 +16,7 @@ from backtest.backtest import bt
 from astock.market import market
 import bottleneck as bn
 from train.nntrain import nntrain
+from train.lgbtrain import lgbtrain
 #market.load_price()
 # ts_code='301138.SZ'
 # market.get_price(ts_code,'20211215',client=None)
@@ -25,19 +26,23 @@ import cProfile
 
 
 
-
-
-
-market.load_data(slice_type='n')
-
-market.load_data(slice_type='y')
-
-market.load_data(slice_type='m')
+model_list=mydb.selectToDf('select * from auto_train where ISNULL(score)','finhack')
+for row in model_list.itertuples():
+    model_hash=getattr(row,'hash')
+    lgbtrain.score(model_hash)
 
 exit()
 
-market.load_data()
-exit()
+# market.load_data(slice_type='n')
+
+# market.load_data(slice_type='y')
+
+# market.load_data(slice_type='m')
+
+# exit()
+
+# market.load_data()
+# exit()
 def start_bt():
                 try:
                         train='lgb'+'_'+'ds'
@@ -60,7 +65,7 @@ def start_bt():
                         bt_instance=bt.run(
                                 cash=10000000,
                                 strategy_name='idxPls3',
-                                data_path="lgb_model_50796b05ec14c103747de75b59074a2f_pred.pkl",
+                                pred_data_path="lgb_model_aa8d21d873345fb891a30cf2c8165ec8_pred.pkl",
                                 args=args,
                                 start_date='20200101',
                                 end_date='20230101',

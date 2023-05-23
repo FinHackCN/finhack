@@ -144,12 +144,12 @@ args_list=list(args_list)
 #         market.load_dividend()
 #         print("加载分红送股数据完毕！")
 
-print("正在加载行情数据……")
+#print("正在加载行情数据……")
 slice_type='m'
 while True:
         with ProcessPoolExecutor(max_workers=thread) as pool:
                 if model=='all':
-                        model_list=mydb.selectToDf('select * from auto_train','finhack')
+                        model_list=mydb.selectToDf('select * from auto_train order by score desc','finhack')
                 else:
                         model_list=mydb.selectToDf('select * from auto_train where hash="'+model+'"','finhack')
                 tasklist=[]
