@@ -87,7 +87,7 @@ class bt:
         client = redis.Redis(connection_pool=redisPool)   
         bt_instance['cache']=client
 
-        if 'filter' in bt_instance['args'].keys():
+        if 'filter' in bt_instance['args']:
             filter_name=bt_instance['args']['filter']  
             filter_module = importlib.import_module('.btfilter',package='backtest')
             bt_instance['filter_func']=getattr(filter_module, filter_name)       
@@ -161,7 +161,7 @@ class bt:
         starttime=bt_instance['runtime_info']['starttime']
         loss=bt_instance['args']['loss']
         filters_name=''
-        if 'filter' in bt_instance['args'].keys():
+        if 'filter' in bt_instance['args']:
             filters_name=bt_instance['args']['filter']
 
         
@@ -195,13 +195,13 @@ class bt:
         
         
         #now_price=market.get_price(ts_code,now_date,instance['cache'])
-        if 'market_no_'+now_date+'_'+ts_code in instance['market_data'].keys():
+        if 'market_no_'+now_date+'_'+ts_code in instance['market_data']:
             now_price=instance['market_data']['market_no_'+now_date+'_'+ts_code]
         else:
             now_price=None
         
         
-        if 'filter' in instance['args'].keys():
+        if 'filter' in instance['args']:
             a=instance['filter_func'](now_price)
             if not a:
                 #bt.log(instance=instance,ts_code=ts_code,msg="触发规则过滤，不买入！",type='warn')
@@ -301,7 +301,7 @@ class bt:
                     amount=amount-fees_amount
         
         #按该票上次收盘价估算市值，兼容rqalpha
-        if ts_code in instance['positions'].keys():
+        if ts_code in instance['positions']:
             try:
                 last_value=instance['positions'][ts_code]['last_close']*amount
             except Exception as e:
@@ -323,7 +323,7 @@ class bt:
             #理论上total_value是不应该变化的，但是rqalpha似乎是这样做的
             instance['total_value']=instance['total_value']-fees-value+last_value
             
-            if ts_code not in instance['positions'].keys():
+            if ts_code not in instance['positions']:
                 instance['positions'][ts_code]={
                     "amount":amount,
                     "avg_price":(value+fees)/amount,
@@ -353,7 +353,7 @@ class bt:
         now_date=instance['now_date']
 
         #now_price=market.get_price(ts_code,now_date,instance['cache'])
-        if 'market_no_'+now_date+'_'+ts_code in instance['market_data'].keys():
+        if 'market_no_'+now_date+'_'+ts_code in instance['market_data']:
             now_price=instance['market_data']['market_no_'+now_date+'_'+ts_code]
         else:
             now_price=None
@@ -474,14 +474,14 @@ class bt:
         positions_value=0
         for ts_code,position in instance['positions'].items():
             amount=position['amount']
-            if "dt_"+now_date in instance['dividend'].keys():
-                if ts_code in instance['dividend']["dt_"+now_date].keys():
+            if "dt_"+now_date in instance['dividend']:
+                if ts_code in instance['dividend']["dt_"+now_date]:
                     if instance['dividend']["dt_"+now_date][ts_code]['cash_stk']>0:
                         instance['positions'][ts_code]['amount']=instance['positions'][ts_code]['amount']+instance['dividend']["dt_"+now_date][ts_code]['cash_stk']
                         instance['positions'][ts_code]['last_close']=position['total_value']/instance['positions'][ts_code]['amount']
                         bt.log(instance=instance,ts_code=ts_code,msg="发生送股事件，共%s股" % str(round(instance['dividend']["dt_"+now_date][ts_code]['cash_stk'],2)),type='warn')
             #now_price=market.get_price(ts_code,now_date,instance['cache'])
-            if 'market_no_'+now_date+'_'+ts_code in instance['market_data'].keys():
+            if 'market_no_'+now_date+'_'+ts_code in instance['market_data']:
                 now_price=instance['market_data']['market_no_'+now_date+'_'+ts_code]
             else:
                 now_price=None
@@ -502,7 +502,7 @@ class bt:
         
         key="dividend_"+now_date
         #div_info=instance['cache'].get(key)
-        if key in instance['market_data'].keys():
+        if key in instance['market_data']:
             div_info=json.loads(instance['market_data'][key])
             df_div=pd.DataFrame(div_info)            
         else:
@@ -534,20 +534,20 @@ class bt:
                 if pay_date==None:
                     continue
                 dt_key="dt_"+pay_date
-                if dt_key not in instance['dividend'].keys():
+                if dt_key not in instance['dividend']:
                     instance['dividend'][dt_key]={}
                 instance['dividend'][dt_key][ts_code]={
                     'cash_tax':amount*cash_div_tax,
                     'cash_stk':amount*stk_div
                 }
-            if "dt_"+now_date in instance['dividend'].keys():
-                if ts_code in instance['dividend']["dt_"+now_date].keys():
+            if "dt_"+now_date in instance['dividend']:
+                if ts_code in instance['dividend']["dt_"+now_date]:
                     if instance['dividend']["dt_"+now_date][ts_code]['cash_tax']>0:
                         instance['cash']=instance['cash']+instance['dividend']["dt_"+now_date][ts_code]['cash_tax']
                         bt.log(instance=instance,ts_code=ts_code,msg="发生分红事件，共%s元" % str(round(instance['dividend']["dt_"+now_date][ts_code]['cash_tax'],2)),type='warn')
             try:
                 #now_price=market.get_price(ts_code,now_date,instance['cache'])
-                if 'market_no_'+now_date+'_'+ts_code in instance['market_data'].keys():
+                if 'market_no_'+now_date+'_'+ts_code in instance['market_data']:
                     now_price=instance['market_data']['market_no_'+now_date+'_'+ts_code]
                 else:
                     now_price=None
