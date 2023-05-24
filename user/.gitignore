@@ -1,0 +1,12 @@
+__pycache__/
+*.log
+*.swp
+*.csv
+*.pkl
+nohup.out
+*.zip
+*.log
+logs/
+ui/backend/conf/env.py
+.ipynb_checkpoints
+*/.ipynb_checkpoints/*
