@@ -28,7 +28,7 @@ class trainhelper:
         
         
         
-    def getTrainData(start_date='20000101',valid_date="20080101",end_date='20100101',features=[],label='abs',shift=10,filter_name='',dropna=False):
+    def getTrainData(start_date='20000101',valid_date="20080101",end_date='20100101',features=[],label='abs',shift=10,filter_name='',dropna=False,norm=False):
             data_path=DATA_DIR
             df=factorManager.getFactors(factor_list=features+['open','close'])
             df.reset_index(inplace=True)
@@ -65,9 +65,10 @@ class trainhelper:
                 df_valid=df_train.replace([np.inf, -np.inf], np.nan).dropna()
             #归一化
             # print(df_valid.columns)
-            # columns = features
-            # g = df_valid.groupby('trade_date')[columns]
-            # df_valid[columns] = (df_valid[columns] - g.transform('min')) / (g.transform('max') - g.transform('min'))
+            if norm:
+                columns = features
+                g = df_valid.groupby('trade_date')[columns]
+                df_valid[columns] = (df_valid[columns] - g.transform('min')) / (g.transform('max') - g.transform('min'))
             y_train=df_train['label']
             x_train=df_train.drop('label', axis=1)
             x_train=x_train.drop('close', axis=1)
