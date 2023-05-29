@@ -62,11 +62,11 @@ class nntrain:
                 if replace==False:  
                     return md5
                     
-            x_train,y_train,x_valid,y_valid,df_pred,data_path=trainhelper.getTrainData(start_date=start_date,valid_date=valid_date,end_date=end_date,features=features,label=label,shift=shift,filter_name='',dropna=True)
+            x_train,y_train,x_valid,y_valid,df_pred,data_path=trainhelper.getTrainData(start_date=start_date,valid_date=valid_date,end_date=end_date,features=features,label=label,shift=shift,filter_name='',dropna=True,norm=True)
 
             
             params=nntrain.fit(x_train,y_train,x_valid,y_valid,data_path=data_path)
-            pred=nntrain.predict(params,df_pred,data_path)
+            pred=nntrain.predict(params,df_pred,data_path,md5)
             print(pred)
             # #nntrain.pred(df_pred,data_path,md5)
             
@@ -365,7 +365,7 @@ class nntrain:
             preds = torch.cat(preds, axis=0)
         return preds
 
-    def predict(params,df_pred,data_path):
+    def predict(params,df_pred,data_path,md5):
         df_pred=df_pred.reset_index()
         pred=df_pred[['ts_code','trade_date']]
         x_pred=df_pred.drop('label', axis=1)  
@@ -381,7 +381,7 @@ class nntrain:
         
         pred=pred.dropna()
         
-        pred.to_pickle(data_path+'/preds/nn_model_'+'test'+'_pred.pkl')        
+        pred.to_pickle(data_path+'/preds/nn_model_'+md5+'_pred.pkl')        
         
         return pred
 

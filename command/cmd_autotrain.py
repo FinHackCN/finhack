@@ -29,6 +29,7 @@ if len(sys.argv)>=3:
 
 print(sys.argv)
 
+train_name='lgbtrain'
 
 while True:
         try:
@@ -46,10 +47,23 @@ while True:
                 factor_list.append(flist.pop())
             factor_list.sort()
             
-            print(factor_list)        
-            for loss in ['ds']:
-                lgbtrain.run('20070101','20150101','20170101',factor_list,'abs',10,{},loss)
+            print(factor_list)     
+            
+            if os.path.exists(USER_DIR+'train/'+train_name+'.py'):
+                train_module = importlib.import_module('.'+train_name,package='user.train')
+            else:
+                train_module = importlib.import_module('.'+train_name,package='train')
+            train_instance = getattr(train_module, train_name)
+            train_instance.run('20070101','20150101','20170101',factor_list,'abs',10,{},'ds')            
+            
+            
+#             for loss in ['ds']:
+#                 lgbtrain.run('20070101','20150101','20170101',factor_list,'abs',10,{},loss)
 
         except Exception as e:
             print("error:"+str(e))
             print("err exception is %s" % traceback.format_exc())
+            
+            
+            
+
