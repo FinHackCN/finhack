@@ -144,6 +144,8 @@ class bt:
             rtime=str(round(time.time()-t1,2))
             ret=str(round((bt_instance['total_value']/bt_instance['init_cash']-1)*100,2))
             print("backtest time: %ss , return: %s%%" % (rtime,ret)) 
+            if bt_instance['log_type']==2:
+                print(bt_instance['risk'])
         else:
             pass
     
