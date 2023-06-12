@@ -137,6 +137,8 @@ class lgbtrain:
             pred.to_pickle(data_path+'/preds/lgb_model_'+md5+'_pred.pkl')
         else:
             return pred
+            
+        score(md5)
         
         return 
     
@@ -182,6 +184,7 @@ class lgbtrain:
         sql="UPDATE auto_train SET score = %s WHERE hash='%s'" %(score,md5)
         
         mydb.exec(sql,'finhack')
-
+        if score<0:
+            os.remove(pred_file)
         
         pass

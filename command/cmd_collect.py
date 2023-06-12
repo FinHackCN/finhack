@@ -43,12 +43,12 @@ trade_dates=trade_date_df['cal_date'].values
 trade_dates=list(set(trade_dates))
 trade_dates.sort(reverse=True)
 
-# for trade_date in trade_dates:
-#     print(trade_date)
-#     for i in range(0,len(all_codes),1000):
-#         codes=all_codes[i:i+1000]
-#         codes=','.join(codes)
-#         collecter.getCSS(codes,'INPVOLUME,OUTPVOLUME',trade_date)
+for trade_date in trade_dates:
+    print(trade_date)
+    for i in range(0,len(all_codes),1000):
+        codes=all_codes[i:i+1000]
+        codes=','.join(codes)
+        collecter.getCSS(codes,'INPVOLUME,OUTPVOLUME',trade_date)
 
 
 
