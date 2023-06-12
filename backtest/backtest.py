@@ -144,7 +144,7 @@ class bt:
             rtime=str(round(time.time()-t1,2))
             ret=str(round((bt_instance['total_value']/bt_instance['init_cash']-1)*100,2))
             print("backtest time: %ss , return: %s%%" % (rtime,ret)) 
-            if bt_instance['log_type']==2:
+            if bt_instance['log_type']==2 or bt_instance['log_type']==3 :
                 print(bt_instance['risk'])
         else:
             pass
@@ -595,7 +595,7 @@ class bt:
   
     
     def log(instance,msg,ts_code='',type='info'):
-        if instance['log_type']==0:
+        if instance['log_type']==0 or instance['log_type']==3:
             return
         now_date=instance['now_date']
         time=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")

@@ -42,7 +42,7 @@ class strategy():
             return False
         #第9日尾盘清仓
         if instance['g']['n'] % hold_day==hold_day-1:
-            pred=instance['data'].loc[now_date]
+            pred=instance['pred_data'].loc[now_date]
             pred=pred.sort_values(by='pred',ascending=False, inplace=False) 
             pred=pred[~pred.index.duplicated()]
             
@@ -54,7 +54,7 @@ class strategy():
         
         #第10日开盘买入
         elif instance['g']['n'] % hold_day==0:
-            pred=instance['data'].loc[now_date]
+            pred=instance['pred_data'].loc[now_date]
             
             pred=pred.sort_values(by='pred',ascending=False, inplace=False) 
             
