@@ -184,7 +184,7 @@ class lgbtrain:
         sql="UPDATE auto_train SET score = %s WHERE hash='%s'" %(score,md5)
         
         mydb.exec(sql,'finhack')
-        if score<0:
+        if score<0.03:
             os.remove(pred_file)
         
         pass
