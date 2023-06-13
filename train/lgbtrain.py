@@ -46,6 +46,7 @@ class lgbtrain:
             if(has.empty): 
                 mydb.exec(insert_sql,'finhack')            
             
+            lgbtrain.score(md5)
             return md5
         except Exception as e:
             print("error:"+str(e))
@@ -138,7 +139,7 @@ class lgbtrain:
         else:
             return pred
             
-        lgbtrain.score(md5)
+        
         
         return 
     
