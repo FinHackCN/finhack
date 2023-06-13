@@ -37,12 +37,21 @@ class factorManager:
         flist1=mydb.selectToDf('select * from factors_analysis order by score desc limit '+str(top),'finhack')
         flist1=flist1['factor_name'].tolist()
         result=[]
+    
+        
         if valid==True:
             flist2=mydb.selectToDf('select * from factors_list where check_type=11','finhack')   
             flist2=flist2['factor_name'].values
             
             for factor in flist1:
-                factor_name=factor.split('_')[0]
+                
+                if 'alpha' in factor:
+                    factor_name=factor
+                else:
+                    factor_name=factor.split('_')[0]
+                
+                
+                
                 if factor_name in flist2:
                     result.append(factor)
             

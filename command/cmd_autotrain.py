@@ -38,6 +38,10 @@ while True:
             # with open(CONFIG_DIR+"/factorlist/trainlist/autotrain", 'r', encoding='utf-8') as f:
             #     flist=[_.rstrip('\n') for _ in f.readlines()]
 
+
+            print(flist)
+
+
             
             random.shuffle(flist)
             n=random.randint(min_f,max_f)
