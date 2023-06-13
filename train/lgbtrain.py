@@ -138,7 +138,7 @@ class lgbtrain:
         else:
             return pred
             
-        score(md5)
+        lgbtrain.score(md5)
         
         return 
     
