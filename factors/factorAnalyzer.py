@@ -6,6 +6,11 @@ from library.mydb import mydb
 import hashlib
 import traceback
 class factorAnalyzer():
+    
+    
+    def all_corr():
+        pass
+    
     def analys(factor_name,df=pd.DataFrame(),days=[1,2,3,5,8,13,21],pool='all',start_date='20000101',end_date='20100101',formula="",relace=False,table='factors_analysis'):
         try:
         
