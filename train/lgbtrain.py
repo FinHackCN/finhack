@@ -35,6 +35,8 @@ class lgbtrain:
                 if replace==False:
                     return md5
                     
+                    
+                    
             data_train,data_valid,df_pred,data_path=trainhelper.getLGBTrainData(start_date=start_date,valid_date=valid_date,end_date=end_date,features=features,label=label,shift=shift,filter_name='')
 
 
@@ -185,7 +187,7 @@ class lgbtrain:
         sql="UPDATE auto_train SET score = %s WHERE hash='%s'" %(score,md5)
         
         mydb.exec(sql,'finhack')
-        if score<0.03:
-            os.remove(pred_file)
+        # if score<0.03:
+        #     os.remove(pred_file)
         
         pass

@@ -44,14 +44,13 @@ class factorManager:
             flist2=flist2['factor_name'].values
             
             for factor in flist1:
-                
                 if 'alpha' in factor:
                     factor_name=factor
                 else:
                     factor_name=factor.split('_')[0]
                 
-                
-                
+
+
                 if factor_name in flist2:
                     result.append(factor)
             
@@ -91,34 +90,17 @@ class factorManager:
     
     #获取因子数据
     def getFactors(factor_list,stock_list=[],start_date='',end_date='',cache=False):
-        # print(factor_list)
-        # print(6567)
-        
         md5=','.join(factor_list)+'-'+','.join(stock_list)+'-'+start_date+'-'+end_date
         cache_file=FACTORS_CACHE_DIR+'factors_'+hashlib.md5(md5.encode(encoding='utf-8')).hexdigest()+'.pkl'
-        # print(cache_file)
         if os.path.isfile(cache_file): # use cache 
-            #print('reading cache')
-            #print(factor_list)
-            # print(md5)
-            # print(99999)
             return pd.read_pickle(cache_file)
         else:
-            #print(77777)
             pass
-            #print(factor_list)
-            #print("nocache")
-        #print(2222)
         
         df_factor=pd.DataFrame()
         for factor in factor_list:
             factor=factor.replace('$','')
             if os.path.isfile(SINGLE_FACTORS_DIR+factor+'.csv'):
-                # df=pd.read_csv(SINGLE_FACTORS_DIR+factor+'.csv',names=['ts_code','trade_date',factor], dtype={'ts_code': str,'trade_date': str, factor: np.float64},low_memory=False)
-                # df=df.dropna(subset=['ts_code','trade_date'])
-                # df=df.sort_values(['ts_code','trade_date'])
-                # df=df.set_index(['ts_code','trade_date'])
-                
                 df=pd.read_csv(SINGLE_FACTORS_DIR+factor+'.csv',names=['ts_code','trade_date',factor], dtype={'ts_code': str,'trade_date': str, factor: np.float64},index_col=['ts_code','trade_date'],low_memory=False)
 
                 if df_factor.empty:
@@ -132,8 +114,6 @@ class factorManager:
                 del df
             else:
                 print(SINGLE_FACTORS_DIR+factor+'.csv not found')
-        
-        
         
         
         if df_factor.empty:

@@ -21,8 +21,8 @@ def auto_lgbtrain(factor_list,init_cash=1000,loss='ds',backtest=True):
 
 
 
-min_f=10
-max_f=20
+min_f=150
+max_f=200
 if len(sys.argv)>=3:
     min_f=int(sys.argv[1])
     max_f=int(sys.argv[2])
@@ -39,7 +39,7 @@ while True:
             #     flist=[_.rstrip('\n') for _ in f.readlines()]
 
 
-            print(flist)
+            #print(flist)
 
 
             
@@ -51,14 +51,59 @@ while True:
                 factor_list.append(flist.pop())
             factor_list.sort()
             
-            print(factor_list)     
+            
+            
+            df=factorManager.getFactors(factor_list=factor_list+['open','close'])
+            # 计算相关性矩阵
+            correlation_matrix = df.corr()
+            
+
+            
+            # print(df)
+            
+            
+            
+            # # 打印相关性矩阵
+            # print(correlation_matrix)
+            
+            
+            new_factor_list=[]
+            
+            
+            # 遍历每一对名称和相关系数
+            
+            
+            for factor in factor_list:
+                if factor in  ['open','close'] :
+                    continue
+                append=True
+                for factor2 in new_factor_list:
+
+                    for column1, series in correlation_matrix.iteritems():
+                        if column1!=factor:
+                            continue
+                        for column2, correlation in series.iteritems():
+                            if column1==column2:
+                                continue
+                            if column2!=factor2:
+                                continue
+                            if abs(correlation)>0.7:
+                                append=False
+                if append:
+                    new_factor_list.append(factor)
+                        
+            
+            
+            factor_list=new_factor_list
+               
             
             if os.path.exists(USER_DIR+'train/'+train_name+'.py'):
                 train_module = importlib.import_module('.'+train_name,package='user.train')
             else:
                 train_module = importlib.import_module('.'+train_name,package='train')
             train_instance = getattr(train_module, train_name)
-            train_instance.run('20070101','20150101','20170101',factor_list,'abs',10,{},'ds')            
+            train_instance.run('20070101','20150101','20170101',factor_list,'abs',10,{},'ds')    
+            train_instance.run('20070101','20150101','20170101',factor_list,'abs',10,{},'mse') 
             
             
 #             for loss in ['ds']:
