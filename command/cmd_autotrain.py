@@ -79,16 +79,17 @@ while True:
                 append=True
                 for factor2 in new_factor_list:
 
-                    for column1, series in correlation_matrix.iteritems():
+                    for column1, series in correlation_matrix.items():
                         if column1!=factor:
                             continue
-                        for column2, correlation in series.iteritems():
+                        for column2, correlation in series.items():
                             if column1==column2:
                                 continue
                             if column2!=factor2:
                                 continue
                             if abs(correlation)>0.7:
                                 append=False
+
                 if append:
                     new_factor_list.append(factor)
                         
