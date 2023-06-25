@@ -180,7 +180,7 @@ class tsAStockIndex:
         #mydb.truncateTable('astock_index_weight',db)
         data=tsSHelper.getAllAStockIndex(pro,db)
         #index_list=data['ts_code'].tolist()
-        index_list=['000001.SH','000300.SH','000852.SH']
+        index_list=['000001.SH','000300.SH','000852.SH','000905.SH']
         for ts_code in index_list:
             try_times=0
             

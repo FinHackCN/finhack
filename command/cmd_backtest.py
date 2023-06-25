@@ -105,13 +105,13 @@ model=args.model if args.model!=None else 'all'
 thread=args.thread if args.thread!=None else int(cfg['thread'])
 cash_list=[args.cash] if args.cash!=None else list(map(int, cfg['cash'].split(',')))
 strategy_list=[args.strategy] if args.strategy!=None else cfg['strategy'].split(',')
+benchmark_list=[args.benchmark] if args.benchmark!=None else cfg['benchmark'].split(',')
 
-        
 params={
         'start_date':args.start if args.start!=None else cfg['start'],
         'end_date':args.end if args.end!=None else cfg['end'],
         'filter_name':args.filter if args.filter!=None else cfg['filter'] ,
-        'benchmark':args.benchmark if args.benchmark!=None else cfg['benchmark'],
+        #'benchmark':args.benchmark if args.benchmark!=None else cfg['benchmark'],
         'fees':args.fees if args.fees!=None else float(cfg['fees']),
         'min_fees':args.min_fees if args.min_fees!=None else float(cfg['min_fees']),
         'tax':args.tax if args.tax!=None else float(cfg['tax']),
@@ -156,22 +156,25 @@ while True:
                 for row in model_list.itertuples():
                         for init_cash in cash_list:
                                 for strategy_args in args_list:
-                                        for strategy in strategy_list:
-                                                features_list=getattr(row,'features')
-                                                model_hash=getattr(row,'hash')
-                                                filters_name='MainBoardNoST' #只交易主板
-                                                if not os.path.exists(PREDS_DIR+"lgb_model_"+model_hash+"_pred.pkl"):
-                                                        print('preds deleted')
-                                                        continue          
-                                                loss=getattr(row,'loss')
-                                                algorithm=getattr(row,'algorithm')
-                                                #time.sleep(1)
-                                                if thread==1:
-                                                        start_bt(features_list,model_hash,loss,algorithm,init_cash,strategy,strategy_args,params,slice_type)
-                                                else:
-                                                        #print('submit')
-                                                        mytask=pool.submit(start_bt,features_list,model_hash,loss,algorithm,init_cash,strategy,strategy_args,params,slice_type)
-                                                        tasklist.append(mytask)
+                                        for benchmark in benchmark_list:
+                                                strategy_args['benchmark']=benchmark
+                                                params['benchmark']=benchmark
+                                                for strategy in strategy_list:
+                                                        features_list=getattr(row,'features')
+                                                        model_hash=getattr(row,'hash')
+                                                        filters_name='MainBoardNoST' #只交易主板
+                                                        if not os.path.exists(PREDS_DIR+"lgb_model_"+model_hash+"_pred.pkl"):
+                                                                print('preds deleted')
+                                                                continue          
+                                                        loss=getattr(row,'loss')
+                                                        algorithm=getattr(row,'algorithm')
+                                                        #time.sleep(1)
+                                                        if thread==1:
+                                                                start_bt(features_list,model_hash,loss,algorithm,init_cash,strategy,strategy_args,params,slice_type)
+                                                        else:
+                                                                #print('submit')
+                                                                mytask=pool.submit(start_bt,features_list,model_hash,loss,algorithm,init_cash,strategy,strategy_args,params,slice_type)
+                                                                tasklist.append(mytask)
                         
                 if model!='all':
                         break
