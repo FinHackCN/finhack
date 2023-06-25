@@ -45,6 +45,8 @@ class bt:
             "trade_returns":[
                 
             ],
+            "turnover":[
+            ],
             "risk":{
                 
             },
@@ -150,13 +152,17 @@ class bt:
             pass
     
     def record(bt_instance):
+        
+        # print(bt_instance['turnover'])
+        # print(sum(bt_instance['turnover']))
         risk=bt_instance['risk']
         returns=str(risk['returns'].to_json(orient='index'))
         bench_returns=str(risk['bench_returns'].to_json(orient='index'))        
         features_list=bt_instance['args']['features_list']
         train=bt_instance['args']['train']
         model=bt_instance['args']['model']
-        strategy=bt_instance['strategy_name']+'_'+str(list(bt_instance['args']['strategy_args'].values()))
+        strategy_args=','.join(str(arg) for arg in bt_instance['args']['strategy_args'])
+        strategy=bt_instance['strategy_name']+'_['+strategy_args+']'
         init_cash=bt_instance['init_cash']
         endtime=bt_instance['runtime_info']['endtime']
         runtime=bt_instance['runtime_info']['runtime']
@@ -344,6 +350,15 @@ class bt:
             return False     
 
         bt.log(instance=instance,ts_code=ts_code,msg="买入"+str(amount)+"股，当前价格"+str(round(price,2)),type='trade')
+        buy_value = instance['history'].get(now_date, {}).get('buy_value', 0)
+        if buy_value != 0:
+            # 如果存在 buy_value 键，则执行对应的操作
+            instance['history'][now_date]['buy_value']=buy_value+amount*price
+        else:
+            # 如果不存在 buy_value 键，则执行其他操作
+            instance['history'][now_date]={}
+            instance['history'][now_date]['buy_value']=amount*price
+
         return True
     
     def sell(instance,ts_code,amount=0,value=0,time='close'):
@@ -457,6 +472,14 @@ class bt:
         bt.log(instance=instance,ts_code=ts_code,msg="卖出"+str(amount)+"股，当前价格"+str(round(price,2)),type='trade')
         #+"，每股盈利"+str(round(price-avg_price_old,2))+"，总共盈利"+str(round((price-avg_price_old)*amount,2)),type='trade')
         
+        sell_value = instance['history'].get(now_date, {}).get('sell_value', 0)
+        if sell_value !=0:
+            # 如果存在 buy_value 键，则执行对应的操作
+            instance['history'][now_date]['sell_value']=sell_value+amount*price
+        else:
+            # 如果不存在 buy_value 键，则执行其他操作
+            instance['history'][now_date]={}
+            instance['history'][now_date]['sell_value']=amount*price
 
         return True
     
@@ -572,7 +595,16 @@ class bt:
         instance['total_value']=instance['cash']+positions_value
         instance['old_value']=instance['cash']+positions_value
         instance['returns'].append([now_date,instance['total_value']/old_value])
-        instance['history'][now_date]=instance['positions']
+        if now_date not in instance['history']:
+            instance['history'][now_date]={}
+        instance['history'][now_date]['postion']=instance['positions']
+        
+        
+        
+        sell_value = instance['history'].get(now_date, {}).get('sell_value', 0)
+        buy_value = instance['history'].get(now_date, {}).get('buy_value', 0)
+        instance['turnover'].append(round((sell_value+buy_value)*100/instance['total_value'],2))
+        
         bt.log(instance,"账户余额："+str(instance['total_value'])+","+now_date)
         if instance['total_value']<0 :
             print("余额小于0")
