@@ -106,6 +106,11 @@ class bt:
         date_range=pred_data['trade_date'].to_list()
         date_range=list(set(date_range))
         date_range=sorted(date_range)
+        
+        print(pred_data)
+        print(date_range)
+        exit()
+        
         pred_data=pred_data.set_index(['trade_date','ts_code'])
         bt_instance['pred_data']=pred_data
         bt_instance['date_range']=date_range
@@ -125,7 +130,7 @@ class bt:
             strategy_module = importlib.import_module('.'+strategy_name,package='strategies')
 
         strategy_instance = getattr(strategy_module, 'strategy')
-        bt.log(instance=bt_instance,msg="开始执行策略！",type='info')
+        bt.log(instance=bt_instance,msg="开始执行策略！策略名称:"+strategy_name,type='info')
         bt_instance=strategy_instance.run(instance=bt_instance)
         
         

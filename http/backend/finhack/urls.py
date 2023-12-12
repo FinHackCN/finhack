@@ -1,7 +1,7 @@
 from rest_framework.routers import SimpleRouter
 from django.urls import path
 from .views import BacktestModelViewSet
-from .tests import signal
+from .signal import signal
 
 router = SimpleRouter()
 router.register("backtest", BacktestModelViewSet)

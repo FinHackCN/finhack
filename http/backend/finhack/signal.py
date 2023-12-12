@@ -33,3 +33,6 @@ def signal(request):
     
     return JsonResponse(result,safe=False)
  
+ 
+ 
+ 

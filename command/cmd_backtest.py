@@ -133,18 +133,12 @@ else:
         args_list=[json.loads(args_list.replace("'", "\""))]
 args_list=list(args_list)
 
-# price_state,dividend_state=market.get_state()
 
-# if price_state==None or time.time()-price_state>60*60*24:
-#         print("正在加载行情数据……")
-#         market.load_price() 
-#         print("加载行情数据完毕！")
-# if dividend_state==None or time.time()-dividend_state>60*60*24:
-#         print("正在加载分红送股数据……")
-#         market.load_dividend()
-#         print("加载分红送股数据完毕！")
 
 #print("正在加载行情数据……")
+
+#market.load_data(slice_type="m")
+
 slice_type='m'
 while True:
         with ProcessPoolExecutor(max_workers=thread) as pool:

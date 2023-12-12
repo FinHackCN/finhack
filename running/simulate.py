@@ -16,15 +16,15 @@ from running.running import running
 from library.globalvar import *
 class simulate:
     def updateTopBt(n=10):
-        # top_features_sql="SELECT avg(annual_return) as mean,count(features_list) as c,features_list FROM `finhack`.`backtest`  where sortino>2 and max_down>-0.5  GROUP BY features_list order  by mean desc";
-        # top_features=mydb.selectToDf(top_features_sql,'finhack')
-        # for row in top_features.itertuples():
-        #     features=getattr(row,'features_list')
-        #     mydb.exec("update backtest set simulate=1 where max_down>-0.3 and annual_return>0 and instance_id in (select t2.instance_id from (SELECT instance_id FROM backtest where features_list='%s' ORDER BY sortino desc limit 10) as t2)" % features,'finhack')
+        top_features_sql="SELECT avg(annual_return) as mean,count(features_list) as c,features_list FROM `finhack`.`backtest`  where sortino>2 and max_down>-0.5  GROUP BY features_list order  by mean desc";
+        top_features=mydb.selectToDf(top_features_sql,'finhack')
+        for row in top_features.itertuples():
+            features=getattr(row,'features_list')
+            mydb.exec("update backtest set simulate=1 where max_down>-0.4 and annual_return>0 and instance_id in (select t2.instance_id from (SELECT instance_id FROM backtest where features_list='%s' ORDER BY sortino desc limit 10) as t2)" % features,'finhack')
         
         #mydb.exec("update backtest set simulate=0" ,'finhack')
         #mydb.exec("update backtest set simulate=1 where max_down>-0.5 and annual_return>0.15 and sharpe>0.8 ORDER BY sortino desc limit %s" % str(n),'finhack')
-        mydb.exec("update backtest set simulate=1 where instance_id in (select t2.instance_id from (SELECT instance_id FROM backtest  ORDER BY sharpe desc limit %s) as t2)" % str(n),'finhack')
+        #mydb.exec("update backtest set simulate=1 where instance_id in (select t2.instance_id from (SELECT instance_id FROM backtest  ORDER BY sharpe desc limit %s) as t2)" % str(n),'finhack')
 
     def getSimulateList():
         mydb.exec("truncate table  simulate_record",'woldycvm')
@@ -91,21 +91,21 @@ class simulate:
             instance_id=getattr(row,'instance_id')
             rank=getattr(row,'rank')
             strategy_name=strategy.split('_')[0]
-  
+            benchmark=getattr(row,'benchmark')
             bt_instance=bt.run(
                     instance_id=instance_id,
                     cash=int(init_cash),
                     start_date='20221209',
                     end_date='20990101',
                     strategy_name=strategy_name,
-                    data_path="lgb_model_simulate_"+model_hash+"_pred.pkl",
+                    pred_data_path="lgb_model_simulate_"+model_hash+"_pred.pkl",
                     args=args,
+                    benchmark=benchmark,
                     g={'rank':rank},
                     replace=True,
                     type='simulate',
+                    log_type=0,
                     slip=0.0015
             )
             
-
-    
-    
+ 

@@ -5,17 +5,22 @@ import random
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from running.running import running
 from running.simulate import simulate
+from factors.factorRepair import factorRepair
+
+factorRepair.setDateFactors()
 
 # df=runing.prepare('20221206')
 
 # pred=running.pred(df)
 
- 
+
 
 # print(pred[0:10])
 
 
 bt_list=simulate.getSimulateList()
+
+
 simulate.loadData(bt_list)
 simulate.testAll()
 # print(bt_list)

@@ -10,9 +10,6 @@ from library.mydb import mydb
 import lightgbm as lgb
 from astock.astock import AStock
 from factors.factorManager import factorManager
-
-
-from factors.factorManager import factorManager
 import warnings
 warnings.filterwarnings('ignore')
 from library.globalvar import *
@@ -24,6 +21,7 @@ class running():
     
     
     def readFactor(factor_name,trade_date,df,n=0):
+        #n代表重试次数
         if n>3:
             print("read factor fail:"+factor_name)
             exit()

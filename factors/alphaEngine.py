@@ -981,11 +981,12 @@ class alphaEngine():
             # print(diff_date)
             # print(1111)
             # print(df)
-            # print(col_list)
+            #print(col_list)
             if df.empty:
                 df=factorManager.getFactors(factor_list=col_list,cache=True)
             else:
                 df=df.sort_index()
+       
        
             # print(df)  
             # print(diff_date)

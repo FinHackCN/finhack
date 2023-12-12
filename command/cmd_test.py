@@ -17,6 +17,52 @@ from astock.market import market
 import bottleneck as bn
 from train.nntrain import nntrain
 from train.lgbtrain import lgbtrain
+from factors.alphaEngine import alphaEngine
+from factors.factorManager import factorManager
+import riskfolio as rp
+import matplotlib.pyplot as plt
+
+
+
+
+alpha=alphaEngine.calc("(rank(ts_argmax(signedpower((($returns < 0) ? stddev($returns, 20) : $close), 2), 5)) -0.5)",pd.DataFrame(),'alpha101_001')
+print(alpha)
+exit()
+df=factorManager.getFactors(['returns'])
+df=df.reset_index()
+df_pivot = df.pivot(index='trade_date', columns='ts_code', values='returns')
+df_pivot=df_pivot.fillna(0)
+
+# 创建Portfolio对象
+port = rp.Portfolio(returns=df_pivot)
+
+# To display dataframes values in percentage format
+pd.options.display.float_format = '{:.4%}'.format
+
+# Choose the risk measure
+rm = 'MSV'  # Semi Standard Deviation
+
+# Estimate inputs of the model (historical estimates)
+method_mu='hist' # Method to estimate expected returns based on historical data.
+method_cov='hist' # Method to estimate covariance matrix based on historical data.
+
+port.assets_stats(method_mu=method_mu, method_cov=method_cov, d=0.94)
+
+# Estimate the portfolio that maximizes the risk adjusted return ratio
+w1 = port.optimization(model='Classic', rm=rm, obj='Sharpe', rf=0.0, l=0, hist=True)
+
+# Estimate points in the efficient frontier mean - semi standard deviation
+ws = port.efficient_frontier(model='Classic', rm=rm, points=5, rf=0, hist=True)
+
+# Estimate the risk parity portfolio for semi standard deviation
+w2 = port.rp_optimization(model='Classic', rm=rm, rf=0, b=None, hist=True)
+
+
+print(w1)
+print(ws)
+print(w2)
+
+exit()
 #market.load_price()
 # ts_code='301138.SZ'
 # market.get_price(ts_code,'20211215',client=None)
