@@ -76,10 +76,10 @@ class market:
     #         mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
     #         return mm.fileno()
         
-    def load_mm_data(fileno):
-        mm = mmap.mmap(fileno, 0, access=mmap.ACCESS_READ)
-        data = pickle.loads(mm.read())
-        return data
+    # def load_mm_data(fileno):
+    #     mm = mmap.mmap(fileno, 0, access=mmap.ACCESS_READ)
+    #     data = pickle.loads(mm.read())
+    #     return data
      
      
     def slice_date(start_date="20170101",end_date="20230501",slice_type='n'):
@@ -119,7 +119,7 @@ class market:
         
         
     
-    def get_data(start_date="20170101",end_date="20230501",slice_type='n',now_date='20170101',cache=True):
+    def get_data(start_date="20170101",end_date="20230701",slice_type='n',now_date='20170101',cache=True):
         
         #这块实现的不对，太麻烦了，直接now_data[0:4]+"0101"啥的就行，但是懒得改了
         slice_list=market.slice_date(start_date=start_date,end_date=end_date,slice_type=slice_type)
@@ -144,7 +144,7 @@ class market:
         
      
     #文件形式加载数据 
-    def load_data(start_date="20170101",end_date="20230501",slice_type='n',cache=True): 
+    def load_data(start_date="20170101",end_date="20230701",slice_type='n',cache=True): 
         slice_list=market.slice_date(start_date=start_date,end_date=end_date,slice_type=slice_type)
         df_div=mydb.selectToDf('SELECT ts_code,record_date,ex_date,pay_date,stk_div,cash_div_tax FROM `tushare`.`astock_finance_dividend` where  div_proc="实施"','tushare')
         price_cache_path=PRICE_CACHE_DIR+"/bt_price"

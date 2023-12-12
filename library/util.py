@@ -1,5 +1,4 @@
 import os
-from library.globalvar import *
 
 class util:
     #获取目录中的文件列表

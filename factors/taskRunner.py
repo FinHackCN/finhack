@@ -43,7 +43,7 @@ class taskRunner:
                     with open(CONFIG_DIR+"/factorlist/alphalist/"+factor_list_name, 'r', encoding='utf-8') as f:
                         factor_list=[_.rstrip('\n') for _ in f.readlines()]
                         i=0
-                        with ProcessPoolExecutor(max_workers=16) as pool:
+                        with ProcessPoolExecutor(max_workers=8) as pool:
                             for factor in factor_list:   
                                 i=i+1
                                 alpha_name=factor_list_name+'_'+str(i).zfill(3)

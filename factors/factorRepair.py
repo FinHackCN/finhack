@@ -46,13 +46,19 @@ class factorRepair():
         df.to_csv(path,mode='w',encoding='utf-8',header=False,index=False)        
         pass
     
-    
+    #写入单个
     def writeCsvDateFactor(factor,start_date='',end_date=''):
+            if os.path.exists(DATE_FACTORS_DIR+trade_date+'/'+factor): 
+                df=pd.read_csv(DATE_FACTORS_DIR+trade_date+'/'+factor,encoding="utf-8-sig", names=["ts_code",'trade_date','alpha'])
+                if len(df)>5000:
+                    return True
+                else:
+                    print(factor+":"+str(len(df)))
             df=pd.read_csv(SINGLE_FACTORS_DIR+factor, header=None, names=['ts_code','trade_date','alpha'],dtype={"trade_date": str})
             if start_date!='':
                 df=df[df.trade_date>=start_date]
             if end_date!='':
-                df=df[df.trade_date<=start_date]   
+                df=df[df.trade_date<=end_date]   
             
             trade_date_list=set(df['trade_date'].values)
             for trade_date in trade_date_list:
@@ -66,12 +72,12 @@ class factorRepair():
   
     
     
-    def setDateFactors(start_date='',end_date=''):
+    def setDateFactors(start_date='20220101',end_date='20991231'):
         single_factors_list=util.getFileList(SINGLE_FACTORS_DIR)
         tasklist=[]
         with ProcessPoolExecutor(max_workers=30) as pool:
             for single_factor in single_factors_list:
-                factorRepair.writeCsvDateFactor(single_factor,start_date,end_date)
+                #factorRepair.writeCsvDateFactor(single_factor,start_date,end_date)
                 mytask=pool.submit(factorRepair.writeCsvDateFactor,single_factor,start_date,end_date)
                 tasklist.append(mytask)
         wait(tasklist,return_when=ALL_COMPLETED)

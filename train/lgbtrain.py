@@ -20,6 +20,9 @@ class lgbtrain:
     def score_mv(x,shift,md5):
         pass
         
+        
+        
+        
     def run(start_date='20000101',valid_date="20080101",end_date='20100101',features=[],label='abs',shift=10,param={},loss='ds',filter_name='',replace=False):
         print("start log_train:loss=%s" % (loss))
         try:
@@ -53,6 +56,11 @@ class lgbtrain:
         except Exception as e:
             print("error:"+str(e))
             print("err exception is %s" % traceback.format_exc())
+
+
+
+
+
 
 
     def custom_obj(y_pred,y_true): #损失函数

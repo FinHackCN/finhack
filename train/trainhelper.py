@@ -1,4 +1,4 @@
-from factors.factorManager import factorManager
+
 import pandas as pd
 import numpy as np
 import math
