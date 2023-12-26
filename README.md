@@ -14,7 +14,7 @@ FinHack®，一个易于拓展的量化金融框架，它在当前版本中集�
 - 支持多进程的回测和多进程的机器学习训练，可极限利用服务器算力
 
 ## 使用帮助
- [快速入门]([https://github.com/FinHackCN/finhack/wiki](https://github.com/FinHackCN/finhack/wiki/%E5%BF%AB%E9%80%9F%E5%85%A5%E9%97%A8))
+[快速入门](https://github.com/FinHackCN/finhack/wiki/%E5%BF%AB%E9%80%9F%E5%85%A5%E9%97%A8)
  
 ## 数据采集
 ![image](https://github.com/FinHackCN/finhack/assets/6196607/63870118-f7b0-473b-b8df-8bdbd748c018)
