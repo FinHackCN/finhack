@@ -22,3 +22,5 @@ TA_Lib==0.4.24
 tabulate==0.8.10
 mysql-connector-python==8.0.30
 tushare==1.2.87
+lightgbm==4.2.0
+cryptography==39.0.1

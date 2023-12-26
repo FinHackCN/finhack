@@ -23,11 +23,11 @@ def initialize(context):
     # 为股票设定滑点为百分比滑点                       
     set_slippage(PriceRelatedSlippage(0.00246),type='stock')
     # 持仓数量
-    g.stocknum = 3
+    g.stocknum = 50
     # 交易日计时器
     g.days = 0 
     # 调仓频率
-    g.refresh_rate = 5
+    g.refresh_rate = 1
     # 运行函数
     #inout_cash(100000)
 

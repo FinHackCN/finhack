@@ -19,7 +19,7 @@ class Utils:
         
     #获取框架的模板路径
     def get_template_path():
-        framework_path=utils.get_framework_path()
+        framework_path=Utils.get_framework_path()
         template_path=framework_path+"/widgets/templates/empty_project"
         return template_path
         
