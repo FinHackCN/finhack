@@ -14,7 +14,7 @@ with open('requirements.txt') as f:
 
 setup(
     name='finhack',
-    version='0.0.1.dev2',
+    version='0.0.1.dev3',
     author='woldy',
     description='A scalable quantitative financial analysis framework.',
     packages=find_packages(),

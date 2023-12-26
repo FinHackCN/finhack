@@ -1,6 +1,8 @@
 mysqldump -uroot -p --no-data finhack > ./databases/finhack_structure.sql
 
-
+rm -rf dist/*
+rm -rf build/*
+rm -rf finhack.egg-info
 
 rsync -av --include='*/' --include='factorlist/' --include='factorlist/**'  \
 	--include='*.py' --include='*.conf' --exclude='*' --exclude='__pycache__/' \
