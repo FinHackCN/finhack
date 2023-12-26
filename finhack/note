@@ -1,0 +1,8 @@
+finhack broker run/stop/restart
+finhack train  run/stop/restart
+finhack collecter run/stop/restart
+finhack factor run/stop/restart
+finhack http run/stop/restart
+finhack cache
+finhack data
+finhack run

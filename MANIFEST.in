@@ -1,0 +1,7 @@
+recursive-include finhack *
+global-exclude *.log
+global-exclude *.pkl
+global-exclude *.conf
+global-exclude __pycache__
+global-exclude .git
+global-exclude *.pyc

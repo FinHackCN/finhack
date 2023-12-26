@@ -1,0 +1,27 @@
+#!/usr/bin/env python
+import os
+from finhack.core.core import Core
+import multiprocessing
+import atexit
+if __name__ == '__main__':
+    core=Core()
+    core.load_module()
+
+    from finhack.library.utils import Utils
+    if core.args.background:
+        pid = os.fork()  # 创建一个新进程
+        if pid == -1:  # 创建进程失败
+            print("创建后台进程失败！")
+            exit(1)
+        elif pid == 0:  # 子进程中执行
+            core.do_action()
+            exit(0)
+        else:  # 父进程中继续执行
+            Utils.write_pids(pid)
+            print("启动后台任务！")
+            exit(0)
+    else:
+        atexit.register(Utils.auto_exit) # 注册退出函数
+        core.do_action()
+
+    
