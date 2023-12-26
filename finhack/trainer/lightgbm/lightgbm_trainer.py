@@ -17,7 +17,7 @@ from finhack.factor.default.alphaEngine import alphaEngine
 from finhack.market.astock.astock import AStock
 from finhack.factor.default.taskRunner import taskRunner
 from finhack.factor.default.factorManager import factorManager
-
+from lightgbm import log_evaluation, early_stopping
 from finhack.trainer.trainer import Trainer
 
 class LightgbmTrainer(Trainer):
@@ -124,14 +124,15 @@ class LightgbmTrainer(Trainer):
         
         print('Starting training...')
         # 模型训练
-        
+        callbacks = [log_evaluation(period=100), early_stopping(stopping_rounds=30)]
         if loss=="ds":
+            params['objective']=self.custom_obj
             gbm = lgb.train(params,
                             data_train,
                             num_boost_round=100,
                             valid_sets=data_valid,
-                            early_stopping_rounds=5,
-                            fobj=self.custom_obj,
+                            callbacks=callbacks,
+
                             feval=self.custom_eval
                             )
         else:
@@ -139,7 +140,7 @@ class LightgbmTrainer(Trainer):
                             data_train,
                             num_boost_round=100,
                             valid_sets=data_valid,
-                            early_stopping_rounds=5
+                            callbacks=callbacks
                             )           
         
         print('Saving model...')

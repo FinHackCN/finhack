@@ -98,7 +98,8 @@ finhack -h
         if module=="project":
             project_path=args.project_path
             if project_path==None:
-                project_path=os.getcwd()+"project_"+str(int(time.time()))
+                project_path=os.getcwd()+"/project_"+str(int(time.time()))
+                self.project_path=project_path
 
             template_path=Utils.get_template_path()
             if action=="create":
@@ -107,6 +108,7 @@ finhack -h
                     print("创建完毕！项目路径为 %s 请切换到该目录或使用-p参数指定目录并执行相应操作！" % (project_path).replace('//','/'))
                 else:
                     print("创建失败！")
+                exit()
             elif action=="renew":
                 #todo
                 pass

@@ -6,6 +6,8 @@ import os
 import importlib
 import lightgbm as lgb
 from runtime.constant import *
+
+
 class Trainer:
     def getTrainData(self,start_date='20000101',valid_date="20080101",end_date='20100101',features=[],label='abs',shift=10,filter_name='',dropna=False,norm=False):
             data_path=DATA_DIR
