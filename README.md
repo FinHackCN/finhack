@@ -1,15 +1,22 @@
 # FinHack® 炼金术(内测中，文档待补充)
 ## 项目介绍
-<div align=center><img width="150" height="150" src="https://github.com/FinHackCN/finhack/assets/6196607/6a98eddc-2fee-4306-93a5-23567a90a868"/></div>
-
 <div>FinHack®, an easily extensible quantitative finance framework, integrates a complete workflow for quantitative investment research in its current version, including data collection, factor computation, factor mining, factor analysis, machine learning, strategy development, and quantitative backtesting. In later stages, it will expand to include more data sources, trading instruments, analytical tools, and practical plugins, aiming to create an open, customizable, and high-level quantitative finance framework to aid Quants and researchers in related fields with their financial research work.</div>
 <br/>
 FinHack®，一个易于拓展的量化金融框架，它在当前版本中集成了<B>数据采集、因子计算、因子挖掘、因子分析、机器学习、策略编写、量化回测</B>等全流程的量化投研工作，后期它将拓展出更多的数据源、交易品种与分析工具与实用插件(如WebUI、实盘接入、插件商城等)，力求打造一个开放的、可定制的、高水平的量化金融框架，助力广大Quant与相关学科工作者的金融研究工作。
 
+## 项目特点
+- 良好的拓展性，包括但不限于拓展自己的数据源、因子、AI模型、量化策略以及回测规则
+- 可以支持公式形式计算类似Alpha101、Alpha191因子的计算引擎，并附带了这两个因子集
+- 良好的环境隔离，可以通过项目目录的形式创建不同的策略集，适合多用户环境下的工作
+- 回测系统中对A股规则的支持，包括涨跌停限制，T+1规则约束等，并可自定义约束规则
+- 采用了动态复权的回测机制，避免了前后复权后存在较大价格误差的问题，优化了回测速度
+- 内置了支持tushare的数据采集器，填写对应token后可一键采集tushare数据
+- 支持多进程的回测和多进程的机器学习训练，可极限利用服务器算力
+
 ## 使用帮助
  [正在编写中](https://github.com/FinHackCN/finhack/wiki)
  
-## 数据同步
+## 数据采集
 ![image](https://github.com/FinHackCN/finhack/assets/6196607/63870118-f7b0-473b-b8df-8bdbd748c018)
 
 ## 因子计算
