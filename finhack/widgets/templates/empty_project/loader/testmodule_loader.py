@@ -8,6 +8,7 @@ class TestmoduleLoader(BaseLoader):
         Log.logger.debug("testarg1 is:"+str(self.args.testarg1))
         Log.logger.debug("testarg2 is:"+str(self.args.testarg2))
         obj=self.klass()
+        obj.args=self.args
         obj.run()
         
     

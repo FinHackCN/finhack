@@ -27,7 +27,8 @@ class BaseLoader():
         self.user_module_path=BASE_DIR+"/"+self.module_name+"/"+self.vendor+"/"+self.vendor+'_'+self.module_name+".py"
         self.module = ClassLoader.get_module(module_path=self.module_path,user_module_path=self.user_module_path)
         try:
-            self.klass = getattr(self.module, self.vendor.capitalize()+self.module_name.capitalize())
+            self.klass = getattr(self.module, self.vendor.capitalize()+self.module_name.capitalize())()
+            self.klass.args=self.args
         except Exception as e:
             if "has no attribute" in str(e) and self.vendor.capitalize()+self.module_name.capitalize() in str(e):
                 if os.path.exists(self.module_path) or os.path.exists(self.user_module_path):
@@ -35,8 +36,10 @@ class BaseLoader():
                 elif os.path.exists(self.module_path) and os.path.exists(self.user_module_path):
                     Log.logger.error(self.module_path.replace('.','/')+".py，"+self.user_module_path+"均不存在")
                 else:
+                    class_name=self.vendor.capitalize()+self.module_name.capitalize()
                     Log.logger.error(str(e))
-                    Log.logger.error("请根据堆栈信息检查是否在包名错误、包未使用pip安装、包中有错误语法或引用等问题")
+                    Log.logger.error(f"请检查是否存在{class_name}相关文件，是否在包名错误、包未使用pip安装、包中有错误语法或引用等问题")
+                    Log.logger.error(f"提示：可重点关注{self.user_module_path}，以及对应类名{class_name}")
                     print("Traceback:", file=sys.stderr)
                     traceback.print_tb(e.__traceback__)
                 exit()
@@ -48,7 +51,7 @@ class BaseLoader():
         
     
     def run(self):
-        klass=self.klass()
+        klass=self.klass
         klass.run()
 
     
