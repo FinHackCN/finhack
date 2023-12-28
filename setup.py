@@ -2,6 +2,7 @@ from setuptools import setup, find_packages
 import os 
 
 root_dir = 'finhack'
+version='0.0.1.dev4'
 
 for subdir, dirs, files in os.walk(root_dir):
     if not '__init__.py' in files:
@@ -9,12 +10,16 @@ for subdir, dirs, files in os.walk(root_dir):
         open(init_file_path, 'a').close()
         print(f'Created __init__.py in {subdir}')
 
+with open('./finhack/__init__.py', 'w') as file:
+    file.write(f"__version__ = '{version}'\n")
+
+
 with open('requirements.txt') as f:
     requirements = f.read().splitlines()
 
 setup(
     name='finhack',
-    version='0.0.1.dev3',
+    version=version,
     author='woldy',
     description='A scalable quantitative financial analysis framework.',
     packages=find_packages(),

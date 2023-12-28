@@ -7,6 +7,7 @@ import inspect
 import finhack.library.log as Log
 from finhack.library.utils import Utils
 from finhack.library.class_loader import ClassLoader
+from finhack.core.version import get_version
 import sys
 
 
@@ -28,8 +29,6 @@ finhack -h
         self.append_args()
         self.generate_global()
         self.init_logger()
-        
-        
 
     def init_logger(self):
         from runtime.constant import LOGS_DIR
@@ -169,7 +168,8 @@ finhack -h
         if hasattr(loader_obj, self.action):
             method = getattr(loader_obj, self.action)
         else:
-            klass=loader_obj.klass()
+            klass=loader_obj.klass
+            klass.args=self.args
             method = getattr(klass, self.action)
             
         method()  
