@@ -5,7 +5,7 @@ class FactorLoader(BaseLoader):
         # print(self.module_path)
         # print(self.user_module_path)
         # print(self.klass)
-        factor=self.klass()
+        factor=self.klass
         factor.run()
         
         pass

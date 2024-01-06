@@ -12,7 +12,7 @@ import pandas as pd
 from functools import lru_cache
 from importlib import import_module
 from multiprocessing import cpu_count 
-
+import importlib
 from runtime.constant import *
 from finhack.library.mydb import mydb
 from finhack.library.config import Config
@@ -66,7 +66,9 @@ class indicatorCompute():
         for code_list in code_lists:
             with ProcessPoolExecutor(max_workers=n) as pool:
                 for ts_code in code_list:
-                    mytask=pool.submit(indicatorCompute.computeListByStock,ts_code,list_name,'',factor_list,c_list)
+                    #computeListByStock(ts_code,list_name='all',where='',factor_list=None,c_list=[],pure=True,check=True,df_price=pd.DataFrame(),db='tushare'):
+    
+                    mytask=pool.submit(indicatorCompute.computeListByStock,ts_code,list_name,'',factor_list,c_list,false,false)
                     tasklist.append(mytask)
         
         wait(tasklist,return_when=ALL_COMPLETED)
@@ -79,7 +81,7 @@ class indicatorCompute():
         
     #计算单支股票的一坨因子
     #pure=True时，只保留factor_list中的因子
-    def computeListByStock(ts_code,list_name='all',where='',factor_list=None,c_list=[],pure=True,check=False,df_price=pd.DataFrame(),db='tushare'):
+    def computeListByStock(ts_code,list_name='all',where='',factor_list=None,c_list=[],pure=True,check=True,df_price=pd.DataFrame(),db='tushare'):
         try:
             Log.logger.info('computeListByStock---'+ts_code)
             
@@ -344,7 +346,22 @@ class indicatorCompute():
                 df_price=indicatorCompute.computeFactorByStock(ts_code,f,df_price,db)
                 
         factor=factor_name.split('_')
-        module = getattr(import_module('finhack.factor.default.indicators.'+indicators), indicators)
+        #module = getattr(import_module('finhack.factor.default.indicators.'+indicators), indicators)
+        
+        
+        
+        # 定义文件路径
+        file_path = INDICATORS_DIR+indicators+".py"
+        
+        # 获取文件名和类名
+        module_name = indicators
+        class_name = indicators
+        
+        # 加载模块
+        spec = importlib.util.spec_from_file_location(module_name, file_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        
         func=getattr(module,func_name,lambda x,y:x)
 
         shift="0"
@@ -424,7 +441,7 @@ class indicatorCompute():
     def getFactorInfo(factor_name):
         factor=factor_name.split('_')
         factor_filed=factor[0]
-        path = os.path.dirname(__file__)+"/indicators/"
+        path = INDICATORS_DIR
         for subfile in os.listdir(path):
             if not '__' in subfile:
                 indicators=subfile.split('.py')

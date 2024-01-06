@@ -3,15 +3,132 @@ import hashlib
 import traceback
 import numpy as np
 import pandas as pd
-
+import pandas as pd
+import alphalens as al
+from alphalens.utils import get_clean_factor_and_forward_returns
+from alphalens.tears import create_full_tear_sheet
+import warnings
+warnings.simplefilter(action='ignore', category=FutureWarning)
+warnings.simplefilter(action='ignore', category=RuntimeWarning)
+warnings.simplefilter(action='ignore', category=UserWarning)
 from finhack.library.mydb import mydb
 from finhack.factor.default.factorManager import factorManager
+from finhack.market.astock.astock import AStock
+from scipy.stats import zscore
 
 class factorAnalyzer():
     
     
     def all_corr():
         pass
+    
+    
+    
+    def alphalens(factor_name):
+        
+        
+        df_industry=AStock.getStockIndustry()
+
+        
+        # df_all.index=df_all['date']
+        # price.index = pd.to_datetime(price.index)
+        # assets = df_all.set_index( [df_all.index,df_all['symbol']], drop=True,append=False, inplace=False)
+        df=factorManager.getFactors(factor_list=['close',factor_name])
+        # 假设 df 是您提供的 DataFrame，我们首先重置索引
+        df = df.reset_index().merge(df_industry, on='ts_code')
+        df['industry'] = df['industry'].fillna('其他')
+        
+        df['trade_date'] = pd.to_datetime(df['trade_date'], format='%Y%m%d')
+        
+        df[factor_name] = df.groupby(['trade_date', 'industry'])[factor_name].transform(zscore)
+        
+        # 确保因子值没有 NaN，如果有 NaN，可以选择填充或者去除对应的行
+        df = df.dropna(subset=[factor_name,'industry'])
+        
+        # 重置索引，准备进行 Alphalens 分析
+        df = df.set_index(['trade_date', 'ts_code'])
+        
+        # 创建价格 DataFrame
+        prices = df['close'].unstack()
+        
+        # 获取行业中性化后的因子数据
+        factor = df[factor_name]
+        
+        
+        unique_industries = df['industry'].unique()
+        # 创建 groupby_labels 字典，将每个行业标签映射到自己，确保没有遗漏
+        groupby_labels = {ind: ind for ind in unique_industries}
+
+        
+        # 检查 groupby_labels 是否包含所有 unique_industries 中的行业
+        missing_labels = [ind for ind in unique_industries if ind not in groupby_labels]
+        if missing_labels:
+            print(f"Missing industry labels in groupby_labels: {missing_labels}")
+            # 您可以选择添加缺失的行业标签到 groupby_labels 中
+            for missing in missing_labels:
+                groupby_labels[missing] = '其他'  # 或者将其映射到 '其他'
+        
+        # 使用 Alphalens 进行因子分析
+        factor_data = al.utils.get_clean_factor_and_forward_returns(
+            factor=factor,
+            prices=prices,
+            periods=(1, 5, 10),
+            groupby=df['industry'],  # 指定行业分组
+            groupby_labels=groupby_labels,  # 指定行业标签
+        )
+
+        
+        # 因子收益率分析
+        mean_return_by_qt, std_err_by_qt = al.performance.mean_return_by_quantile(factor_data)
+        #aal.plotting.plot_quantile_returns_bar(mean_return_by_qt)
+        #aplt.show()
+        
+        # 因子信息比率
+        ic_by_day = al.performance.factor_information_coefficient(factor_data)
+        #al.plotting.plot_information_coefficient(ic_by_day)
+        #plt.show()
+        
+        # 分位数平均收益率
+        quantile_returns = al.performance.mean_return_by_quantile(factor_data)[0].apply(al.utils.rate_of_return, axis=0, base_period='1D')
+        #al.plotting.plot_quantile_returns_violin(quantile_returns)
+        #plt.show()
+        
+        # 分位数累积收益
+        #cumulative_returns_by_qt = al.performance.cumulative_returns_by_quantile(factor_data, period=1)
+        #al.plotting.plot_cumulative_returns_by_quantile(cumulative_returns_by_qt, period=1)
+        #plt.show()
+        
+        # 分位数收益率的全面统计
+        #full_tear_sheet = al.tears.create_full_tear_sheet(factor_data, long_short=True, group_neutral=False, by_group=False)
+        
+        # 因子自相关性分析
+        autocorrelation = al.performance.factor_rank_autocorrelation(factor_data)
+        #al.plotting.plot_autocorrelation(autocorrelation)
+        #plt.show()
+        
+        # 因子收益率和分位数收益率的IC分析
+        mean_monthly_ic = al.performance.mean_information_coefficient(factor_data, by_time='M')
+        #al.plotting.plot_monthly_ic_heatmap(mean_monthly_ic)
+        #plt.show()
+        
+        print("\nmean_return_by_qt")
+        print(mean_return_by_qt)
+        print("\nic_by_day")
+        print(ic_by_day)
+        print("\nquantile_returns")
+        print(quantile_returns)
+        print("\nautocorrelation")
+        print(autocorrelation)
+        print("\nmean_monthly_ic")
+        print(mean_monthly_ic)
+        
+        # print('---')
+        # print(full_tear_sheet)
+        
+        #al.plotting.plot_quantile_returns_bar(mean_return_by_qt)
+        pass
+    
+    
     
     def analys(factor_name,df=pd.DataFrame(),days=[1,2,3,5,8,13,21],pool='all',start_date='20000101',end_date='20100101',formula="",relace=False,table='factors_analysis'):
         try:

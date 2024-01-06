@@ -56,7 +56,7 @@ class preCheck():
             factor=factor_name.split('_')
             factor_filed=factor[0]
             return_fileds=[]
-            path = os.path.dirname(__file__)+"/indicators/"
+            path = INDICATORS_DIR
             for subfile in os.listdir(path):
                 if find:
                     continue

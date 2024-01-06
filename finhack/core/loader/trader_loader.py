@@ -5,7 +5,7 @@ class TraderLoader(BaseLoader):
         # print(self.module_path)
         # print(self.user_module_path)
         # print(self.klass)
-        trader=self.klass()
+        trader=self.klass
         trader.args=self.args
         trader.run()
         
