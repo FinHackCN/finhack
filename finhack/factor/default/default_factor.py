@@ -6,5 +6,12 @@ from finhack.factor.default.alphaEngine import alphaEngine
 from finhack.market.astock.astock import AStock
 from finhack.factor.default.taskRunner import taskRunner
 class DefaultFactor:
+    def __init__(self):
+        pass
+
     def run(self):
+        pass
         taskRunner.runTask()
+        
+    def test(self):
+        print(self.args)

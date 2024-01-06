@@ -69,6 +69,9 @@ class TushareCollector:
             table=list(v.values())[0]
             tsSHelper.setIndex(table,db)    
     
+    
+    def save():
+        pass
         
 
     def getAStockBasic(self):

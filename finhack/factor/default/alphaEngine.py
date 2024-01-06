@@ -786,9 +786,6 @@ class alphaEngine():
                 df=df.sort_index()
        
 
-            
-            
-            
             if diff_date>0 and diff_date<100:
                 dt=datetime.datetime.strptime(str(max_date),'%Y%m%d')
                 start_date=dt-datetime.timedelta(days=700)

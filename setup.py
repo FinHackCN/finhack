@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 import os 
 
 root_dir = 'finhack'
-version='0.0.1.dev4'
+version='0.0.1.dev5'
 
 for subdir, dirs, files in os.walk(root_dir):
     if not '__init__.py' in files:

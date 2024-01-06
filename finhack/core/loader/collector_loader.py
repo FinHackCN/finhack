@@ -5,7 +5,7 @@ class CollectorLoader(BaseLoader):
         # print(self.module_path)
         # print(self.user_module_path)
         # print(self.klass)
-        collector=self.klass()
+        collector=self.klass
         collector.run()
         
         pass

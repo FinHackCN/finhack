@@ -164,7 +164,7 @@ class factorManager:
 
     def getIndicatorsList():
         return_fileds=[]
-        path = os.path.dirname(__file__)+"/indicators/"
+        path = INDICATORS_DIR
         for subfile in os.listdir(path):
             if not '__' in subfile:
                 indicators=subfile.split('.py')
