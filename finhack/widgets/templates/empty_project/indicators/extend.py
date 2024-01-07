@@ -1,10 +1,10 @@
 import pandas as pd
 import numpy as np
 
-class extend:
+
 
         # Pivot Points, Supports and Resistances
-        def PPSR(df,p):
+def PPSR(df,p):
             PP = pd.Series((df['high'] + df['low'] + df['close']) / 3)
             R1 = pd.Series(2 * PP - df['low'])
             S1 = pd.Series(2 * PP - df['high'])
@@ -31,14 +31,14 @@ class extend:
         
         
         # Stochastic oscillator %K
-        def STOK(df):
+def STOK(df):
             SOk = pd.Series((df['close'] - df['low']) / (df['high'] - df['low']), name = 'SO%k')
             df = df.join(SOk)
             return df
         
         
         # Stochastic Oscillator, EMA smoothing, nS = slowing (1 if no slowing)
-        def STO(df,  nK, nD, nS=1):
+def STO(df,  nK, nD, nS=1):
             SOk = pd.Series((df['close'] - df['low'].rolling(nK).min()) / (df['high'].rolling(nK).max() - df['low'].rolling(nK).min()), name = 'SO%k'+str(nK))
             SOd = pd.Series(SOk.ewm(ignore_na=False, span=nD, min_periods=nD-1, adjust=True).mean(), name = 'SO%d'+str(nD))
             SOk = SOk.ewm(ignore_na=False, span=nS, min_periods=nS-1, adjust=True).mean()
@@ -49,7 +49,7 @@ class extend:
         
         
         # Stochastic Oscillator, SMA smoothing, nS = slowing (1 if no slowing)
-        def STO(df, nK, nD,  nS=1):
+def STO(df, nK, nD,  nS=1):
             SOk = pd.Series((df['close'] - df['low'].rolling(nK).min()) / (df['high'].rolling(nK).max() - df['low'].rolling(nK).min()), name = 'SO%k'+str(nK))
             SOd = pd.Series(SOk.rolling(window=nD, center=False).mean(), name = 'SO%d'+str(nD))
             SOk = SOk.rolling(window=nS, center=False).mean()
@@ -60,7 +60,7 @@ class extend:
         
         
         # Mass Index
-        def MassI(df):
+def MassI(df):
             Range = df['high'] - df['low']
             EX1 = pd.ewma(Range, span = 9, min_periods = 8)
             EX2 = pd.ewma(EX1, span = 9, min_periods = 8)
@@ -71,7 +71,7 @@ class extend:
         
         
         # Vortex Indicator: http://www.vortexindicator.com/VFX_VORTEX.PDF
-        def Vortex(df, n):
+def Vortex(df, n):
             i = 0
             TR = [0]
             while i < df.index[-1]:
@@ -90,7 +90,7 @@ class extend:
         
         
         # KST Oscillator
-        def KST(df, r1, r2, r3, r4, n1, n2, n3, n4):
+def KST(df, r1, r2, r3, r4, n1, n2, n3, n4):
             M = df['close'].diff(r1 - 1)
             N = df['close'].shift(r1 - 1)
             ROC1 = M / N
@@ -109,7 +109,7 @@ class extend:
         
         
         # True Strength Index
-        def TSI(df, r, s):
+def TSI(df, r, s):
             M = pd.Series(df['close'].diff(1))
             aM = abs(M)
             EMA1 = pd.Series(pd.ewma(M, span = r, min_periods = r - 1))
@@ -122,7 +122,7 @@ class extend:
         
         
         # Accumulation/Distribution
-        def ACCDIST(df, n):
+def ACCDIST(df, n):
             ad = (2 * df['close'] - df['high'] - df['low']) / (df['high'] - df['low']) * df['Volume']
             M = ad.diff(n - 1)
             N = ad.shift(n - 1)
@@ -133,14 +133,14 @@ class extend:
         
         
         # Force Index
-        def FORCE(df, n):
+def FORCE(df, n):
             F = pd.Series(df['close'].diff(n) * df['Volume'].diff(n), name = 'Force_' + str(n))
             df = df.join(F)
             return df
         
         
         # Ease of Movement
-        def EOM(df, p):
+def EOM(df, p):
             if len(p)==2:
                 p[1]=10
             EoM = (df['high'].diff(1) + df['low'].diff(1)) * (df['high'] - df['low']) / (2 * df['volume'])
@@ -159,7 +159,7 @@ class extend:
         
         
         # Coppock Curve
-        def COPP(df, n):
+def COPP(df, n):
             M = df['close'].diff(int(n * 11 / 10) - 1)
             N = df['close'].shift(int(n * 11 / 10) - 1)
             ROC1 = M / N
@@ -172,7 +172,7 @@ class extend:
         
         
         # Keltner Channel
-        def KELCH(df, n):
+def KELCH(df, n):
             KelChM = pd.Series(pd.rolling_mean((df['high'] + df['low'] + df['close']) / 3, n), name = 'KelChM_' + str(n))
             KelChU = pd.Series(pd.rolling_mean((4 * df['high'] - 2 * df['low'] + df['close']) / 3, n), name = 'KelChU_' + str(n))
             KelChD = pd.Series(pd.rolling_mean((-2 * df['high'] + 4 * df['low'] + df['close']) / 3, n), name = 'KelChD_' + str(n))
@@ -183,7 +183,7 @@ class extend:
         
         
         # Donchian Channel
-        def DONCH(low, high, timeperiod: int = 20):
+def DONCH(low, high, timeperiod: int = 20):
             if len(high) != len(low):
                 return [], []
             dc_low = []

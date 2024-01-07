@@ -33,11 +33,12 @@ class taskRunner:
             factor_lists=task['list'].split(',')
             for factor_list_name in factor_lists:
                 #factor列表
-
+            
                 if os.path.exists(CONFIG_DIR+"/factorlist/indicatorlist/"+factor_list_name):
                     
                     with open(CONFIG_DIR+"/factorlist/indicatorlist/"+factor_list_name, 'r', encoding='utf-8') as f:
                         factor_list=[_.rstrip('\n') for _ in f.readlines()]
+                    #print(factor_list)
                     indicatorCompute.computeList(list_name=factor_list_name,factor_list=factor_list,c_list=c_list)
             
          

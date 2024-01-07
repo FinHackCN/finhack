@@ -1,8 +1,8 @@
 import numpy as np
 from finhack.market.astock.astock import AStock
 
-class myfactors:
-    def close(df,p):
+
+def close(df,p):
         # print(p)
         # print("p="+','.join(p))
         # if len(p)==1:
@@ -11,7 +11,7 @@ class myfactors:
         df['close']=df_c['close']
         return df
 
-    def basic(df,p): 
+def basic(df,p): 
         df_basic=AStock.alignStockFactors(df,'astock_price_daily_basic','trade_date',filed='turnover_rate,turnover_rate_f,volume_ratio,pe,pe_ttm,pb,ps,ps_ttm,dv_ratio,dv_ttm,total_share,float_share,free_share,total_mv,circ_mv',conv=0,db='tushare')
         df['turnoverRate']=df_basic['turnover_rate']
         df['turnoverRatef']=df_basic['turnover_rate_f']
@@ -31,7 +31,7 @@ class myfactors:
         return df
         
         
-    def xx123(df,p):
+def xx123(df,p):
         df['xx1']=p[0]
         df['xx2']=p[1]
         df['xx3']=df['open']
