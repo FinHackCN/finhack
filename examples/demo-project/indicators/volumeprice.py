@@ -1,9 +1,8 @@
 import numpy as np
 from finhack.market.astock.astock import AStock
 
-class volumeprice:
 
-    def moneyflow(df,p): 
+def moneyflow(df,p): 
         df_vp=AStock.alignStockFactors(df,'astock_price_moneyflow','trade_date',filed='*',conv=0,db='tushare')  
         if df_vp.empty:
             return df_vp
@@ -28,7 +27,7 @@ class volumeprice:
         del df_vp
         return df
 
-    def limit(df,p): 
+def limit(df,p): 
         df_vp=AStock.alignStockFactors(df,'astock_price_limit_list','trade_date',filed='*',conv=2,db='tushare')  
         df['lAmp']=df_vp['amp']
         df['lFcRatio']=df_vp['fc_ratio']

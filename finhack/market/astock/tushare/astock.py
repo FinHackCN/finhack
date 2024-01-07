@@ -389,6 +389,8 @@ def getStockDailyPriceByCode(code,where="",startdate='',enddate='',fq='hfq',db='
        
         
 def alignStockFactors(df,table,date,filed,conv=0,db='tushare'):
+    
+    
         df=df.copy()
         df=df.reset_index()
         ts_code=df['ts_code'].tolist()[0]

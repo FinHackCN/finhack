@@ -2,8 +2,8 @@ import talib as ta
 import numpy as np
 from finhack.market.astock.astock import AStock
 
-class ta_lib:
-    def BBANDS(df,p):
+
+def BBANDS(df,p):
         if len(p)<=2:
             p=[p,90]
             
@@ -12,431 +12,431 @@ class ta_lib:
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def DEMA(df,p):
+def DEMA(df,p):
         if len(p)<=2:
             p=[p,90]
         df['DEMA']=ta.DEMA(df.close, p[1])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def EMA(df,p):
+def EMA(df,p):
         if len(p)<=2:
             p=[p,90]
         df['EMA'] =ta.EMA(df.close, p[1])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def HT_TRENDLINE(df,p):
+def HT_TRENDLINE(df,p):
         df['HTTRENDLINE'] = ta.HT_TRENDLINE(df.close)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def MA(df,p):
+def MA(df,p):
         if len(p)<=2:
             p=[p,90]
         df['MA']=ta.MA(df.close, p[1])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def MAMA(df,p):
+def MAMA(df,p):
         df['MAMA'], df['FAMA'] = ta.MAMA(df.close)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def MIDPOINT(df,p):
+def MIDPOINT(df,p):
         if len(p)<=2:
             p=[p,90]
         df['MIDPOINT']  = ta.MIDPOINT(df.close, p[1])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def MIDPRICE(df,p):
+def MIDPRICE(df,p):
         if len(p)<=2:
             p=[p,90]
         df['MIDPRICE']  = ta.MIDPRICE(df.high, df.low, p[1])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def SAR(df,p):
+def SAR(df,p):
         if len(p)<=2:
             p=[p,0,0]
         df['SAR']=ta.SAR(df.high, df.low, acceleration=p[1], maximum=p[2])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def SAREXT(df,p):
+def SAREXT(df,p):
         if len(p)<=2:
             p=[p,0,0,0]
         df['SAREXT']=ta.SAREXT(df.high, df.low, p[1], p[2], p[3])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def SMA(df,p):
+def SMA(df,p):
         if len(p)<=2:
             p=[p,90]
         df['SMA']=ta.SMA(df.close, p[1])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def T3(df,p):
+def T3(df,p):
         if len(p)<=2:
             p=[p,90]
         df['T3'] =ta.T3(df.close, p[1])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def TEMA(df,p):
+def TEMA(df,p):
         if len(p)<=2:
             p=[p,90]
         df['TEMA']=ta.TEMA(df.close, p[1])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def TRIMA(df,p):
+def TRIMA(df,p):
         if len(p)<=2:
             p=[p,90]
         df['TRIMA'] =ta.TRIMA(df.close, p[1])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def WMA(df,p):
+def WMA(df,p):
         if len(p)<=2:
             p=[p,90]
         df['WMA']=ta.WMA(df.close, p[1])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def ADX(df,p):
+def ADX(df,p):
         if len(p)<=2:
             p=[p,90]
         df['ADX']=ta.ADX(df.high, df.low, df.close, p[1])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def ADXR(df,p):
+def ADXR(df,p):
         if len(p)<=2:
             p=[p,90]
         df['ADXR']=ta.ADXR(df.high, df.low, df.close, p[1])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def APO(df,p):
+def APO(df,p):
         if len(p)<=2:
             p=[p,30,90]
         df['APO']=ta.APO(df.close, p[1], p[2])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def AROON(df,p):
+def AROON(df,p):
         if len(p)<=2:
             p=[p,90]
         df['AROONDOWN'], df['ARRONUP'] = ta.AROON(df.high, df.low, p[1])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def AROONOSC(df,p):
+def AROONOSC(df,p):
         if len(p)<=2:
             p=[p,90]
         df['AROONOSC']     = ta.AROONOSC(df.high, df.low, p[1])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def BOP(df,p):
+def BOP(df,p):
         if len(p)<=2:
             p=[p,90]
         df['BOP']=ta.BOP(df.open, df.high, df.low, df.close)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def CCI(df,p):
+def CCI(df,p):
         if len(p)<=2:
             p=[p,90]
         df['CCI']=ta.CCI(df.high, df.low, df.close, p[1])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def CMO(df,p):
+def CMO(df,p):
         if len(p)<=2:
             p=[p,90]
         df['CMO']=ta.CMO(df.close, p[1])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def DX(df,p):
+def DX(df,p):
         if len(p)<=2:
             p=[p,90]
         df['DX'] =ta.DX(df.high, df.low, df.close, p[1])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def MACD(df,p):
+def MACD(df,p):
         if len(p)<=2:
             p=[p,12,26,9]
         df['MACD'], df['MACDSIGNAL'], df['MACDHIST'] = ta.MACD(df.close, fastperiod=p[1], slowperiod=p[2], signalperiod=p[3])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def MACDEXT(df,p):
+def MACDEXT(df,p):
         if len(p)<=2:
             p=[p,12,26,9]
         df['MACDX'], df['MACDSIGNALX'], df['MACDHISTX'] = ta.MACDEXT(df.close, fastperiod=p[1], slowperiod=p[2], signalperiod=p[3])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def MACDFIX(df,p):
+def MACDFIX(df,p):
         if len(p)<=2:
             p=[p,90]
         df['MACDFIX'], df['MACDSIGNALFIX'], df['MACDHISTFIX'] = ta.MACDFIX(df.close, p[1])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def MFI(df,p):
+def MFI(df,p):
         if len(p)<=2:
             p=[p,90]
         df['MFI']=ta.MFI(df.high, df.low, df.close, df.volume, p[1])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def MINUS_DI(df,p):
+def MINUS_DI(df,p):
         if len(p)<=2:
             p=[p,90]
         df['MINUSDI']     = ta.MINUS_DI(df.high, df.low, df.close, p[1])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def MINUS_DM(df,p):
+def MINUS_DM(df,p):
         if len(p)<=2:
             p=[p,90]
         df['MINUSDM']     = ta.MINUS_DM(df.high, df.low, p[1])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def MOM(df,p):
+def MOM(df,p):
         if len(p)<=2:
             p=[p,90]
         df['MOM']=ta.MOM(df.close, p[1])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def PLUS_DI(df,p):
+def PLUS_DI(df,p):
         if len(p)<=2:
             p=[p,90]
         df['PLUSDI']      = ta.PLUS_DI(df.high, df.low, df.close, p[1])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def PLUS_DM(df,p):
+def PLUS_DM(df,p):
         if len(p)<=2:
             p=[p,90]
         df['PLUSDM']      = ta.PLUS_DM(df.high, df.low, p[1])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def PPO(df,p):
+def PPO(df,p):
         if len(p)<=2:
             p=[p,30,90]
         df['PPO']=ta.PPO(df.close, p[1], p[2])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def ROC(df,p):
+def ROC(df,p):
         if len(p)<=2:
             p=[p,90]
         df['ROC']=ta.ROC(df.close, p[1])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def ROCR(df,p):
+def ROCR(df,p):
         if len(p)<=2:
             p=[p,90]
         df['ROCR']=ta.ROCR(df.close, p[1])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def ROCR100(df,p):
+def ROCR100(df,p):
         if len(p)<=2:
             p=[p,90]
         df['ROCR100']      = ta.ROCR100(df.close, p[1])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def RSI(df,p):
+def RSI(df,p):
         if len(p)<=2:
             p=[p,90]
         df['RSI']=ta.RSI(df.close,p[1])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def STOCH(df,p):
+def STOCH(df,p):
         if len(p)<=2:
             p=[p,90]
         df['SLOWK'], df['SLOWD'] = ta.STOCH(df.high, df.low, df.close)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def STOCHF(df,p):
+def STOCHF(df,p):
         if len(p)<=2:
             p=[p,90]
         df['FASTK'], df['FASTD'] = ta.STOCHF(df.high, df.low, df.close)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def STOCHRSI(df,p):
+def STOCHRSI(df,p):
         if len(p)<=2:
             p=[p,90]
         df['FASTKRSI'], df['FASTDRSI'] = ta.STOCHRSI(df.close, p[1])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def TRIX(df,p):
+def TRIX(df,p):
         if len(p)<=2:
             p=[p,90]
         df['TRIX']=ta.TRIX(df.close, p[1])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def ULTOSC(df,p):
+def ULTOSC(df,p):
         if len(p)<=2:
             p=[p,90]
         df['ULTOSC']=ta.ULTOSC(df.high, df.low, df.close)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def WILLR(df,p):
+def WILLR(df,p):
         if len(p)<=2:
             p=[p,90]
         df['WILLR'] =ta.WILLR(df.high, df.low, df.close, p[1])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def AD(df,p):
+def AD(df,p):
         if len(p)<=2:
             p=[p,90]
         df['AD'] =ta.AD(df.high, df.low, df.close, df.volume)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def ADOSC(df,p):
+def ADOSC(df,p):
         if len(p)<=2:
             p=[p,90]
         df['ADOSC'] =ta.ADOSC(df.high, df.low, df.close, df.volume)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def OBV(df,p):
+def OBV(df,p):
         if len(p)<=2:
             p=[p,90]
         df['OBV']=ta.OBV(df.close, df.volume)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def ATR(df,p):
+def ATR(df,p):
         if len(p)<=2:
             p=[p,90]
         df['ATR']=ta.ATR(df.high, df.low, df.close, p[1])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def NATR(df,p):
+def NATR(df,p):
         if len(p)<=2:
             p=[p,90]
         df['NATR']=ta.NATR(df.high, df.low, df.close, p[1])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def TRANGE(df,p):
+def TRANGE(df,p):
         df['TRANGE']=ta.TRANGE(df.high, df.low, df.close)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def AVGPRICE(df,p):
+def AVGPRICE(df,p):
         df['AVGPRICE']     = ta.AVGPRICE(df.open, df.high, df.low, df.close)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def MEDPRICE(df,p):
+def MEDPRICE(df,p):
         df['MEDPRICE']     = ta.MEDPRICE(df.high, df.low)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def TYPPRICE(df,p):
+def TYPPRICE(df,p):
         df['TYPPRICE']     = ta.TYPPRICE(df.high, df.low, df.close)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def WCLPRICE(df,p):
+def WCLPRICE(df,p):
         df['WCLPRICE']     = ta.WCLPRICE(df.high, df.low, df.close)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def HT_DCPERIOD(df,p):
+def HT_DCPERIOD(df,p):
         df['HTDCPERIOD']  = ta.HT_DCPERIOD(df.close)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def HT_DCPHASE(df,p):
+def HT_DCPHASE(df,p):
         df['HTDCPHASE']   = ta.HT_DCPHASE(df.close)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def HT_PHASOR(df,p):
+def HT_PHASOR(df,p):
         df['INPHASE'], df['QUADRATURE'] = ta.HT_PHASOR(df.close)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def HT_SINE(df,p):
+def HT_SINE(df,p):
         df['SINE'] , df['LEADSINE'] = ta.HT_SINE(df.close)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def HT_TRENDMODE(df,p):
+def HT_TRENDMODE(df,p):
         df['HTTRENDMODE'] = ta.HT_TRENDMODE(df.close)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def BETA(df,p):
+def BETA(df,p):
         if len(p)<=2:
             p=[p,90]
         df['BETA']=ta.BETA(df.high, df.low, p[1])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def CORREL(df,p):
+def CORREL(df,p):
         if len(p)<=2:
             p=[p,90]
         df['CORREL']=ta.CORREL(df.high, df.low, p[1])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def LINEARREG(df,p):
+def LINEARREG(df,p):
         if len(p)<=2:
             p=[p,90]
         df['LINEARREG']    = ta.LINEARREG(df.close, p[1])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def LINEARREG_ANGLE(df,p):
+def LINEARREG_ANGLE(df,p):
         if len(p)<=2:
             p=[p,90]
         df['LINEARREGANGLE'] = ta.LINEARREG_ANGLE(df.close, p[1])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def LINEARREG_INTERCEPT(df,p):
+def LINEARREG_INTERCEPT(df,p):
         if len(p)<=2:
             p=[p,90]
         df['LINEARREGINTERCEPT'] = ta.LINEARREG_INTERCEPT(df.close, p[1])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def LINEARREG_SLOPE(df,p):
+def LINEARREG_SLOPE(df,p):
         if len(p)<=2:
             p=[p,90]
         df['LINEARREGSLOPE'] = ta.LINEARREG_SLOPE(df.close, p[1])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def STDDEV(df,p):
+def STDDEV(df,p):
         #print(p)
         if len(p)<=2:
             p=[p,90]
@@ -446,151 +446,151 @@ class ta_lib:
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def TSF(df,p):
+def TSF(df,p):
         if len(p)<=2:
             p=[p,90]
         df['TSF']=ta.TSF(df.close, p[1])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def VAR(df,p):
+def VAR(df,p):
         if len(p)<=2:
             p=[p,90]
         df['VAR']=ta.VAR(df.close, p[1], 1)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def ACOS(df,p):
+def ACOS(df,p):
         df['ACOS']=ta.ACOS(df.close)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def ASIN(df,p):
+def ASIN(df,p):
         df['ASIN']=ta.ASIN(df.close)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def ATAN(df,p):
+def ATAN(df,p):
         df['ATAN']=ta.ATAN(df.close)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def CEIL(df,p):
+def CEIL(df,p):
         df['CEIL']=ta.CEIL(df.close)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def COS(df,p):
+def COS(df,p):
         df['COS']=ta.COS(df.close)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def COSH(df,p):
+def COSH(df,p):
         df['COSH']=ta.COSH(df.close)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def EXP(df,p):
+def EXP(df,p):
         df['EXP']=ta.EXP(df.close)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def FLOOR(df,p):
+def FLOOR(df,p):
         df['FLOOR'] =ta.FLOOR(df.close)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def LN(df,p):
+def LN(df,p):
         df['LN'] =ta.LN(df.close)  # Log
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def LOG10(df,p):
+def LOG10(df,p):
         df['LOG10'] =ta.LOG10(df.close)  # Log
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def SIN(df,p):
+def SIN(df,p):
         df['SIN']=ta.SIN(df.close)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def SINH(df,p):
+def SINH(df,p):
         df['SINH']=ta.SINH(df.close)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def SQRT(df,p):
+def SQRT(df,p):
         df['SQRT']=ta.SQRT(df.close)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def TAN(df,p):
+def TAN(df,p):
         df['TAN']=ta.TAN(df.close)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def TANH(df,p):
+def TANH(df,p):
         df['TANH']=ta.TANH(df.close)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def ADD(df,p):
+def ADD(df,p):
         df['ADD']=ta.ADD(df.high, df.low)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def DIV(df,p):
+def DIV(df,p):
         df['DIV']=ta.DIV(df.high, df.low)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def MAX(df,p):
+def MAX(df,p):
         if len(p)<=2:
             p=[p,90]
         df['MAX']=ta.MAX(df.close, p[1])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def MAXINDEX(df,p):
+def MAXINDEX(df,p):
         if len(p)<=2:
             p=[p,90]
         df['MAXINDEX']     = ta.MAXINDEX(df.close, p[1])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def MIN(df,p):
+def MIN(df,p):
         if len(p)<=2:
             p=[p,90]
         df['MIN']=ta.MIN(df.close, p[1])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def MININDEX(df,p):
+def MININDEX(df,p):
         if len(p)<=2:
             p=[p,90]
         df['MININDEX']     = ta.MININDEX(df.close, p[1])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def MINMAXINDEX(df,p):
+def MINMAXINDEX(df,p):
         if len(p)<=2:
             p=[p,90]
         df['MINIDX'], df['MAXIDX'] = ta.MINMAXINDEX(df.close, p[1])
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def MULT(df,p):
+def MULT(df,p):
         df['MULT']=ta.MULT(df.high, df.low)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def SUB(df,p):
+def SUB(df,p):
         df['SUB']=ta.SUB(df.high, df.low)
         df = df.replace([np.inf, -np.inf], np.nan) 
         return df
 
-    def SUM(df,p):
+def SUM(df,p):
         if len(p)<=2:
             p=[p,90]
         df['SUM']=ta.SUM(df.close, p[1])
@@ -602,7 +602,7 @@ class ta_lib:
 
 
 
-    def kline(df,p):
+def kline(df,p):
         df['2CROWS'] = ta.CDL2CROWS(df.open, df.high, df.low, df.close)
         df['3BLACKCROWS'] = ta.CDL3BLACKCROWS(df.open, df.high, df.low, df.close)
         df['3INSIDE'] = ta.CDL3INSIDE(df.open, df.high, df.low, df.close)

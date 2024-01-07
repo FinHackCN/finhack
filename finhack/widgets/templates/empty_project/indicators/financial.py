@@ -1,9 +1,9 @@
 import numpy as np
 from finhack.market.astock.astock import AStock
 
-class financial:
-    #财务指标，anndate需要加1，防止未来函数
-    def financeIndicator(df,p):
+
+#财务指标，anndate需要加1，防止未来函数
+def financeIndicator(df,p):
             df_fi=AStock.alignStockFactors(df,'astock_finance_indicator','ann_date',filed='*',conv=3,db='tushare') 
             df=df.reset_index(drop=0)
             df_fi=df_fi.reset_index(drop=0)
@@ -121,5 +121,8 @@ class financial:
             df['qOpQoq']=df_fi['q_op_qoq']
             df['equityYoy']=df_fi['equity_yoy']
             del df_fi
+            
+            print(df)
+            print('--------------')
             return df
 

@@ -26,6 +26,8 @@ import finhack.library.log as Log
 
 class indicatorCompute():
     def computeList(list_name='',factor_list=[],c_list=[],db='tushare'):
+        # print('----000---')
+        # print(factor_list)
         code_list=AStock.getStockCodeList('tushare')
 
         if factor_list==[] and os.path.exists(CONFIG_DIR+"/factorlist/indicatorlist/"+list_name):
@@ -35,7 +37,6 @@ class indicatorCompute():
         for i in range(len(factor_list)):
             if not '_' in factor_list[i]:
                 factor_list[i]=factor_list[i]+'_0'
-
 
         
         n=30
@@ -54,24 +55,29 @@ class indicatorCompute():
             for i in range(0, n):
                 yield origin_list[i*cnt:(i+1)*cnt]
  
+        # print('----111---')
+        # print(factor_list)
+        # exit()
         
         #x单进程断点调试用
         # for ts_code in code_list:
-        #     if ts_code!='301187.SZ':
+        #     if ts_code!='002624.SZ':
         #         continue
-        #     indicatorCompute.computeListByStock(ts_code,list_name,'',factor_list,c_list)
+        #     #indicatorCompute.computeListByStock(ts_code,list_name,'',factor_list,c_list)
+        #     indicatorCompute.computeListByStock(ts_code,list_name=list_name,where='',factor_list=factor_list,c_list=c_list,pure=True,check=False,df_price=pd.DataFrame(),db='tushare')
+    
         #     exit()
-        # exit()
+
         code_lists = split_list_n_list(code_list, n)
         for code_list in code_lists:
             with ProcessPoolExecutor(max_workers=n) as pool:
                 for ts_code in code_list:
-                    #computeListByStock(ts_code,list_name='all',where='',factor_list=None,c_list=[],pure=True,check=True,df_price=pd.DataFrame(),db='tushare'):
+                    indicatorCompute.computeListByStock(ts_code,list_name=list_name,where='',factor_list=factor_list,c_list=c_list,pure=True,check=False,df_price=pd.DataFrame(),db='tushare')
     
-                    mytask=pool.submit(indicatorCompute.computeListByStock,ts_code,list_name,'',factor_list,c_list,false,false)
-                    tasklist.append(mytask)
+        #             mytask=pool.submit(indicatorCompute.computeListByStock,ts_code,list_name,'',factor_list,c_list,True,False)
+        #             tasklist.append(mytask)
         
-        wait(tasklist,return_when=ALL_COMPLETED)
+        # wait(tasklist,return_when=ALL_COMPLETED)
         Log.logger.info(list_name+' computed')
         os.system('mv '+CACHE_DIR+'/single_factors_tmp1/* '+CACHE_DIR+'/single_factors_tmp2/')
         os.system('mv '+CACHE_DIR+'/single_factors_tmp2/* '+SINGLE_FACTORS_DIR)
@@ -82,9 +88,13 @@ class indicatorCompute():
     #计算单支股票的一坨因子
     #pure=True时，只保留factor_list中的因子
     def computeListByStock(ts_code,list_name='all',where='',factor_list=None,c_list=[],pure=True,check=True,df_price=pd.DataFrame(),db='tushare'):
+        
+        
+
         try:
             Log.logger.info('computeListByStock---'+ts_code)
-            
+            # print(factor_list)
+            # print(c_list)
             hashstr=ts_code+'-'+list_name+'-'+where+'-'+','.join(factor_list)+'-'+','.join(c_list)+'-'+str(pure)+'-'+str(check)
             md5=hashlib.md5(hashstr.encode(encoding='utf-8')).hexdigest()
             diff_date=0  #对比日期
@@ -160,8 +170,6 @@ class indicatorCompute():
                     factor_list.remove(factor_name)
 
 
-            
-            #exit()
             
  
 
@@ -353,6 +361,8 @@ class indicatorCompute():
         # 定义文件路径
         file_path = INDICATORS_DIR+indicators+".py"
         
+        
+        
         # 获取文件名和类名
         module_name = indicators
         class_name = indicators
@@ -363,6 +373,21 @@ class indicatorCompute():
         spec.loader.exec_module(module)
         
         func=getattr(module,func_name,lambda x,y:x)
+        # import inspect
+        
+        # # 这将只工作如果 func 是一个普通的 Python 函数
+        # print(inspect.getsource(func))
+        # if func:
+        #     try:
+        #         print(inspect.getsource(func))
+        #     except TypeError:
+        #         print(f"The object {func_name} is not a regular Python function.")
+        # else:
+        #     print(f"The function {func_name} is not found in the module.")
+        # print(file_path)
+        # print(factor)
+        # print(func_name)
+        # print(f"class_name:{class_name}")
 
         shift="0"
         if len(factor)>1:
@@ -372,12 +397,17 @@ class indicatorCompute():
         for i in range(1,len(factor)):
             factor[i]=int(factor[i])
 
+        #print('111111111')
         try:
             df=func(df_price,factor)
             if df.empty:
                 return False
         except Exception as e:
+            # print(e)
+            # print('22222222222')
             return False
+
+        #print('333333333')
 
         #给返回的因子加上后缀
         suffix=factor[1:]
@@ -423,7 +453,8 @@ class indicatorCompute():
                     #print("f=%s,fs=%s" %(f,factor_name))
         #print(len(df.columns))
         
-        #print(df)
+        # print(factor_name)
+        # print(df)
         
         del df_price
         del func

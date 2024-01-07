@@ -142,7 +142,7 @@ class preCheck():
         df_all=AStock.getStockDailyPriceByCode(ts_code,where='',startdate='20150619',enddate='20200805',fq='hfq')
 
         
-        print(df_all)
+        #print(df_all)
         
         
         
