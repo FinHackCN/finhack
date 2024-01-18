@@ -72,10 +72,10 @@ class indicatorCompute():
         for code_list in code_lists:
             with ProcessPoolExecutor(max_workers=n) as pool:
                 for ts_code in code_list:
-                    indicatorCompute.computeListByStock(ts_code,list_name=list_name,where='',factor_list=factor_list,c_list=c_list,pure=True,check=False,df_price=pd.DataFrame(),db='tushare')
+                    #indicatorCompute.computeListByStock(ts_code,list_name=list_name,where='',factor_list=factor_list,c_list=c_list,pure=True,check=False,df_price=pd.DataFrame(),db='tushare')
     
-        #             mytask=pool.submit(indicatorCompute.computeListByStock,ts_code,list_name,'',factor_list,c_list,True,False)
-        #             tasklist.append(mytask)
+                    mytask=pool.submit(indicatorCompute.computeListByStock,ts_code,list_name,'',factor_list,c_list,True,False)
+                    tasklist.append(mytask)
         
         # wait(tasklist,return_when=ALL_COMPLETED)
         Log.logger.info(list_name+' computed')
