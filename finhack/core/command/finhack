@@ -24,4 +24,3 @@ if __name__ == '__main__':
         atexit.register(Utils.auto_exit) # 注册退出函数
         core.do_action()
 
-    
