@@ -2,7 +2,7 @@
 
 # 尝试执行mysqldump，但不立即重定向输出
 DUMP_OUTPUT=$(mysqldump -uroot -p --no-data finhack 2>&1)
-
+cp requirements.txt finhack
 # 检查命令的退出状态
 if [ $? -eq 0 ]; then
   # mysqldump成功，将输出写入文件

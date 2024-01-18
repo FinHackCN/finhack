@@ -5,3 +5,4 @@ __pycache__/
 finhack.egg-info/
 dist/
 build/
+*.out

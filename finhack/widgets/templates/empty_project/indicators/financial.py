@@ -122,7 +122,7 @@ def financeIndicator(df,p):
             df['equityYoy']=df_fi['equity_yoy']
             del df_fi
             
-            print(df)
-            print('--------------')
+            # print(df)
+            # print('--------------')
             return df
 
