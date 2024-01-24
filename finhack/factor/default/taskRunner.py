@@ -8,7 +8,7 @@ from finhack.factor.default.indicatorCompute import indicatorCompute
 from finhack.factor.default.alphaEngine import alphaEngine
 from finhack.market.astock.astock import AStock
 from concurrent.futures import ThreadPoolExecutor,ProcessPoolExecutor, wait, ALL_COMPLETED
-
+from finhack.factor.default.factorPkl import factorPkl
 
 
 
@@ -61,6 +61,8 @@ class taskRunner:
                                 #alphaEngine.calc(factor,pd.DataFrame(),alpha_name)
                                 #exit()
         os.system('mv '+CACHE_DIR+'/single_factors_tmp2/* '+SINGLE_FACTORS_DIR)
+        factorPkl.save()
+        
     
     
     

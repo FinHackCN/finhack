@@ -19,8 +19,67 @@ from finhack.factor.default.taskRunner import taskRunner
 from finhack.factor.default.factorManager import factorManager
 from lightgbm import log_evaluation, early_stopping
 from finhack.trainer.trainer import Trainer
+import shutil
+import random
+
 
 class LightgbmTrainer(Trainer):
+    def auto(self):
+        args=global_var.args
+        while True:
+                try:
+                    flist=factorManager.getFactorsList()
+                    random.shuffle(flist)
+                    n=random.randint(int(args.min_f),int(args.max_f))
+                    factor_list=[]
+                    for i in range(0,n):
+                        factor_list.append(flist.pop())
+                    factor_list.sort()
+                    df=factorManager.getFactors(factor_list=factor_list+['open','close'])
+                    correlation_matrix = df.corr(numeric_only=True)
+                    new_factor_list=[]
+                    # 遍历每一对名称和相关系数
+                    for factor in factor_list:
+                        if factor in  ['open','close'] :
+                            continue
+                        append=True
+                        for factor2 in new_factor_list:
+        
+                            for column1, series in correlation_matrix.items():
+                                if column1!=factor:
+                                    continue
+                                for column2, correlation in series.items():
+                                    if column1==column2:
+                                        continue
+                                    if column2!=factor2:
+                                        continue
+                                    if abs(correlation)>0.7:
+                                        append=False
+        
+                        if append:
+                            new_factor_list.append(factor)
+        
+                    
+                    factor_list=new_factor_list
+        
+                    self.start_train(
+                        start_date=args.start_date,
+                        valid_date=args.valid_date,
+                        end_date=args.valid_date,
+                        features=factor_list,
+                        label=args.label,
+                        shift=int(args.shift),
+                        param=json.loads(args.param) if args.param!='' else {},
+                        loss=args.loss,
+                        filter_name=args.filter_name,
+                        replace=args.replace
+                    )
+                except Exception as e:
+                    print("error:"+str(e))
+                    print("err exception is %s" % traceback.format_exc())
+                
+        
+        
     def run(self):
         args=global_var.args
         return self.start_train(
@@ -35,7 +94,7 @@ class LightgbmTrainer(Trainer):
             filter_name=args.filter_name,
             replace=args.replace
         )
-        
+        #finhack trainer run --vendor=lightgbm --features="alpha101_001,alpha191_001,pe_0,WILLR_0,MORNINGDOJISTAR_0" --start_date=20200101 --valid_date=20210101 --end_date=20220101
         
     
     def start_train(self,start_date='20000101',valid_date="20080101",end_date='20100101',features=[],label='abs',shift=10,param={},loss='ds',filter_name='',replace=False):
@@ -96,10 +155,11 @@ class LightgbmTrainer(Trainer):
         y_true=y_true.get_label()
         residual = (y_true - y_pred).astype("float")
         loss = 100*e**(-residual)+100*residual-100
+        #print(np.mean(loss))
         return "ds", np.mean(loss), False
 
 
-    def train(self,data_train,data_valid,data_path='/tmp',md5='test',loss="ds",param={}):
+    def train(self,data_train,data_valid,data_path=DATA_DIR,md5='test',loss="ds",param={}):
         
         cfg=Config.get_config('train','lightgbm')
         # 参数设置
@@ -124,7 +184,8 @@ class LightgbmTrainer(Trainer):
         
         print('Starting training...')
         # 模型训练
-        callbacks = [log_evaluation(period=100), early_stopping(stopping_rounds=30)]
+        #callbacks = [log_evaluation(period=100), early_stopping(stopping_rounds=30)]
+        callbacks = [lgb.early_stopping(30, verbose=0), lgb.log_evaluation(period=0)]
         if loss=="ds":
             params['objective']=self.custom_obj
             gbm = lgb.train(params,
@@ -142,22 +203,28 @@ class LightgbmTrainer(Trainer):
                             valid_sets=data_valid,
                             callbacks=callbacks
                             )           
-        
-        print('Saving model...')
+        model_file=data_path+'/models/lgb_model_'+md5+'.txt'
+        print('Saving model to '+model_file+'...')
         # 模型保存
-        gbm.save_model(data_path+'/models/lgb_model_'+md5+'.txt')
+        gbm.save_model(model_file)
         # 模型加载
         
-    def pred(self,df_pred,data_path='/tmp',md5='test',save=True):
+    def pred(self,df_pred,data_path=DATA_DIR,md5='test',save=False):
         # df_pred=df_pred.drop('symbol', axis=1)   
         
         gbm = lgb.Booster(model_file=data_path+'/models/lgb_model_'+md5+'.txt')
         pred=df_pred[['ts_code','trade_date']]
-        x_pred=df_pred.drop('label', axis=1)  
+        if 'label' in df_pred:
+            x_pred=df_pred.drop('label', axis=1) 
+        else:
+            x_pred=df_pred
         x_pred= x_pred.drop('ts_code', axis=1)  
         x_pred= x_pred.drop('trade_date', axis=1)  
-        x_pred= x_pred.drop('close', axis=1) 
-        x_pred= x_pred.drop('open', axis=1) 
+        
+        if 'close' in x_pred:
+            x_pred= x_pred.drop('close', axis=1) 
+        if 'open' in x_pred:
+            x_pred= x_pred.drop('open', axis=1) 
         # 模型预测
         y_pred = gbm.predict(x_pred, num_iteration=gbm.best_iteration)
         pred['pred']=y_pred
@@ -200,13 +267,18 @@ class LightgbmTrainer(Trainer):
             df_preded=df_preded.set_index(['ts_code','trade_date']) 
             
             df=factorManager.getFactors(factor_list=['open','close'])
+
         else:
             return False
         
         if model.empty:
             return False
 
-        df['pred']=df_preded['pred']
+ 
+
+        df = df_preded.join(df, how='left')
+
+        #df['pred']=df_preded['pred']
         df['label']=df.groupby('ts_code',group_keys=False).apply(lambda x: x['close'].shift(-1*shift)/x['open'].shift(-1))
         df=df.dropna()
         count = len(df[df['pred'] > df['label']])
@@ -219,6 +291,6 @@ class LightgbmTrainer(Trainer):
         
         mydb.exec(sql,'finhack')
         # if score<0.03:
-        #     os.remove(pred_file)
+        os.remove(pred_file)
         #print(score)
         pass

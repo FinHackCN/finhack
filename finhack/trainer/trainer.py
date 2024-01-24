@@ -6,14 +6,38 @@ import os
 import importlib
 import lightgbm as lgb
 from runtime.constant import *
+from finhack.library.mydb import mydb
+
 
 
 class Trainer:
+    
+    def getPredData(model_id,start_date,end_date,norm=False):
+        feature_list=mydb.selectToDf(f"SELECT * FROM `auto_train` WHERE `hash` = '{model_id}'",'finhack')
+        feature_list=feature_list['features'].to_list()
+        feature_list=feature_list[0]
+        feature_list=feature_list.split(',')
+        df=factorManager.getFactors(feature_list)
+        df.reset_index(inplace=True)
+        df=df[df.trade_date>=start_date]
+        df=df[df.trade_date<=end_date]
+            
+        df=df.fillna(method='ffill')
+        df=df.fillna(0)
+        
+        if norm:
+            columns = features
+            g = df.groupby('trade_date')[columns]
+            df[columns] = (df[columns] - g.transform('min')) / (g.transform('max') - g.transform('min'))
+
+        return df
+
+    
     def getTrainData(self,start_date='20000101',valid_date="20080101",end_date='20100101',features=[],label='abs',shift=10,filter_name='',dropna=False,norm=False):
             data_path=DATA_DIR
             df=factorManager.getFactors(factor_list=features+['open','close','high','low'])
             df.reset_index(inplace=True)
-            df['trade_date']= df['trade_date'].astype('string')
+            #df['trade_date']= df['trade_date'].astype('string')
             df=df.sort_values('trade_date')
             if filter_name!='':
                 #filters_module = importlib.import_module('.filters.filters',package='strategies')
@@ -31,7 +55,14 @@ class Trainer:
                 df['label']=alphaEngine.calc(formula=formula,df=df_tmp,name="label_mv",check=True)
                 
                 
-            df=df[df.high!=df.low]    
+            df=df[df.high!=df.low]  
+            
+            
+            if not 'high' in features and 'high' in df:
+                df=df.drop('high', axis=1)
+            
+            if not 'low' in features and 'low' in df:
+                df=df.drop('low', axis=1)
 
             df_train=df[df.trade_date>=start_date]
             df_train=df[df.trade_date<valid_date]        

@@ -7,6 +7,9 @@ import random
 import json
 from finhack.factor.default.factorManager import factorManager
 from finhack.market.astock.astock import AStock
+from finhack.trainer.trainer import Trainer
+from finhack.trainer.lightgbm.lightgbm_trainer import LightgbmTrainer
+
 ## 初始化函数，设定要操作的股票、基准等等
 def initialize(context):
     # 设定沪深300作为基准
@@ -23,7 +26,7 @@ def initialize(context):
     # 为股票设定滑点为百分比滑点                       
     set_slippage(PriceRelatedSlippage(0.00246),type='stock')
     # 持仓数量
-    g.stocknum = 5
+    g.stocknum = 20
     # 交易日计时器
     g.days = 0 
     # 调仓频率
@@ -36,7 +39,16 @@ def initialize(context):
 
     args=json.loads(context.args)
     model_id=args['model_id']
-    preds=load_preds(model_id)
+    preds_data=load_preds_data(model_id)
+    clsLgbTrainer=LightgbmTrainer()
+    preds=clsLgbTrainer.pred(preds_data,md5=model_id,save=False)
+
+
+    
+    
+    #/data/code/finhack/examples/demo-project/data//models/lgb_model_49c090556b808530727b2d4c0a9bf9b6.txt
+    
+    
     g.preds=preds
     
 
@@ -66,7 +78,14 @@ def trade(context):
         ## 买入股票
         for stock in stock_list:
             if len(context.portfolio.positions.keys()) < g.stocknum:
-                order_value(stock, Cash)
+                i=len(context.portfolio.positions.keys())+1
+                N=g.stocknum
+                a1=N
+                ai=N-(i-1)*(N/i)
+                Sn=N*N/2
+                wi=ai/Sn
+                #order_value(stock, Cash*wi*10)
+                order_value(stock, Cash/(N-i+1))
 
         # 天计数加一
         g.days = 1

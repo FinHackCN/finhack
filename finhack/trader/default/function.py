@@ -12,6 +12,8 @@ import json
 from runtime.constant import *
 import os
 import pandas as pd
+from finhack.trainer.trainer import Trainer
+
 
 def init_context(args):
     args=args.__dict__
@@ -444,15 +446,18 @@ def log(message,level='info'):
     
 
 
-def load_preds(model_id,type='lgb'):
-    pred_data_path=f"{type}_model_{model_id}_pred.pkl"
-    if os.path.isfile(PREDS_DIR+pred_data_path):
-        pred_data=pd.read_pickle(PREDS_DIR+pred_data_path)
-    else:
-        print(PREDS_DIR+data_path+' not found!')
-        return False
-    return pred_data
- 
+def load_preds_data(model_id):
+    # pred_data_path=f"{type}_model_{model_id}_pred.pkl"
+    # if os.path.isfile(PREDS_DIR+pred_data_path):
+    #     pred_data=pd.read_pickle(PREDS_DIR+pred_data_path)
+    # else:
+    #     print(PREDS_DIR+data_path+' not found!')
+    #     return False
+    # return pred_data
+    start_date=context.trade.start_time.replace("-",'')[0:8]
+    end_date=context.trade.end_time.replace("-",'')[0:8]
+    preds_df=Trainer.getPredData(model_id,start_date,end_date)
+    return preds_df
  
 def bind_action(strategy):
     strategy.set_benchmark=set_benchmark
@@ -467,7 +472,7 @@ def bind_action(strategy):
     strategy.order_value=order_value
     strategy.order_target_value=order_target_value
     strategy.log=log
-    strategy.load_preds=load_preds
+    strategy.load_preds_data=load_preds_data
 
 
 
