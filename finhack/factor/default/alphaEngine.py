@@ -837,6 +837,8 @@ class alphaEngine():
                 Log.logger.info(name+"计算公式:"+formula)
             res=eval(formula)
             
+            #这里的res是近700天的数据，可以和old_df拼接起来变成完整数据
+            
             #print(res)
             
             if check:

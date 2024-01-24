@@ -17,9 +17,12 @@ class Core:
         self.usage="""
         
 finhack {module}  {action} --vendor={vendor} --background --project_path={project_path} --config={config_path}
-finhack project create --project_path={project_path} #创建新项目
-finhack collector run --vendor=tushare #采集tushare数据
-finhack factor run   #开启因子计算
+finhack project create --project_path={project_path}    #创建新项目
+finhack collector run --vendor=tushare      #采集tushare数据
+finhack factor run                          #开启因子计算
+finhack factor list                         #查看可用因子列表
+finhack factor show --factor=pe_0           #查看某个因子的信息
+finhack factor analys --factor=pe_0         #对目标因子进行分析
 finhack -h
 -------------------------------"""
         self.generate_args()
