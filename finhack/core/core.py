@@ -23,6 +23,7 @@ finhack factor run                          #开启因子计算
 finhack factor list                         #查看可用因子列表
 finhack factor show --factor=pe_0           #查看某个因子的信息
 finhack factor analys --factor=pe_0         #对目标因子进行分析
+finhack trainer auto --vendor=lightgbm      #自动进行lightgbm训练
 finhack -h
 -------------------------------"""
         self.generate_args()

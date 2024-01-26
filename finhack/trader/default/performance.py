@@ -65,8 +65,8 @@ class Performance:
             indicators['win_ratio']=context.performance.win/context.performance.trade_num
         else:
             indicators['win_ratio']=0
-        context.performance['values']=returns
-        context.performance['bench_values']=benchReturns
+        context.performance['returns']=returns
+        context.performance['bench_returns']=benchReturns
         for key in indicators.keys():
             if key not in ['returns','bench_returns']:
                 try:
@@ -96,13 +96,13 @@ class Performance:
     def show_console(context,index):
         p_df=context.performance.returns
         i_df=index
-        
+        print(p_df)
         p_dates = p_df.index.strftime('%d/%m/%Y').tolist()
-        p_values = p_df['values'].tolist()
+        p_values = p_df.values.tolist()
         
         
         i_dates = i_df.index.strftime('%d/%m/%Y').tolist()
-        i_values = i_df['values'].tolist()
+        i_values = p_df.values.tolist()
         
         # 绘图
         # 设置图表样式

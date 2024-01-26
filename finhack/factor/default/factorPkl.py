@@ -34,7 +34,7 @@ class factorPkl:
     def save():
         # 设置 CSV 文件所在的目录
         directory = SINGLE_FACTORS_DIR
-        output_dir = SINGLE_FACTORS_PKL_DIR+"_tmp"
+        output_dir = SINGLE_FACTORS_PKL_TMP_DIR
         open_path = SINGLE_FACTORS_DIR+'open.csv'  # 替换为 open_0.csv 文件的实际路径
         open_df = pd.read_csv(open_path, names=['ts_code', 'trade_date', 'open'])
 
@@ -49,14 +49,9 @@ class factorPkl:
                 
         # 检查 output_dir是否存在
         if os.path.exists(output_dir):
-            # 清空 output_dir 中的所有文件
-            for file in os.listdir(output_dir):
-                file_path = os.path.join(output_dir, file)
-                if os.path.isfile(file_path):
-                    os.remove(file_path)
-        else:
-            # 如果 output_dir不存在，则创建它
-            os.makedirs(output_dir)        
+            shutil.rmtree(output_dir)
+
+        os.makedirs(output_dir)        
         
         
         # 使用多进程处理文件
@@ -64,10 +59,17 @@ class factorPkl:
             for filename in os.listdir(directory):
                 if filename.endswith('.csv'):
                     file_path = os.path.join(directory, filename)
-                    executor.submit(factorParquet.process_file, file_path, output_dir, all_dates_df)
-                    #factorParquet.process_file(file_path, output_dir, all_dates_df)
+                    executor.submit(factorPkl.process_file, file_path, output_dir, all_dates_df)
+                    #factorPkl.process_file(file_path, output_dir, all_dates_df)
                     
         # 单独保存全量索引
         index_df = all_dates_df.reset_index()
         index_df['trade_date']=index_df['trade_date'].astype(str)
         index_df.to_pickle(output_dir+'index.pkl')
+        
+        if os.path.exists(SINGLE_FACTORS_PKL_OLD_DIR):
+            shutil.rmtree(SINGLE_FACTORS_PKL_OLD_DIR)
+        
+        os.rename(SINGLE_FACTORS_PKL_DIR, SINGLE_FACTORS_PKL_OLD_DIR)
+        os.rename(SINGLE_FACTORS_PKL_TMP_DIR, SINGLE_FACTORS_PKL_DIR)
+        shutil.rmtree(SINGLE_FACTORS_PKL_OLD_DIR)

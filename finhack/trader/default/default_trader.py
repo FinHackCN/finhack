@@ -27,7 +27,8 @@ class DefaultTrader:
         pass    
     
     def run(self):
-        
+        t1=time.time()
+        starttime=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         init_context(self.args)
         
         
@@ -89,11 +90,55 @@ class DefaultTrader:
         
         Performance.analyse(context)
         
+        
+        # hassql='select * from auto_train where hash="%s"' % (md5)
+        # has=mydb.selectToDf(hassql,'finhack')
+         # if(has.empty): 
+        #     mydb.exec(insert_sql,'finhack')      
     
     
+        from finhack.library.mydb import mydb
 
-        
-
-        
+        sql="INSERT INTO `finhack`.`backtest`(`instance_id`,`features_list`, `train`, `model`, `strategy`, `start_date`, `end_date`, `init_cash`, `args`, `history`, `returns`, `logs`, `total_value`, `alpha`, `beta`, `annual_return`, `cagr`, `annual_volatility`, `info_ratio`, `downside_risk`, `R2`, `sharpe`, `sortino`, `calmar`, `omega`, `max_down`, `SQN`,filter,win,server,trade_num,runtime,starttime,endtime,benchReturns,roto,benchmark) VALUES ( '%s','%s', '%s', '%s', '%s', '%s', '%s', %s, '%s', '%s', '%s', '%s', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,'%s',%s,'%s',%s,'%s','%s','%s','%s','%s','%s')" % \
+        (context.id,  \
+        'features_list',  \
+       'train',  \
+        'model',  \
+        context.trade.strategy,  \
+        context.trade.start_time,  \
+        context.trade.end_time,  \
+        context.portfolio.starting_cash,  \
+        str(context.args).replace("'",'"'),  \
+        'history',  \
+        context.performance.returns,  \
+        'logs',  \
+        context.portfolio.total_value,  \
+        str(context.performance.indicators.alpha),  \
+        str(context.performance.indicators.beta),  \
+        str(context.performance.indicators.annual_return),  \
+        str(context.performance.indicators.cagr),
+        str(context.performance.indicators.annual_volatility),  \
+        str(context.performance.indicators.info_ratio),  \
+        str(context.performance.indicators.downside_risk),  \
+        str(context.performance.indicators.R2),  \
+        str(context.performance.indicators.sharpe),  \
+        str(context.performance.indicators.sortino),  \
+        str(context.performance.indicators.calmar),  \
+        str(context.performance.indicators.omega),  \
+        str(context.performance.indicators.max_down),  \
+        str(context.performance.indicators.sqn),  \
+        'filters_name',  \
+        str(context.performance.win),  \
+        'woldy-PC',  \
+        str(context.performance.trade_num),  \
+        str(time.time()-t1),  \
+        str(starttime),  \
+        str(datetime.now().strftime("%Y-%m-%d %H:%M:%S")),  \
+        context.performance.bench_returns,  \
+        str(context.performance.indicators.roto),  \
+        context.trade.benchmark) 
+        print(sql)
+        mydb.exec('delete from backtest where instance_id="%s"' % (context.id),'finhack') 
+        mydb.exec(sql,'finhack')
         
     

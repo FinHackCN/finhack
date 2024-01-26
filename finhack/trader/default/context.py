@@ -82,6 +82,7 @@ context_attr= {
                 'bench_returns':[],
                 'turnover':[],
                 'win':0,
+                'win_ratio':0,
                 'trade_num':0,
                 'indicators':{}
             })
