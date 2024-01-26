@@ -16,6 +16,9 @@ from finhack.factor.default.factorPkl import factorPkl
 class taskRunner:
     def runTask(taskName='all'):
         
+        factorPkl.save()
+        exit()
+        
         c_list=preCheck.checkAllFactors() #chenged factor，代码发生变化
         if taskName=='all':
             task_list=Config.get_section_list('task')
@@ -25,7 +28,8 @@ class taskRunner:
         os.system('rm -rf '+CACHE_DIR+'/single_factors_tmp1/*')
         os.system('rm -rf '+CACHE_DIR+'/single_factors_tmp2/*')
         
-
+        #需要刷新价格数据
+        AStock.getStockDailyPrice(code_list=[],where="",startdate='',enddate='',fq='hfq',db='tushare',cache=False)
         
         #遍历任务列表
         for task in task_list:

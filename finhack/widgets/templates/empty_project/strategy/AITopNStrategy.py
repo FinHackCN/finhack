@@ -84,8 +84,8 @@ def trade(context):
                 ai=N-(i-1)*(N/i)
                 Sn=N*N/2
                 wi=ai/Sn
-                #order_value(stock, Cash*wi*10)
-                order_value(stock, Cash/(N-i+1))
+                order_value(stock, Cash*wi*10)
+                #order_value(stock, Cash/(N-i+1))
 
         # 天计数加一
         g.days = 1

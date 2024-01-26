@@ -54,7 +54,7 @@ def init_context(args):
         context.data.client=client
     
     context_json = str(context['trade'])+str(context['account'])+str(context['portfolio']['cash'])
-    hash_value = hashlib.sha256(context_json.encode()).hexdigest()
+    hash_value = hashlib.md5(context_json.encode()).hexdigest()
     context.id=hash_value
 
 

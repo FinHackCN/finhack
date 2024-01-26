@@ -65,7 +65,7 @@ class LightgbmTrainer(Trainer):
                     self.start_train(
                         start_date=args.start_date,
                         valid_date=args.valid_date,
-                        end_date=args.valid_date,
+                        end_date=args.end_date,
                         features=factor_list,
                         label=args.label,
                         shift=int(args.shift),
@@ -85,7 +85,7 @@ class LightgbmTrainer(Trainer):
         return self.start_train(
             start_date=args.start_date,
             valid_date=args.valid_date,
-            end_date=args.valid_date,
+            end_date=args.end_date,
             features=args.features.split(',') if args.features!='' else [],
             label=args.label,
             shift=int(args.shift),
@@ -117,12 +117,10 @@ class LightgbmTrainer(Trainer):
 
             
             self.train(data_train,data_valid,data_path,md5,loss,param)
-            self.pred(df_pred,data_path,md5)
-            
+            self.pred(df_pred,data_path,md5,True)
             insert_sql="INSERT INTO auto_train (start_date, valid_date, end_date, features, label, shift, param, hash,loss,algorithm,filter) VALUES ('%s', '%s', '%s', '%s', '%s', %s, '%s', '%s','%s','%s','%s')" % (start_date,valid_date,end_date,','.join(features),label,str(shift),str(param).replace("'",'"'),md5,loss,'lgb',filter_name)
             if(has.empty): 
                 mydb.exec(insert_sql,'finhack')            
-            
             self.score(md5)
             return md5
         except Exception as e:
@@ -247,7 +245,6 @@ class LightgbmTrainer(Trainer):
     
     def score(self,md5='test',df_pred=pd.DataFrame()):
         data_path=DATA_DIR
-        
         model=mydb.selectToDf('select * from auto_train where hash="'+md5+'"','finhack')
         model=model.iloc[0]
         start_date=model['start_date']
@@ -269,9 +266,11 @@ class LightgbmTrainer(Trainer):
             df=factorManager.getFactors(factor_list=['open','close'])
 
         else:
+            print(pred_file+" not found!")
             return False
         
         if model.empty:
+            print("model "+md5+" is empty!")
             return False
 
  
@@ -281,6 +280,8 @@ class LightgbmTrainer(Trainer):
         #df['pred']=df_preded['pred']
         df['label']=df.groupby('ts_code',group_keys=False).apply(lambda x: x['close'].shift(-1*shift)/x['open'].shift(-1))
         df=df.dropna()
+        
+        
         count = len(df[df['pred'] > df['label']])
         mean_diff = (df['label'] - df['pred']).mean()
         

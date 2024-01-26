@@ -126,7 +126,7 @@ def getStockDailyPrice(code_list=[],where="",startdate='',enddate='',fq='hfq',db
                     result.append(task.result())
             tasklist=[]
             for code in code_list:
-                mytask=pool.submit(getStockDailyPriceByCode,code=code,where=where,startdate=startdate,enddate=enddate,fq=fq)
+                mytask=pool.submit(getStockDailyPriceByCode,code=code,where=where,startdate=startdate,enddate=enddate,fq=fq,db=db,cache=cache)
                 mytask.add_done_callback(get_result)
                 tasklist.append(mytask)
             wait(tasklist, return_when=ALL_COMPLETED)
