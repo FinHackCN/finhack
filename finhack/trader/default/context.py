@@ -14,6 +14,7 @@ context_attr= {
             'args':None,
             'trade':DictObj({
                 'market':'',
+                'model_id':'',
                 'start_time':'',
                 'end_time':'',
                 'benchmark':'000001',

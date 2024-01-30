@@ -30,7 +30,12 @@ class Performance:
         
 
         returns=context.performance.returns['returns']-1
+        
+        
+        
         benchReturns=index['returns']-1
+        benchReturns.iloc[0] = 0
+        
         
         try:
             alpha, beta = ey.alpha_beta(returns = returns, factor_returns = benchReturns, annualization=252) 
@@ -78,7 +83,7 @@ class Performance:
         context.performance.indicators=indicators        
         
         
-        Performance.show_console(context,index)
+        Performance.show_console(context)
         #Performance.notebook(context,index)
         print('')
         performance_data=context.performance.indicators
@@ -93,16 +98,16 @@ class Performance:
         # 输出表格
         print(tabulate(table_data, headers=["Metric", "Value"], tablefmt="grid"))
         
-    def show_console(context,index):
-        p_df=context.performance.returns
-        i_df=index
-        print(p_df)
+    def show_console(context):
+        p_df=context.performance.returns+1
+        i_df=context.performance.bench_returns+1
+        
         p_dates = p_df.index.strftime('%d/%m/%Y').tolist()
-        p_values = p_df.values.tolist()
+        p_values = (p_df.values.cumprod()-1).tolist()
         
         
         i_dates = i_df.index.strftime('%d/%m/%Y').tolist()
-        i_values = p_df.values.tolist()
+        i_values = (i_df.values.cumprod()-1).tolist()
         
         # 绘图
         # 设置图表样式

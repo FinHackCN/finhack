@@ -92,44 +92,43 @@ class factorManager:
         result.sort()
         return result
  
-    
-    #获取因子数据
-    def getFactors(factor_list,stock_list=[],start_date='',end_date='',cache=False):
-        df_factor=pd.DataFrame()
-        
-        
+ 
+     # 获取因子数据
+    def getFactors(factor_list, stock_list=[], start_date='', end_date='', cache=False):
+        df_factor = pd.DataFrame()
         single_factors_pkl_dir = SINGLE_FACTORS_PKL_DIR
-        index_pkl_path = SINGLE_FACTORS_PKL_DIR+'index.pkl'
-        
-        # for factor in factor_list:
-        #     factor=factor.replace('$','')
-        #     if os.path.isfile(SINGLE_FACTORS_DIR+factor+'.csv'):
-        #         df=pd.read_csv(SINGLE_FACTORS_DIR+factor+'.csv',names=['ts_code','trade_date',factor], dtype={'ts_code': str,'trade_date': str, factor: np.float64},low_memory=False)
-        #         df.set_index(['ts_code', 'trade_date'], inplace=True)
-        #         if df_factor.empty:
-        #             df_factor = df
-        #         else:
-        #             df_factor = df_factor.join(df, how='outer')
-        #     else:
-        #         Log.logger.warning(SINGLE_FACTORS_DIR+factor+'.csv not found')
-        
-        
-        # if df_factor.empty:
-        #     return df_factor
-            
+    
+        # 加载索引
+        index_pkl_path = SINGLE_FACTORS_PKL_DIR + 'index.pkl'
+        index_df = pd.read_pickle(index_pkl_path)
+        index_df['trade_date'] = index_df['trade_date'].astype(str)
+    
+        if start_date != "":
+            index_df = index_df[index_df['trade_date'] >= start_date]
+    
+        if end_date != "":
+            index_df = index_df[index_df['trade_date'] <= end_date]
+    
+        if index_df.empty:
+            return index_df
+    
+        # 获取日期范围的位置
+        start_index = index_df.index[0]
+        end_index = index_df.index[-1]
+    
         factor_dfs = []
     
         # 逐个读取因子 .pkl 文件
         for factor in factor_list:
-            factor=factor.replace('$','')
+            factor = factor.replace('$', '')
             factor_file = os.path.join(single_factors_pkl_dir, f'{factor}.pkl')
             if os.path.isfile(factor_file):
                 # 加载因子数据
                 factor_data = pd.read_pickle(factor_file)
                 factor_data[factor] = pd.to_numeric(factor_data[factor], errors='coerce')
-
     
-                # 将因子数据添加到列表中
+                # 筛选对应日期的因子数据
+                factor_data = factor_data.iloc[start_index:end_index+1]
                 factor_dfs.append(factor_data)
             else:
                 print(f"Warning: {factor_file} not found")
@@ -137,38 +136,25 @@ class factorManager:
         # 将所有因子数据合并为一个 DataFrame
         combined_factors_df = pd.concat(factor_dfs, axis=1)
     
-        # 加载索引
-        index_df = pd.read_pickle(index_pkl_path)
-    
-        # 将因子数据与索引进行对齐
         df_factor = index_df.join(combined_factors_df, how='left')
-        df_factor['trade_date']=df_factor['trade_date'].astype(str)
+        df_factor = df_factor.set_index(['ts_code', 'trade_date'])
+        df_factor = df_factor.sort_index()    
     
-        if df_factor.empty:
-            return df_factor
+        if stock_list != []:
+            df_list = []
+            for ts_code in stock_list:
+                df_tmp = combined_factors_df[combined_factors_df['ts_code'] == ts_code]
+                df_list.append(df_tmp)
+    
+            df_factor = pd.concat(df_list)
+        else:
             
-        if  stock_list!=[] or start_date!="" or end_date!="":
-            df_factor=df_factor.reset_index() 
-            if stock_list!=[]:
-                df_list=[]
-                for ts_code in stock_list:
-                    df_tmp=df_factor[df_factor.ts_code==ts_code]
-                    df_list.append(df_tmp)
-                df_factor=pd.concat(df_list)
-                
-            if start_date!="":
-                df_factor=df_factor[df_factor.trade_date>=start_date]
-            
-            if end_date!="":
-                df_factor=df_factor[df_factor.trade_date<=end_date]
-        df_factor=df_factor.set_index(['ts_code','trade_date'])  
-            
-        df_factor=df_factor.sort_index()
-        # if cache:
-        #     df_factor.to_pickle(cache_file)
-            
-        
-        return df_factor    
+            pass
+
+    
+        return df_factor
+
+
     
     
     #获取alpha列表的列表

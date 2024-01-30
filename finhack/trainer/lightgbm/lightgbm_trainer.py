@@ -29,6 +29,8 @@ class LightgbmTrainer(Trainer):
         while True:
                 try:
                     flist=factorManager.getFactorsList()
+                    #print(flist)
+                    
                     random.shuffle(flist)
                     n=random.randint(int(args.min_f),int(args.max_f))
                     factor_list=[]
@@ -158,8 +160,8 @@ class LightgbmTrainer(Trainer):
 
 
     def train(self,data_train,data_valid,data_path=DATA_DIR,md5='test',loss="ds",param={}):
-        
-        cfg=Config.get_config('train','lightgbm')
+        args=global_var.args
+        #cfg=Config.get_config('train','lightgbm')
         # 参数设置
         params = {
                 'boosting_type': 'gbdt',
@@ -173,7 +175,8 @@ class LightgbmTrainer(Trainer):
                 'verbose': -1,  # <0 显示致命的, =0 显示错误 (警告), >0 显示信息
                 # 'lambda_l1':0,
                 # 'lambda_l2':0, 
-                "device" : cfg['device']
+                'verbosity': -1,
+                "device" : args.device
         }   
         
         
@@ -208,7 +211,11 @@ class LightgbmTrainer(Trainer):
         # 模型加载
         
     def pred(self,df_pred,data_path=DATA_DIR,md5='test',save=False):
-        # df_pred=df_pred.drop('symbol', axis=1)   
+        if 'symbol' in df_pred:
+            df_pred=df_pred.drop('symbol', axis=1)   
+        
+        
+        
         
         gbm = lgb.Booster(model_file=data_path+'/models/lgb_model_'+md5+'.txt')
         pred=df_pred[['ts_code','trade_date']]
