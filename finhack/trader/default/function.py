@@ -187,12 +187,12 @@ def order_value(security, value, style=None, side='long', pindex=0, close_today=
         order_sell(security,amount)
         
 
-#目标股数下单
-def order_target(security, amount, style=None, side='long', pindex=0, close_today=False):
-    if amount>0:
-        order_buy(security,amount)
-    else:
-        order_sell(security,amount)
+# #目标股数下单
+# def order_target(security, amount, style=None, side='long', pindex=0, close_today=False):
+#     if amount>0:
+#         order_buy(security,amount)
+#     else:
+#         order_sell(security,amount)
         
 
 #目标价值下单
