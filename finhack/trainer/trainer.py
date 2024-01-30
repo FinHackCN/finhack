@@ -17,10 +17,10 @@ class Trainer:
         feature_list=feature_list['features'].to_list()
         feature_list=feature_list[0]
         feature_list=feature_list.split(',')
-        df=factorManager.getFactors(feature_list)
+        df=factorManager.getFactors(feature_list,start_date=start_date,end_date=end_date)
         df.reset_index(inplace=True)
-        df=df[df.trade_date>=start_date]
-        df=df[df.trade_date<=end_date]
+        # df=df[df.trade_date>=start_date]
+        # df=df[df.trade_date<=end_date]
             
         df=df.fillna(method='ffill')
         df=df.fillna(0)
@@ -33,12 +33,24 @@ class Trainer:
         return df
 
     
-    def getTrainData(self,start_date='20000101',valid_date="20080101",end_date='20100101',features=[],label='abs',shift=10,filter_name='',dropna=False,norm=False):
+    def getTrainData(self,start_date='20000101',valid_date="20080101",end_date='20100101',features=[],label='abs',shift=10,filter_name='',dropna=False,norm=False,pred_date=""):
             data_path=DATA_DIR
-            df=factorManager.getFactors(factor_list=features+['open','close','high','low'])
+            # print(start_date)
+            # print(end_date)
+            # print(features)
+            
+            
+            if pred_date=="":
+                end_year = int(end_date[:4]) + 3
+                pred_date = str(end_year) + end_date[4:]
+            
+            df=factorManager.getFactors(factor_list=features+['open','close','high','low'],start_date=start_date,end_date=pred_date)
+            #print(df)
             df.reset_index(inplace=True)
             #df['trade_date']= df['trade_date'].astype('string')
             df=df.sort_values('trade_date')
+            df=df.fillna(method='ffill')
+            df=df.fillna(0)
             if filter_name!='':
                 #filters_module = importlib.import_module('.filters.filters',package='strategies')
                 func_filter=getattr(filters,filter_name)

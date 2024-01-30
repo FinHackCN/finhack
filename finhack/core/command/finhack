@@ -3,8 +3,16 @@ import os
 from finhack.core.core import Core
 import multiprocessing
 import atexit
+
+def child_process_action(core):
+    # 注册子进程退出时的清理函数，如果有的话
+    # atexit.register(Utils.child_cleanup)
+    core.do_action()
+    # 子进程完成任务后退出
+    os._exit(0)
+
 if __name__ == '__main__':
-    core=Core()
+    core = Core()
     core.load_module()
 
     from finhack.library.utils import Utils
@@ -14,13 +22,15 @@ if __name__ == '__main__':
             print("创建后台进程失败！")
             exit(1)
         elif pid == 0:  # 子进程中执行
-            core.do_action()
-            exit(0)
+            child_process_action(core)
         else:  # 父进程中继续执行
             Utils.write_pids(pid)
             print("启动后台任务！")
-            exit(0)
+            # 父进程可以在这里继续执行其他任务，或者退出
+            # 如果父进程需要等待子进程结束，可以使用 os.waitpid() 方法
+            # _, status = os.waitpid(pid, 0)
+            # print("后台任务已结束，状态码：", status)
     else:
-        atexit.register(Utils.auto_exit) # 注册退出函数
+        # 注册父进程退出时的清理函数
+        #atexit.register(Utils.auto_exit)
         core.do_action()
-

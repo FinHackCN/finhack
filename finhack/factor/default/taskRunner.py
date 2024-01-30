@@ -15,10 +15,6 @@ from finhack.factor.default.factorPkl import factorPkl
     
 class taskRunner:
     def runTask(taskName='all'):
-        
-        factorPkl.save()
-        exit()
-        
         c_list=preCheck.checkAllFactors() #chenged factor，代码发生变化
         if taskName=='all':
             task_list=Config.get_section_list('task')

@@ -24,6 +24,17 @@ def init_context(args):
     context['trade']['end_time']=args['end_time']
     context['trade']['benchmark']=args['benchmark']
     context['trade']['strategy']=args['strategy']
+    strategy_path=f"{BASE_DIR}/strategy/{args['strategy']}.py"
+    with open(strategy_path, 'r', encoding='utf-8') as file:
+        context['trade']['strategy_code'] = file.read()
+
+    if args['args']!=None and args['args']!='':
+        aargs=json.loads(args['args'])
+        if 'model_id' in aargs:
+            context['trade']['model_id']=aargs['model_id']
+    if args['model_id']!='':
+        context['trade']['model_id']=args['model_id']
+
     context['trade']['slip']=float(args['slip'])
     context['trade']['sliptype']=args['sliptype']
     context['trade']['rule_list']=args['rule_list']
@@ -53,7 +64,7 @@ def init_context(args):
         client = redis.Redis(connection_pool=redisPool) 
         context.data.client=client
     
-    context_json = str(context['trade'])+str(context['account'])+str(context['portfolio']['cash'])
+    context_json = str(args)+str(context['trade'])+str(context['account'])+str(context['portfolio']['cash'])
     hash_value = hashlib.md5(context_json.encode()).hexdigest()
     context.id=hash_value
 
@@ -446,17 +457,20 @@ def log(message,level='info'):
     
 
 
-def load_preds_data(model_id):
-    # pred_data_path=f"{type}_model_{model_id}_pred.pkl"
-    # if os.path.isfile(PREDS_DIR+pred_data_path):
-    #     pred_data=pd.read_pickle(PREDS_DIR+pred_data_path)
-    # else:
-    #     print(PREDS_DIR+data_path+' not found!')
-    #     return False
-    # return pred_data
+def load_preds_data(model_id,cache=False):
+    pred_data_path=PREDS_DIR+f"model_{model_id}_pred.pkl"
+    if cache==True:
+        try:
+            if os.path.isfile(pred_data_path):
+                pred_data=pd.read_pickle(pred_data_path)
+                return pred_data
+        except Exception as e:
+            pass
     start_date=context.trade.start_time.replace("-",'')[0:8]
     end_date=context.trade.end_time.replace("-",'')[0:8]
     preds_df=Trainer.getPredData(model_id,start_date,end_date)
+    if cache==True:
+        preds_df.to_pickle(pred_data_path)
     return preds_df
  
 def bind_action(strategy):

@@ -15,6 +15,7 @@ import runtime.global_var as global_var
 from runtime.constant import LOGS_DIR
 from .context import context,g
 from datetime import datetime
+from finhack.library.mydb import mydb
 class DefaultTrader:
     def load_strategy(self,strategy_name):
         if os.path.exists(f"{BASE_DIR}/strategy/{strategy_name}.py"):
@@ -34,6 +35,14 @@ class DefaultTrader:
         
         Log.tlogger=Log.tLog(context.id,logs_dir=LOGS_DIR,background=self.args.background,level=self.args.log_level).logger
         log("正在初始化交易上下文")
+
+        hassql='select * from backtest where instance_id="%s"' % (context.id)
+        has=mydb.selectToDf(hassql,'finhack')
+        if(not has.empty): 
+            log("存在相同回测记录，本次回测结束！")
+            return  
+
+
 
 
         start_time=context['trade']['start_time']
@@ -91,26 +100,44 @@ class DefaultTrader:
         Performance.analyse(context)
         
         
-        # hassql='select * from auto_train where hash="%s"' % (md5)
-        # has=mydb.selectToDf(hassql,'finhack')
-         # if(has.empty): 
-        #     mydb.exec(insert_sql,'finhack')      
-    
-    
-        from finhack.library.mydb import mydb
 
-        sql="INSERT INTO `finhack`.`backtest`(`instance_id`,`features_list`, `train`, `model`, `strategy`, `start_date`, `end_date`, `init_cash`, `args`, `history`, `returns`, `logs`, `total_value`, `alpha`, `beta`, `annual_return`, `cagr`, `annual_volatility`, `info_ratio`, `downside_risk`, `R2`, `sharpe`, `sortino`, `calmar`, `omega`, `max_down`, `SQN`,filter,win,server,trade_num,runtime,starttime,endtime,benchReturns,roto,benchmark) VALUES ( '%s','%s', '%s', '%s', '%s', '%s', '%s', %s, '%s', '%s', '%s', '%s', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,'%s',%s,'%s',%s,'%s','%s','%s','%s','%s','%s')" % \
+    
+    
+        returns_float_list = (context.performance.returns.values).tolist()
+        returns_string_list = ['{:.8f}'.format(item) for item in returns_float_list]  # 保留8位小数
+        returns_string = ','.join(returns_string_list)
+        
+        bench_float_list = (context.performance.bench_returns.values).tolist()
+        bench_string_list = ['{:.8f}'.format(item) for item in bench_float_list]  # 保留8位小数
+        bench_string = ','.join(bench_string_list)
+        
+    
+        #from finhack.library.mydb import mydb
+        
+        
+        
+        features_list=''
+        train=''
+        
+        if context.trade.model_id!='':
+            model=mydb.selectToDf('select * from auto_train where hash="'+context.trade.model_id+'"','finhack')
+            if(not model.empty):  
+                model=model.iloc[0]
+                features_list=model['features']
+                train=model['algorithm']+"_"+model['loss']
+
+        sql="INSERT INTO `finhack`.`backtest`(`instance_id`,`features_list`, `train`, `model`, `strategy`, `start_date`, `end_date`, `init_cash`, `args`, `history`, `returns`, `logs`, `total_value`, `alpha`, `beta`, `annual_return`, `cagr`, `annual_volatility`, `info_ratio`, `downside_risk`, `R2`, `sharpe`, `sortino`, `calmar`, `omega`, `max_down`, `SQN`,filter,win,server,trade_num,runtime,starttime,endtime,benchReturns,roto,benchmark,strategy_code) VALUES ( '%s','%s', '%s', '%s', '%s', '%s', '%s', %s, '%s', '%s', '%s', '%s', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,'%s',%s,'%s',%s,'%s','%s','%s','%s','%s','%s','%s')" % \
         (context.id,  \
-        'features_list',  \
-       'train',  \
-        'model',  \
+        features_list,  \
+        train,  \
+        context.trade.model_id,  \
         context.trade.strategy,  \
         context.trade.start_time,  \
         context.trade.end_time,  \
         context.portfolio.starting_cash,  \
         str(context.args).replace("'",'"'),  \
         'history',  \
-        context.performance.returns,  \
+        returns_string,  \
         'logs',  \
         context.portfolio.total_value,  \
         str(context.performance.indicators.alpha),  \
@@ -134,10 +161,13 @@ class DefaultTrader:
         str(time.time()-t1),  \
         str(starttime),  \
         str(datetime.now().strftime("%Y-%m-%d %H:%M:%S")),  \
-        context.performance.bench_returns,  \
+        bench_string,  \
         str(context.performance.indicators.roto),  \
-        context.trade.benchmark) 
-        print(sql)
+        context.trade.benchmark,  \
+        context.trade.strategy_code.replace("'", "\\'") \
+        
+        ) 
+        #print(sql)
         mydb.exec('delete from backtest where instance_id="%s"' % (context.id),'finhack') 
         mydb.exec(sql,'finhack')
         

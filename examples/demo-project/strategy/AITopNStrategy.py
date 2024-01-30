@@ -37,8 +37,10 @@ def initialize(context):
     run_daily(trade, time="09:30")
     # run_daily(trade, time="8:05")
 
-    args=json.loads(context.args)
-    model_id=args['model_id']
+    # args=json.loads(context.args)
+    # model_id=args['model_id']
+    model_id=context.trade.model_id
+
     preds_data=load_preds_data(model_id)
     clsLgbTrainer=LightgbmTrainer()
     preds=clsLgbTrainer.pred(preds_data,md5=model_id,save=False)

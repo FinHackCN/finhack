@@ -31,7 +31,7 @@ class DefaultTestmodule():
         factorAnalyzer.alphalens("pe_0")
         
     def run4(self):
-        factors=factorManager.getFactors(['ADOSC_0','AD_0','APO_0','AROONDOWN_0','ARRONUP_0','pe_0','alpha101_012','alpha101_013'])
+        factors=factorManager.getFactors(['ADOSC_0','AD_0','APO_0','AROONDOWN_0','ARRONUP_0','pe_0','alpha101_012','alpha101_013'],start_date='20150101',end_date="20230101")
         print(factors)
         
         
@@ -54,3 +54,7 @@ class DefaultTestmodule():
 
 
         print(df)
+        
+    def run6(self):
+        print('test')
+        pass
