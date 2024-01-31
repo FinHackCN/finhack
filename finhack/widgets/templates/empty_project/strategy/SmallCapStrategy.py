@@ -55,7 +55,8 @@ def trade(context):
     
         ## 选股
         now_date=context.current_dt.strftime('%Y%m%d')
-        df = g.factors.query(f"trade_date =='{now_date}' & pe_0 > 0 & pb_0 < 2 & MACD_0<0 & peTtm_0<pe_0 & pe_0<50 & pe_0>10")
+        df = g.factors[g.factors.trade_date==now_date]
+        df = g.factors.query(f"pe_0 > 0 & pb_0 < 2 & MACD_0<0 & peTtm_0<pe_0 & pe_0<50 & pe_0>10")
         df=df.sort_values(by='totalMv_0',ascending=True, inplace=False) 
 
         stock_list = df.head(g.stocknum)['ts_code'].tolist()

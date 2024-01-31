@@ -12,7 +12,7 @@ import sys
 
 
 class Core:
-    def __init__(self,project_path=''):
+    def __init__(self,project_path='',args=True):
         self.project_path=project_path
         self.usage="""
         
@@ -26,13 +26,18 @@ finhack factor analys --factor=pe_0         #对目标因子进行分析
 finhack trainer auto --vendor=lightgbm      #自动进行lightgbm训练
 finhack -h
 -------------------------------"""
-        self.generate_args()
-        self.check_project()
+        if args:
+            self.generate_args()
+            self.check_project()
         self.check_env()
         self.refresh_runtime()
-        self.append_args()
-        self.generate_global()
-        self.init_logger()
+        if args:
+            self.append_args()
+            self.generate_global()
+            self.init_logger()
+        else:
+            sys.path.append(self.project_path+'/data/cache/')
+
 
     def init_logger(self):
         from runtime.constant import LOGS_DIR

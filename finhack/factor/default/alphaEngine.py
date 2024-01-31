@@ -784,7 +784,6 @@ class alphaEngine():
                 df=factorManager.getFactors(factor_list=col_list,cache=True)
             else:
                 df=df.sort_index()
-       
 
             if diff_date>0 and diff_date<100:
                 dt=datetime.datetime.strptime(str(max_date),'%Y%m%d')
