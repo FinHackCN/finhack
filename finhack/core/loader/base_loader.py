@@ -52,6 +52,7 @@ class BaseLoader():
     
     def run(self):
         klass=self.klass
+        klass.args=self.args
         klass.run()
 
     

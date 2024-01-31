@@ -24,16 +24,19 @@ class factorAnalyzer():
     
     
     
-    def alphalens(factor_name):
-        
+    def alphalens(factor_name='alpha',df=pd.DataFrame(),notebook=False):
         
         df_industry=AStock.getStockIndustry()
 
+        if df.empty:
+            df=factorManager.getFactors(factor_list=['close',factor_name])
+        else:
+            df_close=factorManager.getFactors(factor_list=['close'])
         
-        # df_all.index=df_all['date']
-        # price.index = pd.to_datetime(price.index)
-        # assets = df_all.set_index( [df_all.index,df_all['symbol']], drop=True,append=False, inplace=False)
-        df=factorManager.getFactors(factor_list=['close',factor_name])
+        df_close[factor_name]=df
+        df=df_close
+        
+
         # 假设 df 是您提供的 DataFrame，我们首先重置索引
         df = df.reset_index().merge(df_industry, on='ts_code')
         df['industry'] = df['industry'].fillna('其他')
@@ -94,7 +97,7 @@ class factorAnalyzer():
         #plt.show()
         
         # 分位数累积收益
-        #cumulative_returns_by_qt = al.performance.cumulative_returns_by_quantile(factor_data, period=1)
+        #Wcumulative_returns_by_qt = al.performance.cumulative_returns_by_quantile(factor_data, period=1)
         #al.plotting.plot_cumulative_returns_by_quantile(cumulative_returns_by_qt, period=1)
         #plt.show()
         
@@ -111,19 +114,25 @@ class factorAnalyzer():
         #al.plotting.plot_monthly_ic_heatmap(mean_monthly_ic)
         #plt.show()
         
-        print("\nmean_return_by_qt")
-        print(mean_return_by_qt)
-        print("\nic_by_day")
-        print(ic_by_day)
-        print("\nquantile_returns")
-        print(quantile_returns)
-        print("\nautocorrelation")
-        print(autocorrelation)
-        print("\nmean_monthly_ic")
-        print(mean_monthly_ic)
+        
+        if notebook:
+            full_tear_sheet = al.tears.create_full_tear_sheet(factor_data, long_short=True, group_neutral=False, by_group=False)
+            print(full_tear_sheet)
+        else:
+        
+            print("\nmean_return_by_qt")
+            print(mean_return_by_qt)
+            print("\nic_by_day")
+            print(ic_by_day)
+            print("\nquantile_returns")
+            print(quantile_returns)
+            print("\nautocorrelation")
+            print(autocorrelation)
+            print("\nmean_monthly_ic")
+            print(mean_monthly_ic)
         
         # print('---')
-        # print(full_tear_sheet)
+        
         
         #al.plotting.plot_quantile_returns_bar(mean_return_by_qt)
         pass

@@ -33,3 +33,11 @@ class DefaultFactor:
     def analys(self):
         factor_name=self.args.factor
         factorAnalyzer.alphalens(factor_name)
+        
+    def alpha(self):
+        formula=self.args.formula
+        print(formula)
+        df_alpha=alphaEngine.calc(formula=formula,name="alpha",check=True,replace=False)
+        print(df_alpha)
+        
+        factorAnalyzer.alphalens(factor_name='alpha',df=df_alpha)
