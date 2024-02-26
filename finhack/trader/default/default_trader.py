@@ -27,6 +27,66 @@ class DefaultTrader:
             Log.logger.error(f"{BASE_DIR}strategy/{strategy_name}.py  NotFound")
         pass    
     
+    
+    
+    def show(self):
+        # 查询数据库中存储的数据
+        sql = 'SELECT * FROM backtest WHERE instance_id="%s"' % (self.args.id)
+        result = mydb.selectToDf(sql, 'finhack')
+
+        if not result.empty:
+            # 从查询结果中提取数据并还原到 context 变量中
+            row = result.iloc[0]
+
+            # 还原 trade 相关的字段
+            context.trade.model_id = row['model']
+            context.trade.strategy = row['strategy']
+            context.trade.start_time = row['start_date']
+            context.trade.end_time = row['end_date']
+            context.trade.benchmark = row['benchmark']
+            context.trade.strategy_code = row['strategy_code']
+
+            # 还原 portfolio 相关的字段
+            context.portfolio.starting_cash = row['init_cash']
+            context.portfolio.total_value = row['total_value']
+
+            # 还原 performance 相关的字段
+            context.performance.returns = list(map(float, row['returns'].split(',')))
+            context.performance.bench_returns = list(map(float, row['benchReturns'].split(',')))
+            context.performance.indicators.alpha = float(row['alpha'])
+            context.performance.indicators.beta = float(row['beta'])
+            context.performance.indicators.annual_return = float(row['annual_return'])
+            context.performance.indicators.cagr = float(row['cagr'])
+            context.performance.indicators.annual_volatility = float(row['annual_volatility'])
+            context.performance.indicators.info_ratio = float(row['info_ratio'])
+            context.performance.indicators.downside_risk = float(row['downside_risk'])
+            context.performance.indicators.R2 = float(row['R2'])
+            context.performance.indicators.sharpe = float(row['sharpe'])
+            context.performance.indicators.sortino = float(row['sortino'])
+            context.performance.indicators.calmar = float(row['calmar'])
+            context.performance.indicators.omega = float(row['omega'])
+            context.performance.indicators.max_down = float(row['max_down'])
+            context.performance.indicators.sqn = float(row['SQN'])
+            context.performance.win = float(row['win'])
+            context.performance.trade_num = int(row['trade_num'])
+            
+            calendar=Calendar.get_calendar(context.trade.start_time,context.trade.end_time,market='astock')
+
+
+            calendar=pd.to_datetime(calendar)
+
+
+            context.performance.returns = pd.DataFrame(context.performance.returns, index=calendar)
+            context.performance.bench_returns = pd.DataFrame(context.performance.bench_returns, index=calendar)
+
+
+            Performance.show_chart(context)
+            Performance.show_table(context)
+            print("数据已从数据库查询并还原到 context 变量中。")
+        else:
+            print("未找到与当前实例ID相匹配的数据记录。")
+    
+    
     def run(self):
         t1=time.time()
         starttime=datetime.now().strftime("%Y-%m-%d %H:%M:%S")

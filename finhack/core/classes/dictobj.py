@@ -57,3 +57,11 @@ class DictObj:
     
     def __delitem__(self, key):
         del self._attributes[key]
+        
+    def push(self, key, value):
+        """添加或更新字典中的键值对。"""
+        self[key] = value
+
+    def pop(self, key, default=None):
+        """从字典中移除指定的键并返回其值，如果键不存在，则返回default。"""
+        return self._attributes.pop(key, default)

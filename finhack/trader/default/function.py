@@ -13,7 +13,7 @@ from runtime.constant import *
 import os
 import pandas as pd
 from finhack.trainer.trainer import Trainer
-
+import shutil
 
 def init_context(args):
     args=args.__dict__
@@ -472,6 +472,12 @@ def load_preds_data(model_id,cache=False):
     if cache==True:
         preds_df.to_pickle(pred_data_path)
     return preds_df
+    
+def delete_preds_data(model_id):
+    pred_data_path=PREDS_DIR+f"model_{model_id}_pred.pkl"
+    if os.path.exists(pred_data_path):
+        os.remove(pred_data_path)
+    
  
 def bind_action(strategy):
     strategy.set_benchmark=set_benchmark
@@ -485,8 +491,11 @@ def bind_action(strategy):
     strategy.inout_cash=inout_cash
     strategy.order_value=order_value
     strategy.order_target_value=order_target_value
+    strategy.order_buy=order_buy
+    strategy.order_sell=order_sell
     strategy.log=log
     strategy.load_preds_data=load_preds_data
+    strategy.get_price=Data.get_price
 
 
 

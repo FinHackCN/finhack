@@ -31,28 +31,14 @@ def initialize(context):
     g.days = 0 
     # 调仓频率
     g.refresh_rate = 10
-    # 运行函数
-    #inout_cash(100000)
-
+    
     run_daily(trade, time="09:30")
-    # run_daily(trade, time="8:05")
-
-    # args=json.loads(context.args)
-    # model_id=args['model_id']
     model_id=context.trade.model_id
 
     preds_data=load_preds_data(model_id)
     clsLgbTrainer=LightgbmTrainer()
     preds=clsLgbTrainer.pred(preds_data,md5=model_id,save=False)
-
-
-    
-    
-    #/data/code/finhack/examples/demo-project/data//models/lgb_model_49c090556b808530727b2d4c0a9bf9b6.txt
-    
-    
     g.preds=preds
-    
 
 
 

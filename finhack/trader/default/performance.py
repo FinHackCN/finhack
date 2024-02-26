@@ -83,8 +83,25 @@ class Performance:
         context.performance.indicators=indicators        
         
         
-        Performance.show_console(context)
-        #Performance.notebook(context,index)
+        Performance.show_chart(context)
+        Performance.show_table(context)
+        # #Performance.notebook(context,index)
+        # print('')
+        # performance_data=context.performance.indicators
+        # # 如果某些值是单元素 Series，使用 .iloc[0] 转换它们
+        # for key in performance_data:
+        #     if isinstance(performance_data[key], pd.Series) and len(performance_data[key]) == 1:
+        #         performance_data[key] = float(performance_data[key].iloc[0])
+        
+        # # 构造表格数据
+        # table_data = [(key, value) for key, value in performance_data.items()]
+        
+        # # 输出表格
+        # print(tabulate(table_data, headers=["Metric", "Value"], tablefmt="grid"))
+        
+        
+        
+    def show_table(context):
         print('')
         performance_data=context.performance.indicators
         # 如果某些值是单元素 Series，使用 .iloc[0] 转换它们
@@ -98,16 +115,25 @@ class Performance:
         # 输出表格
         print(tabulate(table_data, headers=["Metric", "Value"], tablefmt="grid"))
         
-    def show_console(context):
+        
+    def show_chart(context):
         p_df=context.performance.returns+1
         i_df=context.performance.bench_returns+1
         
-        p_dates = p_df.index.strftime('%d/%m/%Y').tolist()
-        p_values = (p_df.values.cumprod()-1).tolist()
+        try:
+            p_dates = p_df.index.strftime('%d/%m/%Y').tolist()
+        except Exception as e:
+            p_dates = p_df
+            
+        p_values = (p_df.values.cumprod()).tolist()
         
-        
-        i_dates = i_df.index.strftime('%d/%m/%Y').tolist()
-        i_values = (i_df.values.cumprod()-1).tolist()
+        try:
+            i_dates = i_df.index.strftime('%d/%m/%Y').tolist()
+        except Exception as e:
+            i_dates = i_df.index.strftime('%d/%m/%Y').tolist()
+            
+ 
+        i_values = (i_df.values.cumprod()).tolist()
         
         # 绘图
         # 设置图表样式

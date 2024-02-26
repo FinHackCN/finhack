@@ -758,7 +758,7 @@ def save_lastdate(res,name):
     return res
 
 class alphaEngine():
-    def calc(formula='',df=pd.DataFrame(),name="alpha",check=False,replace=False):
+    def calc(formula='',df=pd.DataFrame(),name="alpha",check=False,save=False):
         # print(formula)
         try:
             #根据 $符号匹配列名
@@ -774,6 +774,7 @@ class alphaEngine():
             
             # print(data_path)
             
+            #如果只是用来检测，则diff_date保持999
             if os.path.exists(data_path) and check==False:
                 df_old=pd.read_csv(data_path, header=None, names=['ts_code','trade_date','alpha'])
                 max_date=df_old['trade_date'].max()
@@ -840,10 +841,10 @@ class alphaEngine():
             
             #print(res)
             
-            if check:
+            #如果是用来检测，或者不保存，则直接返回
+            if check or save==False:
                 return res
             else:
-                
                 if diff_date>0 and diff_date<100:
                     res=res.reset_index()
                     res=res[res.trade_date>str(max_date)]

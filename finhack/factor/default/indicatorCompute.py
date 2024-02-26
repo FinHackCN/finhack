@@ -40,8 +40,8 @@ class indicatorCompute():
 
         
         n=30
-        # if cpu_count()>2:
-        #     n=cpu_count()-2
+        if cpu_count()>2:
+            n=cpu_count()-2
         tasklist=[]
         code_list=code_list['ts_code'].to_list()
         
@@ -74,7 +74,7 @@ class indicatorCompute():
                 for ts_code in code_list:
                     #indicatorCompute.computeListByStock(ts_code,list_name=list_name,where='',factor_list=factor_list,c_list=c_list,pure=True,check=False,df_price=pd.DataFrame(),db='tushare')
     
-                    mytask=pool.submit(indicatorCompute.computeListByStock,ts_code,list_name,'',factor_list,c_list,True,False)
+                    mytask=pool.submit(indicatorCompute.computeListByStock,ts_code,list_name,'',factor_list,c_list,True,False,True)
                     tasklist.append(mytask)
         
         # wait(tasklist,return_when=ALL_COMPLETED)
@@ -87,10 +87,7 @@ class indicatorCompute():
         
     #计算单支股票的一坨因子
     #pure=True时，只保留factor_list中的因子
-    def computeListByStock(ts_code,list_name='all',where='',factor_list=None,c_list=[],pure=True,check=True,df_price=pd.DataFrame(),db='tushare'):
-        
-        
-
+    def computeListByStock(ts_code,list_name='all',where='',factor_list=None,c_list=[],pure=True,check=True,save=False,df_price=pd.DataFrame(),db='tushare'):
         try:
             Log.logger.info('computeListByStock---'+ts_code)
             # print(factor_list)
@@ -145,6 +142,7 @@ class indicatorCompute():
                 except Exception as e:
                     diff_date=len(td_list_p)
             else:
+                #如果是check，则全量交易日计算
                 diff_date=len(td_list_p)
 
 
@@ -196,7 +194,7 @@ class indicatorCompute():
                             t = os.path.getmtime(code_factors_path)-os.path.getmtime(single_factors_path)
                             if t<60*60: #修改时间和code_factor不超过1小时，即这个因子刚计算过
                                 return True 
-                        if not check:
+                        if not check and save:
                             single_factors_path1=CACHE_DIR+"/single_factors_tmp1/"+factor_name+'.csv'
                             single_factors_path2=CACHE_DIR+"/single_factors_tmp2/"+factor_name+'.csv'
                             if factor_name not in ['ts_code','trade_date'] and not os.path.exists(single_factors_path2):
@@ -281,6 +279,8 @@ class indicatorCompute():
             if check:
                 Log.logger.info('check:'+ts_code)
                 #print(df_factor)
+                return df_factor
+            elif not save:
                 return df_factor
             else:
                 df_factor.to_pickle(code_factors_path)
