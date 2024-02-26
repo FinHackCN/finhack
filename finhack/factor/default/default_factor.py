@@ -13,8 +13,7 @@ class DefaultFactor:
         pass
 
     def run(self):
-        pass
-        taskRunner.runTask()
+        taskRunner.runTask(self.args.task_list)
         
     def test(self):
         print(self.args)
