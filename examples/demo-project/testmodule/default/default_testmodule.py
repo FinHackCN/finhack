@@ -6,6 +6,11 @@ import time
 from finhack.factor.default.factorManager import factorManager
 from finhack.factor.default.factorAnalyzer import factorAnalyzer
 from finhack.factor.default.factorPkl import factorPkl
+from finhack.library.mydb import mydb
+import pandas as pd
+import numpy as np
+from finhack.library.ai import AI
+
 class DefaultTestmodule():
     #finhack testmodule run
     def __init__(self):
@@ -57,4 +62,13 @@ class DefaultTestmodule():
         
     def run6(self):
         print('test')
+        pass
+    
+    
+
+    def run7(self):
+        prompt=AI.load_prompt('autoalpha')
+        print(prompt)
+        res=AI.ChatGPT(prompt)
+        print(res)
         pass
