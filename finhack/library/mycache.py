@@ -16,6 +16,7 @@ class FileCache:
         safe_key = str(key).replace('/', '_').replace('..', '_')
         return os.path.join(self.cache_dir, safe_key)
     
+    #expire，秒
     def set(self, key, value, expire=None):
         file_path = self._get_file_path(key)
         data_to_store = {

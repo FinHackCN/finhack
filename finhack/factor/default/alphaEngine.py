@@ -226,7 +226,7 @@ def prod(df, window=10):
     return product(df,window)
 
 
-def np_ts_prod(arr, window):
+def np_ts_prod(arr, window=10):
     result = [0] * (window-1)
     n=len(arr) - window + 1
     for i in range(n):
@@ -469,7 +469,7 @@ def decay_linear(A,n):
     
 
     
-def np_decaylinear(arr, window):
+def np_decaylinear(arr, window=10):
     w = np.arange(window,0,-1) 
     w = w/w.sum()    
     result = [0] * (window-1)
@@ -480,7 +480,7 @@ def np_decaylinear(arr, window):
  
 
 #这里decaylinear和wma的实现一样了，待修改
-def decaylinear(df,window):
+def decaylinear(df,window=10):
     window=int(window)
     grouped=df.groupby('ts_code')
     ts_all=[]
@@ -498,7 +498,7 @@ def decaylinear(df,window):
     return df         
     
     
-def np_wma(arr, window):
+def np_wma(arr, window=10):
     w = np.arange(window,0,-1) 
     w = w/w.sum()    
     result = [0] * (window-1)
@@ -509,7 +509,7 @@ def np_wma(arr, window):
  
 
 
-def wma(df,window):
+def wma(df,window=10):
     window=int(window)
     grouped=df.groupby('ts_code')
     ts_all=[]
@@ -531,7 +531,7 @@ def wma(df,window):
 
     
     
-def np_lowday(arr, window):
+def np_lowday(arr, window=10):
     result = [0] * (window-1)
     n=len(arr) - window + 1
     for i in range(n):
@@ -540,7 +540,7 @@ def np_lowday(arr, window):
     return result
     
     
-def lowday(df,window):
+def lowday(df,window=10):
     window=int(window)
     grouped=df.groupby('ts_code')
     ts_all=[]
@@ -561,7 +561,7 @@ def lowday(df,window):
 
     
     
-def np_highday(arr, window):
+def np_highday(arr, window=10):
     result = [0] * (window-1)
     n=len(arr) - window + 1
     for i in range(n):
@@ -570,7 +570,7 @@ def np_highday(arr, window):
     return result
     
     
-def highday(df,window):
+def highday(df,window=10):
     window=int(window)
     grouped=df.groupby('ts_code')
     ts_all=[]
@@ -589,7 +589,7 @@ def highday(df,window):
    
 
  
-def np_sumif(arr,condition,window):
+def np_sumif(arr,condition,window=10):
     result = [0] * (window-1)
     n=len(arr) - window + 1
     for i in range(n):
@@ -617,7 +617,7 @@ def sumif(df,window,condition):
     
     
     
-def np_regbeta(arr,B,window):
+def np_regbeta(arr,B,window=10):
     result = [0] * (window-1)
     n=len(arr) - window + 1
     try:
@@ -758,13 +758,10 @@ def save_lastdate(res,name):
     return res
 
 class alphaEngine():
-    def calc(formula='',df=pd.DataFrame(),name="alpha",check=False,save=False):
-        # print(formula)
+    def get_df(formula="",df=pd.DataFrame(),name="alpha",ignore_notice=False,stock_list=[],diff=True):
         try:
             #根据 $符号匹配列名
-            col_list = []
-            col_list = re.findall(r'(?:\$)[a-zA-Z0-9_]+', formula)
-            col_list=list(set(col_list))
+            col_list=alphaEngine.get_col_list(formula)
             
             #缓存路径
             data_path=SINGLE_FACTORS_DIR+name+'.csv'   
@@ -775,7 +772,7 @@ class alphaEngine():
             # print(data_path)
             
             #如果只是用来检测，则diff_date保持999
-            if os.path.exists(data_path) and check==False:
+            if os.path.exists(data_path) and check==False and diff:
                 df_old=pd.read_csv(data_path, header=None, names=['ts_code','trade_date','alpha'])
                 max_date=df_old['trade_date'].max()
                 today=time.strftime("%Y%m%d",time.localtime())
@@ -785,18 +782,85 @@ class alphaEngine():
                 df=factorManager.getFactors(factor_list=col_list,cache=True)
             else:
                 df=df.sort_index()
-
-            if diff_date>0 and diff_date<100:
-                dt=datetime.datetime.strptime(str(max_date),'%Y%m%d')
-                start_date=dt-datetime.timedelta(days=700)
-                start_date=start_date.strftime('%Y%m%d')
-                df=df.reset_index()
-                df=df[df.trade_date>=start_date]
-                df=df.set_index(['ts_code','trade_date'])
-            elif diff_date==0:
-                return True
+            
+            #需要对比差异然后再计算
+            if diff:
+                if diff_date>0 and diff_date<100:
+                    dt=datetime.datetime.strptime(str(max_date),'%Y%m%d')
+                    start_date=dt-datetime.timedelta(days=700)
+                    start_date=start_date.strftime('%Y%m%d')
+                    df=df.reset_index()
+                    df=df[df.trade_date>=start_date]
+                    df=df.set_index(['ts_code','trade_date'])
+                elif diff_date==0:
+                    return pd.DataFrame()
     
+    
+            if stock_list!=[]:
+                df=df.reset_index()
+                df = df[df['ts_code'].isin(stock_list)]
+                df=df.set_index(['ts_code','trade_date'])
+                
             df=df.fillna(0)
+            return df
+
+        except Exception as e:
+            if ignore_notice:
+                return pd.DataFrame()
+            else:
+                Log.logger.error("%s error:%s" % (name,str(e))) 
+                Log.logger.error("err exception is %s" % traceback.format_exc())
+            return pd.DataFrame()        
+        
+    def get_col_list(formula):
+            #根据 $符号匹配列名
+        col_list = []
+        col_list = re.findall(r'(?:\$)[a-zA-Z0-9_]+', formula)
+        col_list=list(set(col_list))
+        return col_list
+            
+    def calc(formula='',df=pd.DataFrame(),name="alpha",check=False,save=False,ignore_notice=False,stock_list=[],diff=True):
+        # print(formula)
+        try:
+            if df.empty:
+                df=alphaEngine.get_df(formula=formula,df=df,name=name,ignore_notice=False,stock_list=stock_list,diff=diff)
+            if df.empty:
+                return df
+                
+            col_list=alphaEngine.get_col_list(formula)
+            
+            # #缓存路径
+            # data_path=SINGLE_FACTORS_DIR+name+'.csv'   
+            # diff_date=999
+            # max_date=''
+            
+            
+            # # print(data_path)
+            
+            # #如果只是用来检测，则diff_date保持999
+            # if os.path.exists(data_path) and check==False:
+            #     df_old=pd.read_csv(data_path, header=None, names=['ts_code','trade_date','alpha'])
+            #     max_date=df_old['trade_date'].max()
+            #     today=time.strftime("%Y%m%d",time.localtime())
+            #     diff_date=int(today)-int(max_date)
+    
+            # if df.empty:
+            #     df=factorManager.getFactors(factor_list=col_list,cache=True)
+            # else:
+            #     df=df.sort_index()
+
+            # if diff_date>0 and diff_date<100:
+            #     dt=datetime.datetime.strptime(str(max_date),'%Y%m%d')
+            #     start_date=dt-datetime.timedelta(days=700)
+            #     start_date=start_date.strftime('%Y%m%d')
+            #     df=df.reset_index()
+            #     df=df[df.trade_date>=start_date]
+            #     df=df.set_index(['ts_code','trade_date'])
+            # elif diff_date==0:
+            #     return True
+    
+            # df=df.fillna(0)
+            
             todolist=['indneutralize','cap','filter','self','banchmarkindex']
             for todo in todolist:
                 if todo in formula:
@@ -815,10 +879,10 @@ class alphaEngine():
             formula=formula.replace("||"," | ")
             formula=formula.replace("&&"," & ")
             formula=formula.replace("^"," ** ")
-            fields=['$open','$high','$low','$close','$amount','$volume','$vwap','$returns']
-
-            for field in fields:
-                formula=formula.replace(field,"df['%s']" % (field[1:]))
+            
+            # fields=['$open','$high','$low','$close','$amount','$volume','$vwap','$returns']
+            # for field in fields:
+            #     formula=formula.replace(field,"df['%s']" % (field[1:]))
     
 
             for col in col_list:
@@ -828,12 +892,10 @@ class alphaEngine():
             
             if '?' in formula:
                 formula=ternary_trans(formula)
-                
-            
-            #print(df)
+ 
             formula=formula.replace("\n"," ")
 
-            if not  check:
+            if not check and not ignore_notice:
                 Log.logger.info(name+"计算公式:"+formula)
             res=eval(formula)
             
@@ -866,6 +928,8 @@ class alphaEngine():
             return True
 
         except Exception as e:
+            if ignore_notice:
+                return pd.DataFrame()
             todolist=[]#['identically-labeled']
             for todo in todolist:
                 if todo in str(e):

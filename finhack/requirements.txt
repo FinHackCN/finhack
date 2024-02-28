@@ -25,3 +25,4 @@ tushare==1.2.87
 lightgbm==4.2.0
 cryptography==39.0.1
 alphalens-reloaded==0.4.3
+openai==1.12.0

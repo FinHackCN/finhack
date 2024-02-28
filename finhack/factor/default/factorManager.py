@@ -18,7 +18,7 @@ import finhack.library.log as Log
 
 class factorManager:
     #获取
-    def getAnalysedIndicatorsList(top=200,valid=True):
+    def getAnalysedIndicatorsList(valid=True):
         flist1=mydb.selectToDf('select * from factors_analysis where factor_name not like "alpha%"','finhack')
         flist1=flist1['factor_name'].tolist()
         result=[]
@@ -137,11 +137,11 @@ class factorManager:
         combined_factors_df = pd.concat(factor_dfs, axis=1)
     
         df_factor = index_df.join(combined_factors_df, how='left')
-        df_factor = df_factor.set_index(['ts_code', 'trade_date'])
-        df_factor = df_factor.sort_index()    
+
     
         if stock_list != []:
             df_list = []
+            combined_factors_df=df_factor.copy()
             for ts_code in stock_list:
                 df_tmp = combined_factors_df[combined_factors_df['ts_code'] == ts_code]
                 df_list.append(df_tmp)
@@ -151,6 +151,8 @@ class factorManager:
             
             pass
 
+        df_factor = df_factor.set_index(['ts_code', 'trade_date'])
+        df_factor = df_factor.sort_index()    
     
         return df_factor
 

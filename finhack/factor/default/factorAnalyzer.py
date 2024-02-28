@@ -139,10 +139,10 @@ class factorAnalyzer():
     
     
     
-    def analys(factor_name,df=pd.DataFrame(),days=[1,2,3,5,8,13,21],pool='all',start_date='20000101',end_date='20100101',formula="",relace=False,table='factors_analysis'):
+    def analys(factor_name,df=pd.DataFrame(),days=[1,2,3,5,8,13,21],source='mining',start_date='20000101',end_date='20100101',formula="",relace=False,table='factors_analysis'):
         try:
         
-            hashstr=factor_name+'-'+(str(days))+'-'+pool+'-'+start_date+':'+end_date+'#'+formula
+            hashstr=factor_name+'-'+(str(days))+'-'+source+'-'+start_date+':'+end_date+'#'+formula
             md5=hashlib.md5(hashstr.encode(encoding='utf-8')).hexdigest()
             
             has=mydb.selectToDf('select * from %s where  hash="%s"' % (table,md5),'finhack')
@@ -171,7 +171,6 @@ class factorAnalyzer():
             IC_list=[]
             IR_list=[]
             
-            print("factor_name:"+factor_name)
             df = df.replace([np.inf, -np.inf], np.nan)
             df=df.dropna()
   
@@ -203,18 +202,19 @@ class factorAnalyzer():
             #     score=0
             
             
-            
-            print("factor_name:%s,IC=%s,IR=%s,IRR=%s,score=%s" % (factor_name,str(IC),str(IR),str(IRR),str(score)))
+            if formula=="":
+                print("\nfactor_name:%s,IC=%s,IR=%s,IRR=%s,score=%s\n" % (factor_name,str(IC),str(IR),str(IRR),str(score)))
+            else:
+                print("%s\nIC=%s,IR=%s,IRR=%s,score=%s\n" % (formula,str(IC),str(IR),str(IRR),str(score)))
             if pd.isna(score):
-                print("score na:"+factor_name)
-                
+                #print("score na:"+formula)
                 return False
             
             #有值且不替换
             if(not has.empty and  relace):  
                 del_sql="DELETE FROM `finhack`.`%s` WHERE `hash` = '%s'" % (table,md5)    
                 mydb.exec(del_sql,'finhack')
-            insert_sql="INSERT INTO `finhack`.`%s`(`factor_name`, `days`, `pool`, `start_date`, `end_date`, `formula`, `IC`, `IR`, `IRR`, `score`, `hash`) VALUES ( '%s', '%s', '%s', '%s', '%s', '%s', %s, %s, %s, %s, '%s')" %  (table,factor_name,str(days),pool,start_date,end_date,formula,str(IC),str(IR),str(IRR),str(score),md5)
+            insert_sql="INSERT INTO `finhack`.`%s`(`factor_name`, `days`, `source`, `start_date`, `end_date`, `formula`, `IC`, `IR`, `IRR`, `score`, `hash`) VALUES ( '%s', '%s', '%s', '%s', '%s', '%s', %s, %s, %s, %s, '%s')" %  (table,factor_name,str(days),source,start_date,end_date,formula,str(IC),str(IR),str(IRR),str(score),md5)
             mydb.exec(insert_sql,'finhack')
             #print(insert_sql)
             
