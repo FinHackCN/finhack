@@ -28,6 +28,8 @@ sed -i '/password=/s/=.*/=/' ./finhack/widgets/templates/empty_project/data/conf
 sed -i '/token=/s/=.*/=/' ./finhack/widgets/templates/empty_project/data/config/ts.conf
 sed -i '/feishu_webhook=/s/=.*/=/' ./finhack/widgets/templates/empty_project/data/config/alert.conf
 sed -i '/dingtalk_webhook_webhook=/s/=.*/=/' ./finhack/widgets/templates/empty_project/data/config/alert.conf
+sed -i '/api_key=/s/=.*/=/' ./finhack/widgets/templates/empty_project/data/config/ai.conf
+
 
 python setup.py sdist 
 pip install .
