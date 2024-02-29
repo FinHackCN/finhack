@@ -24,6 +24,81 @@ class factorAnalyzer():
     
     
     
+    def stock_pool(max_num=300):
+        # 从数据库中获取数据
+        df = mydb.selectToDf('SELECT a.ts_code, trade_date, pe, pb, ps, total_mv, industry, market FROM astock_price_daily_basic a LEFT JOIN astock_basic b ON a.ts_code=b.ts_code', 'tushare')
+    
+        # 确保 'trade_date' 是 datetime 类型
+        df['trade_date'] = pd.to_datetime(df['trade_date'])
+    
+        # 将需要聚合的列转换为数值类型，并处理无法转换的数据
+        agg_columns = ['pe', 'pb', 'ps', 'total_mv']
+        for col in agg_columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+    
+        # 删除在转换过程中产生的NaN值所在的行，以便聚合函数可以正常工作
+        df.dropna(subset=agg_columns, inplace=True)
+    
+        # 初始化选出的股票列表
+        selected_stocks = []
+    
+        # 获取市场的唯一值
+        markets = df['market'].unique()
+    
+        while len(selected_stocks) < max_num and not df.empty:
+            # 计算每个市场应该选择的股票数量
+            market_allocation = {market: (max_num - len(selected_stocks)) // len(markets) for market in markets}
+    
+            # 分配剩余的股票（如果有）
+            remaining_slots = max_num - len(selected_stocks) - sum(market_allocation.values())
+            for market in sorted(market_allocation, key=market_allocation.get, reverse=True):
+                if remaining_slots > 0:
+                    market_allocation[market] += 1
+                    remaining_slots -= 1
+    
+            # 按市场分组并选择股票
+            for market, num_stocks in market_allocation.items():
+                if num_stocks <= 0:
+                    continue
+    
+                market_df = df[df['market'] == market]
+    
+                # 对于每个财务指标，将市场内的股票分为三等分
+                tertiles = {col: market_df[col].quantile([1/3, 2/3]).values for col in agg_columns}
+    
+                # 从每个三等分中选择股票
+                market_selected_stocks = []
+                for col in agg_columns:
+                    for i, tertile in enumerate(['low', 'mid', 'high']):
+                        if tertile == 'low':
+                            tertile_df = market_df[market_df[col] <= tertiles[col][0]]
+                        elif tertile == 'mid':
+                            tertile_df = market_df[(market_df[col] > tertiles[col][0]) & (market_df[col] <= tertiles[col][1])]
+                        else:
+                            tertile_df = market_df[market_df[col] > tertiles[col][1]]
+    
+                        tertile_df = tertile_df.sort_values(by=col)
+                        num_to_select_per_tertile = max(1, num_stocks // (3 * len(agg_columns)))
+                        selected_tertile_stocks = tertile_df.head(num_to_select_per_tertile)['ts_code'].tolist()
+                        market_selected_stocks += selected_tertile_stocks
+    
+                        # 从原始数据中删除已选出的股票
+                        df = df[~df['ts_code'].isin(selected_tertile_stocks)]
+    
+                selected_stocks += market_selected_stocks
+                selected_stocks=list(set(selected_stocks))
+    
+        # 去除可能的重复并限制数量为max_num
+        selected_stocks = list(dict.fromkeys(selected_stocks))[:max_num]
+    
+        # 创建一个包含选出股票的新DataFrame
+        selected_df = df[df['ts_code'].isin(selected_stocks)]
+    
+ 
+        return selected_stocks
+        
+    
+    
     def alphalens(factor_name='alpha',df=pd.DataFrame(),notebook=False):
         
         df_industry=AStock.getStockIndustry()
@@ -139,7 +214,7 @@ class factorAnalyzer():
     
     
     
-    def analys(factor_name,df=pd.DataFrame(),days=[1,2,3,5,8,13,21],source='mining',start_date='20000101',end_date='20100101',formula="",relace=False,table='factors_analysis'):
+    def analys(factor_name,df=pd.DataFrame(),days=[1,2,3,5,8,13,21],source='mining',start_date='20000101',end_date='20100101',formula="",replace=False,table='factors_analysis'):
         try:
         
             hashstr=factor_name+'-'+(str(days))+'-'+source+'-'+start_date+':'+end_date+'#'+formula
@@ -149,7 +224,7 @@ class factorAnalyzer():
             
             
             #有值且不替换
-            if(not has.empty and not relace):  
+            if(not has.empty and not replace):  
                 return True
             
             if df.empty:
@@ -184,24 +259,27 @@ class factorAnalyzer():
                     updatesql="update finhack.factors_list set check_type=%s,status='acvivate' where factor_name='%s'"  % ('14',factor_name)
                     mydb.exec(updatesql,'finhack')  
                 return False
-    
+            
+            
+            Sharpe_list=[]
             for day in days:
                 df['return']=df.groupby('ts_code',group_keys=False).apply(lambda x: x['close'].shift(-1*day)/x['open'].shift(-1))
                 df_tmp=df.copy().dropna()
+                sharpe_ratio=factorAnalyzer.Sharpe(df_tmp)
+                Sharpe_list.append(sharpe_ratio)
+                
                 IC,IR=factorAnalyzer.ICIR(df_tmp,factor_name)
+        
                 IR_list.append(IR)
                 IC_list.append(IC)
                 
-            IRR=IR/np.std(IR_list)/7
+            IRR=IR/np.std(IR_list)/len(days)
             
             IC=np.sum(IC_list)/len(IC_list)
             IR=np.sum(IR_list)/len(IR_list)
             
-            score=abs(IRR*IR*IC)
-            # if(abs(IC)<0.05 or abs(IR)<0.5):
-            #     score=0
-            
-            
+            score=np.max(Sharpe_list)
+
             if formula=="":
                 print("\nfactor_name:%s,IC=%s,IR=%s,IRR=%s,score=%s\n" % (factor_name,str(IC),str(IR),str(IRR),str(score)))
             else:
@@ -211,7 +289,7 @@ class factorAnalyzer():
                 return False
             
             #有值且不替换
-            if(not has.empty and  relace):  
+            if(not has.empty and  replace):  
                 del_sql="DELETE FROM `finhack`.`%s` WHERE `hash` = '%s'" % (table,md5)    
                 mydb.exec(del_sql,'finhack')
             insert_sql="INSERT INTO `finhack`.`%s`(`factor_name`, `days`, `source`, `start_date`, `end_date`, `formula`, `IC`, `IR`, `IRR`, `score`, `hash`) VALUES ( '%s', '%s', '%s', '%s', '%s', '%s', %s, %s, %s, %s, '%s')" %  (table,factor_name,str(days),source,start_date,end_date,formula,str(IC),str(IR),str(IRR),str(score),md5)
@@ -227,30 +305,135 @@ class factorAnalyzer():
             print(factor_name+" error:"+str(e))
             #print("err exception is %s" % traceback.format_exc())
     
-    def ICIR(df,factor_name,period=120):
-        grouped=df.groupby('ts_code')
-        IC_all=[]
-        IR_all=[]
-        for code,data in grouped:
-            len_data=len(data)
-            if len_data<period:
-                continue
-            fix=int(len_data/period)
-            data=data.iloc[len_data-fix*period:]
-            for i in range(0,fix):
-                data_tmp=data.iloc[i*period:i*period+period]
-                corr=data_tmp[factor_name].corr(data_tmp['return'])
-                if not math.isnan(corr) and not math.isinf(corr):
-                    IC_all.append(corr)
- 
-        IC=np.sum(IC_all)/len(IC_all)
-        IR=IC/np.std(IC_all)
- 
+    
+    
+    def Sharpe(df_tmp,factor_name='alpha',n=10):
+        df=df_tmp.copy()
+        def standardize_alpha(group):
+            alpha_mean = group['alpha'].mean()
+            alpha_std = group['alpha'].std()
+            # 防止除以零
+            if alpha_std != 0:
+                group['alpha_std'] = (group['alpha'] - alpha_mean) / alpha_std
+            else:
+                group['alpha_std'] = 0
+            return group
+        
+        # 定义一个函数来对alpha_std进行分桶
+        def quantile_cut(group, n):
+            group['alpha_quantile'] = pd.qcut(group['alpha_std'], q=n, labels=range(1, n+1))
+            return group
+            
+        # 按照trade_date分组并应用标准化函数
+        df = df.groupby('trade_date').apply(standardize_alpha)
+        # 按照trade_date分组并应用分桶函数
+        df = df.groupby('trade_date').apply(quantile_cut, n=n)        
+        df=df.dropna()
+        
+        
+        quantile_return_lists = {}
+        quantile_performance = {}
+        
+        # 按照trade_date和alpha_quantile分组，计算平均return
+        grouped = df.groupby(['trade_date', 'alpha_quantile'])
 
-        # print(IC)
-        # print(IR)
+        # 遍历每个alpha_quantile分组
+        for quantile in df['alpha_quantile'].unique():
+            mean_df=grouped['return'].mean().fillna(1)
+            quantile_return_lists[quantile] = mean_df.loc[pd.IndexSlice[:, quantile]].tolist()       
+            
+            excess_returns = [x - 1 for x in quantile_return_lists[quantile]]
+            # 计算平均超额收益率
+            average_excess_return = np.mean(excess_returns)
+            # 计算超额收益率的标准差
+            standard_deviation = np.std(excess_returns)
+            # 计算夏普比率
+            sharpe_ratio = average_excess_return / standard_deviation if standard_deviation != 0 else 0
+            
+            quantile_performance[quantile]={
+                'net_value':np.cumprod(quantile_return_lists[quantile])[-1],
+                'sharpe_ratio':sharpe_ratio 
+            }
 
-        return IC,IR
+        # 计算总净值
+        total_net_value = sum(item['net_value'] for item in quantile_performance.values())
+        
+        # 计算加权平均夏普比率
+        weighted_sharpe_ratios = sum((item['net_value'] / total_net_value) * item['sharpe_ratio'] for item in quantile_performance.values())
+        return weighted_sharpe_ratios
+
+        
+    
+    
+    def ICIR(df, factor_name, period=120):
+        IC_all = []
+        len_data = len(df)
+        fix = int(len_data / period)  # 计算可以分成多少个完整的周期
+        df = df.sort_index(level='trade_date')
+        df_reset = df.reset_index()
+        df_reset['trade_date'] = pd.to_datetime(df_reset['trade_date'], format='%Y%m%d')
+        
+        grouped = df_reset.groupby(pd.Grouper(key='trade_date', freq='{}D'.format(period)))
+        
+        for name, group in grouped:
+            #print(group)
+            corr = group['alpha'].corr(group['return'])
+            if not math.isnan(corr) and not math.isinf(corr):
+                IC_all.append(corr)
+
+        # 如果没有有效的相关性数据，返回 NaN
+        if not IC_all:
+            return 0, 0
+        
+        # 计算 IC 和 IR
+        IC = np.mean(IC_all)
+        IC_std = np.std(IC_all, ddof=1)  # 使用样本标准差
+        
+        # 避免除以零的情况
+        if IC_std == 0:
+            IR = 0
+        else:
+            IR = IC / IC_std
+        
+        return IC, IR
+ 
+ 
+    def rank_ICIR(df, factor_name, period=120):
+        rank_IC_all = []
+        len_data = len(df)
+        fix = int(len_data / period)  # 计算可以分成多少个完整的周期
+        df = df.sort_index(level='trade_date')
+        df_reset = df.reset_index()
+        df_reset['trade_date'] = pd.to_datetime(df_reset['trade_date'], format='%Y%m%d')
+        
+        grouped = df_reset.groupby(pd.Grouper(key='trade_date', freq='{}D'.format(period)))
+        
+        for name, group in grouped:
+            # 对因子值和未来收益率进行排名
+            factor_ranks = group[factor_name].rank(method='average')
+            return_ranks = group['return'].rank(method='average')
+            
+            # 计算排名后的相关系数
+            corr = factor_ranks.corr(return_ranks)
+            if not math.isnan(corr) and not math.isinf(corr):
+                rank_IC_all.append(corr)
+    
+        # 如果没有有效的相关性数据，返回 NaN
+        if not rank_IC_all:
+            return 0, 0
+        
+        # 计算 rank IC 和 rank IR
+        rank_IC = np.mean(rank_IC_all)
+        rank_IC_std = np.std(rank_IC_all, ddof=1)  # 使用样本标准差
+        
+        # 避免除以零的情况
+        if rank_IC_std == 0:
+            rank_IR = 0
+        else:
+            rank_IR = rank_IC / rank_IC_std
+        
+        return rank_IC, rank_IR
+
 
 # 0.03 可能有用 
 # 0.05 好
