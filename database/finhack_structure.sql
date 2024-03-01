@@ -106,7 +106,7 @@ CREATE TABLE `factors_analysis` (
   `id` int NOT NULL AUTO_INCREMENT,
   `factor_name` varchar(255) DEFAULT NULL,
   `days` varchar(255) DEFAULT NULL,
-  `pool` varchar(255) DEFAULT NULL,
+  `source` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci DEFAULT NULL,
   `start_date` varchar(10) DEFAULT NULL,
   `end_date` varchar(10) DEFAULT NULL,
   `formula` text CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci,
@@ -118,7 +118,7 @@ CREATE TABLE `factors_analysis` (
   `hash` varchar(255) DEFAULT NULL,
   `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`)
-) ENGINE=InnoDB AUTO_INCREMENT=2388 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=2417 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -167,7 +167,7 @@ CREATE TABLE `factors_mining` (
   `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   UNIQUE KEY `hash` (`hash`(32)) USING BTREE
-) ENGINE=InnoDB AUTO_INCREMENT=31316 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=31354 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 /*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;
 
@@ -179,4 +179,4 @@ CREATE TABLE `factors_mining` (
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
--- Dump completed on 2024-02-29 16:01:47
+-- Dump completed on 2024-03-01 23:36:26

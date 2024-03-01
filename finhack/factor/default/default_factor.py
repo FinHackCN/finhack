@@ -10,6 +10,8 @@ from finhack.factor.default.factorManager import factorManager
 from finhack.factor.default.factorAnalyzer import factorAnalyzer 
 from finhack.factor.default.factorMining import factorMining
 from finhack.library.mycache import mycache
+import gc
+import tracemalloc
 
 class DefaultFactor:
     def __init__(self):
@@ -35,7 +37,23 @@ class DefaultFactor:
     def analys(self):
         factor_name=self.args.factor
         factorAnalyzer.alphalens(factor_name)
-        
+
+
+    def analys_all(self):
+        tracemalloc.start()
+        factor_list=factorManager.getFactorsList()
+        stock300=self.args.stock300.split(',')
+        for factor in factor_list:
+            factorAnalyzer.analys(factor_name=factor,source='default',replace=True,stock_list=stock300)
+
+            # current_memory, peak_memory = tracemalloc.get_traced_memory()
+            # print(f"Current memory usage: {round(current_memory / 10**9,2)} GB")
+            # print(f"Peak memory usage: {round(peak_memory / 10**9,2)} GB")
+            # snapshot = tracemalloc.take_snapshot()
+            # top_stats = snapshot.statistics('lineno')
+            # # 打印内存占用前十的变量
+            # for stat in top_stats[:3]:
+            #     print(stat)
         
     def mining(self):
         method=self.args.method
@@ -78,10 +96,15 @@ class DefaultFactor:
         elif method.lower()=="gpt" or method.lower()=="chatgpt":
             factorMining.gpt(self.args.prompt,self.args.model,stock300)
         
-    def alpha(self):
+    def calc(self):
         formula=self.args.formula
         print(formula)
         df_alpha=alphaEngine.calc(formula=formula,name="alpha",check=True,replace=False)
         print(df_alpha)
         
         factorAnalyzer.alphalens(factor_name='alpha',df=df_alpha)
+        
+        
+    def newlist(self):
+        pass
+        #finhack factor newlist --listname=woldy

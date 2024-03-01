@@ -60,7 +60,7 @@ class factorMining():
 
                 merged_df = df_analys.merge(df_base, left_index=True, right_index=True, how='left')
 
-                factorAnalyzer.analys('alpha',df=merged_df,start_date='',end_date='',formula=alpha,source='chatgpt',table='factors_mining')
+                factorAnalyzer.analys('alpha',df=merged_df,start_date='',end_date='',formula=alpha,source='chatgpt',table='factors_mining',ignore_error=True)
                 #print("\n")
 
     def gplearn(train,label,_df_tmp,df_check,source='gplearn'):
@@ -301,25 +301,25 @@ class factorMining():
 
         
         gp1 = SymbolicTransformer(  
-                                    generations=5, #整数，可选(默认值=20)要进化的代数
-                                    population_size=1000,# 整数，可选(默认值=1000)，每一代群体中的公式数量
+                                    generations=10, #整数，可选(默认值=20)要进化的代数
+                                    population_size=500,# 整数，可选(默认值=1000)，每一代群体中的公式数量
                                     hall_of_fame=100, # 备选因子的数量
-                                    n_components=100,#最终筛选出的最优因子的数量
+                                    n_components=50,#最终筛选出的最优因子的数量
                                     function_set=function_set+init_function , # 函数集
-                                    parsimony_coefficient=0.01, # 节俭系数
+                                    parsimony_coefficient=0.001, # 节俭系数
                                     tournament_size=20,  # 作为父代的数量
-                                    init_depth=(4, 8),  # 公式树的初始化深度
-                                    max_samples=1, 
+                                    init_depth=(2, 5),  # 公式树的初始化深度
+                                    max_samples=0.9, 
                                     verbose=1,
                                     #const_range = (0,0),
                                     p_crossover=0.9,  # 交叉变异概率
-                                    p_subtree_mutation=0.02,  # 子树变异概率
-                                    p_hoist_mutation=0.02,  # Hoist 变异概率
-                                    p_point_mutation=0.02,  # 点变异概率
+                                    p_subtree_mutation=0.01,  # 子树变异概率
+                                    p_hoist_mutation=0.01,  # Hoist 变异概率
+                                    p_point_mutation=0.01,  # 点变异概率
                                     p_point_replace=0.05,  # 点替代概率                             
                                     feature_names=list('$'+n for n in train.columns),
                                     random_state=int(time.time()),  # 随机数种子
-                                    n_jobs=12
+                                    n_jobs=8
                             )
         
         
@@ -333,6 +333,8 @@ class factorMining():
             alphas.append(str(formula))
         
         alphas=list(set(alphas))
+        
+        print(alphas)
          
         for alpha in alphas:
             df_alpha=alphaEngine.calc(formula=alpha,df=df_check.copy(),name='alpha',check=False,save=False,ignore_notice=True,diff=False)
@@ -343,7 +345,7 @@ class factorMining():
             df_analys=df_check.copy()
             df_analys['alpha']=df_alpha
             df_analys=df_analys[['open','close','alpha']]
-            factorAnalyzer.analys('alpha',df=df_analys,start_date='',end_date='',formula=alpha,source=source,table='factors_mining')
+            factorAnalyzer.analys('alpha',df=df_analys,start_date='',end_date='',formula=alpha,source=source,table='factors_mining',ignore_error=True)
             #print("\n")
         
          
