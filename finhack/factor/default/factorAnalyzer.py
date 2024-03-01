@@ -15,7 +15,7 @@ from finhack.library.mydb import mydb
 from finhack.factor.default.factorManager import factorManager
 from finhack.market.astock.astock import AStock
 from scipy.stats import zscore
-
+import gc
 class factorAnalyzer():
     
     
@@ -214,7 +214,7 @@ class factorAnalyzer():
     
     
     
-    def analys(factor_name,df=pd.DataFrame(),days=[1,2,3,5,8,13,21],source='mining',start_date='20000101',end_date='20100101',formula="",replace=False,table='factors_analysis'):
+    def analys(factor_name,df=pd.DataFrame(),days=[1,2,3,5,8,13,21],source='mining',start_date='20100101',end_date='20200101',formula="",replace=False,table='factors_analysis',ignore_error=False,stock_list=[]):
         try:
         
             hashstr=factor_name+'-'+(str(days))+'-'+source+'-'+start_date+':'+end_date+'#'+formula
@@ -236,10 +236,15 @@ class factorAnalyzer():
                 df=df[df.trade_date>=start_date]
             if end_date!='':
                 df=df[df.trade_date<end_date]
+                
+            if stock_list!=[]:
+                df=df.reset_index()
+                df = df[df['ts_code'].isin(stock_list)]
+
             df=df.set_index(['ts_code','trade_date'])
             
             
-            # print(df)
+            #print(df)
             
             
             
@@ -265,13 +270,14 @@ class factorAnalyzer():
             for day in days:
                 df['return']=df.groupby('ts_code',group_keys=False).apply(lambda x: x['close'].shift(-1*day)/x['open'].shift(-1))
                 df_tmp=df.copy().dropna()
-                sharpe_ratio=factorAnalyzer.Sharpe(df_tmp)
+                sharpe_ratio=factorAnalyzer.Sharpe(df_tmp,factor_name=factor_name)
                 Sharpe_list.append(sharpe_ratio)
                 
                 IC,IR=factorAnalyzer.ICIR(df_tmp,factor_name)
         
                 IR_list.append(IR)
                 IC_list.append(IC)
+                del df_tmp
                 
             IRR=IR/np.std(IR_list)/len(days)
             
@@ -281,59 +287,69 @@ class factorAnalyzer():
             score=np.max(Sharpe_list)
 
             if formula=="":
-                print("\nfactor_name:%s,IC=%s,IR=%s,IRR=%s,score=%s\n" % (factor_name,str(IC),str(IR),str(IRR),str(score)))
+                print("factor_name:%s,IC=%s,IR=%s,IRR=%s,score=%s" % (factor_name,str(IC),str(IR),str(IRR),str(score)))
             else:
                 print("%s\nIC=%s,IR=%s,IRR=%s,score=%s\n" % (formula,str(IC),str(IR),str(IRR),str(score)))
             if pd.isna(score):
                 #print("score na:"+formula)
                 return False
             
-            #有值且不替换
-            if(not has.empty and  replace):  
-                del_sql="DELETE FROM `finhack`.`%s` WHERE `hash` = '%s'" % (table,md5)    
-                mydb.exec(del_sql,'finhack')
-            insert_sql="INSERT INTO `finhack`.`%s`(`factor_name`, `days`, `source`, `start_date`, `end_date`, `formula`, `IC`, `IR`, `IRR`, `score`, `hash`) VALUES ( '%s', '%s', '%s', '%s', '%s', '%s', %s, %s, %s, %s, '%s')" %  (table,factor_name,str(days),source,start_date,end_date,formula,str(IC),str(IR),str(IRR),str(score),md5)
-            mydb.exec(insert_sql,'finhack')
+            
+            if table!="":
+                #有值且不替换
+                if(not has.empty and  replace):  
+                    del_sql="DELETE FROM `finhack`.`%s` WHERE `hash` = '%s'" % (table,md5)    
+                    mydb.exec(del_sql,'finhack')
+                insert_sql="INSERT INTO `finhack`.`%s`(`factor_name`, `days`, `source`, `start_date`, `end_date`, `formula`, `IC`, `IR`, `IRR`, `score`, `hash`) VALUES ( '%s', '%s', '%s', '%s', '%s', '%s', %s, %s, %s, %s, '%s')" %  (table,factor_name,str(days),source,start_date,end_date,formula,str(IC),str(IR),str(IRR),str(score),md5)
+                mydb.exec(insert_sql,'finhack')
             #print(insert_sql)
             
             # print(IC_list)
             # print(IR_list)
-            
+
             return factor_name,IC,IR,IRR,score
     
         except Exception as e:
-            print(factor_name+" error:"+str(e))
-            #print("err exception is %s" % traceback.format_exc())
+            if not ignore_error:
+                print(factor_name+" error:"+str(e))
+                print("err exception is %s" % traceback.format_exc())
     
     
     
-    def Sharpe(df_tmp,factor_name='alpha',n=10):
-        df=df_tmp.copy()
-        def standardize_alpha(group):
-            alpha_mean = group['alpha'].mean()
-            alpha_std = group['alpha'].std()
-            # 防止除以零
-            if alpha_std != 0:
-                group['alpha_std'] = (group['alpha'] - alpha_mean) / alpha_std
-            else:
-                group['alpha_std'] = 0
-            return group
-        
-        # 定义一个函数来对alpha_std进行分桶
+
+
+    
+
+    
+    
+    def Sharpe(df,factor_name,n=10):
+        # 使用 lambda 表达式进行标准化
+        df['alpha_std'] = df.groupby('trade_date')[factor_name].transform(
+            lambda x: (x - x.mean()) / x.std() if x.std() != 0 else 0
+        )
+
         def quantile_cut(group, n):
-            group['alpha_quantile'] = pd.qcut(group['alpha_std'], q=n, labels=range(1, n+1))
-            return group
-            
-        # 按照trade_date分组并应用标准化函数
-        df = df.groupby('trade_date').apply(standardize_alpha)
-        # 按照trade_date分组并应用分桶函数
-        df = df.groupby('trade_date').apply(quantile_cut, n=n)        
+            try:
+                # 尝试创建分位数
+                res, bins = pd.qcut(group, q=n, retbins=True, duplicates='drop')
+                # 根据实际的分位数边界数量来创建标签
+                labels = range(1, len(bins))
+                # 应用新的标签
+                return pd.cut(group, bins=bins, labels=labels, include_lowest=True)
+            except ValueError as e:
+                # 如果出现错误，可以进一步处理，比如减少n的值或者其他逻辑
+                print("Error in quantile_cut: ", e)
+                return pd.Series([None] * len(group), index=group.index)
+        
+        # 应用transform方法
+        df['alpha_quantile'] = df.groupby('trade_date')['alpha_std'].transform(lambda x: quantile_cut(x, n))
+        
+
         df=df.dropna()
-        
-        
+
         quantile_return_lists = {}
         quantile_performance = {}
-        
+        #print(df)
         # 按照trade_date和alpha_quantile分组，计算平均return
         grouped = df.groupby(['trade_date', 'alpha_quantile'])
 
@@ -360,6 +376,8 @@ class factorAnalyzer():
         
         # 计算加权平均夏普比率
         weighted_sharpe_ratios = sum((item['net_value'] / total_net_value) * item['sharpe_ratio'] for item in quantile_performance.values())
+        
+    
         return weighted_sharpe_ratios
 
         
@@ -377,7 +395,7 @@ class factorAnalyzer():
         
         for name, group in grouped:
             #print(group)
-            corr = group['alpha'].corr(group['return'])
+            corr = group[factor_name].corr(group['return'])
             if not math.isnan(corr) and not math.isinf(corr):
                 IC_all.append(corr)
 
@@ -434,11 +452,5 @@ class factorAnalyzer():
         
         return rank_IC, rank_IR
 
-
-# 0.03 可能有用 
-# 0.05 好
-# 0.10 很好
-# 0.15 非常好
-# 0.2 可能错误(未来函数)
-
+ 
 #IC>0.05,IR>0.5

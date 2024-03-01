@@ -96,6 +96,7 @@ class factorManager:
      # 获取因子数据
     def getFactors(factor_list, stock_list=[], start_date='', end_date='', cache=False):
         df_factor = pd.DataFrame()
+        df_tmp= pd.DataFrame()
         single_factors_pkl_dir = SINGLE_FACTORS_PKL_DIR
     
         # 加载索引
@@ -130,6 +131,7 @@ class factorManager:
                 # 筛选对应日期的因子数据
                 factor_data = factor_data.iloc[start_index:end_index+1]
                 factor_dfs.append(factor_data)
+                del factor_data
             else:
                 print(f"Warning: {factor_file} not found")
     
@@ -147,9 +149,13 @@ class factorManager:
                 df_list.append(df_tmp)
     
             df_factor = pd.concat(df_list)
+            del df_list
         else:
             
             pass
+
+
+        del combined_factors_df,index_df,factor_dfs,df_tmp
 
         df_factor = df_factor.set_index(['ts_code', 'trade_date'])
         df_factor = df_factor.sort_index()    
