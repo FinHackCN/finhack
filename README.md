@@ -26,6 +26,8 @@ FinHack®，一个易于拓展的量化金融框架，它在当前版本中集�
 ## 因子计算
 ![image](https://github.com/FinHackCN/finhack/assets/6196607/78786b5f-9520-4826-9fe1-9b1657c4d1cc)
 
+## 因子挖掘
+![image](https://github.com/FinHackCN/finhack/assets/6196607/4c99bfd8-2e90-4a2e-896c-0eb5b40146a9)
 
 ## 量化回测
 ![image](https://github.com/FinHackCN/finhack/assets/6196607/45210870-8167-425b-ba98-17d80d79ee7b)
