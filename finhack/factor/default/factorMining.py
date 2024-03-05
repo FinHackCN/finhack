@@ -60,7 +60,7 @@ class factorMining():
 
                 merged_df = df_analys.merge(df_base, left_index=True, right_index=True, how='left')
 
-                factorAnalyzer.analys('alpha',df=merged_df,start_date='',end_date='',formula=alpha,source='chatgpt',table='factors_mining',ignore_error=True)
+                factorAnalyzer.analys('alpha',df=merged_df,formula=alpha,source='chatgpt',table='factors_mining',ignore_error=True)
                 #print("\n")
 
     def gplearn(train,label,_df_tmp,df_check,source='gplearn'):
@@ -306,7 +306,7 @@ class factorMining():
                                     hall_of_fame=100, # 备选因子的数量
                                     n_components=50,#最终筛选出的最优因子的数量
                                     function_set=function_set+init_function , # 函数集
-                                    parsimony_coefficient=0.001, # 节俭系数
+                                    parsimony_coefficient=0.002, # 节俭系数
                                     tournament_size=20,  # 作为父代的数量
                                     init_depth=(2, 5),  # 公式树的初始化深度
                                     max_samples=0.9, 
@@ -319,7 +319,7 @@ class factorMining():
                                     p_point_replace=0.05,  # 点替代概率                             
                                     feature_names=list('$'+n for n in train.columns),
                                     random_state=int(time.time()),  # 随机数种子
-                                    n_jobs=8
+                                    n_jobs=1
                             )
         
         
@@ -345,7 +345,7 @@ class factorMining():
             df_analys=df_check.copy()
             df_analys['alpha']=df_alpha
             df_analys=df_analys[['open','close','alpha']]
-            factorAnalyzer.analys('alpha',df=df_analys,start_date='',end_date='',formula=alpha,source=source,table='factors_mining',ignore_error=True)
+            factorAnalyzer.analys('alpha',df=df_analys,formula=alpha,source=source,table='factors_mining',ignore_error=True)
             #print("\n")
         
          

@@ -21,65 +21,157 @@ from lightgbm import log_evaluation, early_stopping
 from finhack.trainer.trainer import Trainer
 import shutil
 import random
+import tracemalloc
+import multiprocessing
+from multiprocessing import Process, current_process
+
+def start_train_wrapper(start_date, valid_date, end_date, features, label, shift, param, loss, filter_name, replace):
+    try:
+        trainer = LightgbmTrainer()  # 假设LightgbmTrainer可以无参数初始化
+        trainer.start_train(
+            start_date=start_date,
+            valid_date=valid_date,
+            end_date=end_date,
+            features=features,
+            label=label,
+            shift=shift,
+            param=param,
+            loss=loss,
+            filter_name=filter_name,
+            replace=replace
+        )
+    except Exception as e:
+        print(f"Error in process {current_process().name}: {e}")
+        traceback.print_exc()
 
 
 class LightgbmTrainer(Trainer):
+    # ... 保持您原有的方法不变 ...
+
     def auto(self):
-        args=global_var.args
+        args = global_var.args
+        max_processes=int(args.p)
+        
+        processes = []
+
         while True:
+            # 清理已经完成的进程
+            processes = [p for p in processes if p.is_alive()]
+
+            # 如果当前进程数量小于最大进程数，则创建新进程
+            if len(processes) < max_processes:
                 try:
-                    flist=factorManager.getFactorsList()
-                    #print(flist)
-                    
+                    flist = factorManager.getFactorsList()
                     random.shuffle(flist)
-                    n=random.randint(int(args.min_f),int(args.max_f))
-                    factor_list=[]
-                    for i in range(0,n):
-                        factor_list.append(flist.pop())
+                    n = random.randint(int(args.min_f), int(args.max_f))
+                    factor_list = [flist.pop() for _ in range(n)]
                     factor_list.sort()
-                    df=factorManager.getFactors(factor_list=factor_list+['open','close'])
+                    df = factorManager.getFactors(factor_list=factor_list + ['open', 'close'])
                     correlation_matrix = df.corr(numeric_only=True)
-                    new_factor_list=[]
-                    # 遍历每一对名称和相关系数
+                    new_factor_list = []
+
                     for factor in factor_list:
-                        if factor in  ['open','close'] :
+                        if factor in ['open', 'close']:
                             continue
-                        append=True
+                        append = True
                         for factor2 in new_factor_list:
-        
-                            for column1, series in correlation_matrix.items():
-                                if column1!=factor:
-                                    continue
-                                for column2, correlation in series.items():
-                                    if column1==column2:
-                                        continue
-                                    if column2!=factor2:
-                                        continue
-                                    if abs(correlation)>0.7:
-                                        append=False
-        
+                            if abs(correlation_matrix[factor][factor2]) > 0.7:
+                                append = False
+                                break
                         if append:
                             new_factor_list.append(factor)
-        
-                    
-                    factor_list=new_factor_list
-        
-                    self.start_train(
-                        start_date=args.start_date,
-                        valid_date=args.valid_date,
-                        end_date=args.end_date,
-                        features=factor_list,
-                        label=args.label,
-                        shift=int(args.shift),
-                        param=json.loads(args.param) if args.param!='' else {},
-                        loss=args.loss,
-                        filter_name=args.filter_name,
-                        replace=args.replace
-                    )
+
+                    p = Process(target=start_train_wrapper, args=(
+                        args.start_date,
+                        args.valid_date,
+                        args.end_date,
+                        new_factor_list,
+                        args.label,
+                        int(args.shift),
+                        json.loads(args.param) if args.param != '' else {},
+                        args.loss,
+                        args.filter_name,
+                        args.replace,
+                    ))
+                    p.start()
+                    processes.append(p)
+
                 except Exception as e:
                     print("error:"+str(e))
                     print("err exception is %s" % traceback.format_exc())
-                
+            else:
+                # 如果达到了最大进程数，则等待任一进程完成
+                for p in processes:
+                    p.join(timeout=0.1)
+                    if not p.is_alive():
+                        break
+
+# class LightgbmTrainer(Trainer):
+#     def auto(self):
+#         args=global_var.args
+#         tracemalloc.start()
+#         while True:
+#                 try:
+#                     flist=factorManager.getFactorsList()
+#                     #print(flist)
+                    
+#                     random.shuffle(flist)
+#                     n=random.randint(int(args.min_f),int(args.max_f))
+#                     factor_list=[]
+#                     for i in range(0,n):
+#                         factor_list.append(flist.pop())
+#                     factor_list.sort()
+#                     df=factorManager.getFactors(factor_list=factor_list+['open','close'])
+#                     correlation_matrix = df.corr(numeric_only=True)
+#                     new_factor_list=[]
+#                     # 遍历每一对名称和相关系数
+#                     for factor in factor_list:
+#                         if factor in  ['open','close'] :
+#                             continue
+#                         append=True
+#                         for factor2 in new_factor_list:
+        
+#                             for column1, series in correlation_matrix.items():
+#                                 if column1!=factor:
+#                                     continue
+#                                 for column2, correlation in series.items():
+#                                     if column1==column2:
+#                                         continue
+#                                     if column2!=factor2:
+#                                         continue
+#                                     if abs(correlation)>0.7:
+#                                         append=False
+        
+#                         if append:
+#                             new_factor_list.append(factor)
+        
+                    
+#                     factor_list=new_factor_list
+        
+#                     self.start_train(
+#                         start_date=args.start_date,
+#                         valid_date=args.valid_date,
+#                         end_date=args.end_date,
+#                         features=factor_list,
+#                         label=args.label,
+#                         shift=int(args.shift),
+#                         param=json.loads(args.param) if args.param!='' else {},
+#                         loss=args.loss,
+#                         filter_name=args.filter_name,
+#                         replace=args.replace
+#                     )
+#                 except Exception as e:
+#                     print("error:"+str(e))
+#                     print("err exception is %s" % traceback.format_exc())
+                    
+#                 current_memory, peak_memory = tracemalloc.get_traced_memory()
+#                 print(f"Current memory usage: {round(current_memory / 10**9,2)} GB")
+#                 print(f"Peak memory usage: {round(peak_memory / 10**9,2)} GB")
+#                 snapshot = tracemalloc.take_snapshot()
+#                 #top_stats = snapshot.statistics('lineno')
+#                 # # 打印内存占用前十的变量
+#                 # for stat in top_stats[:3]:
+#                 #     print(stat)
         
         
     def run(self):
@@ -235,7 +327,8 @@ class LightgbmTrainer(Trainer):
         pred['pred']=y_pred
         #今天预测的，其实是明天要操作的;所以要把今天的数据写成昨天的值
         pred=pred.sort_values('trade_date')
-        pred['pred']=pred.groupby('ts_code',group_keys=False).apply(lambda x: x['pred'].shift(1))
+        pred['pred'] = pred.groupby('ts_code')['pred'].transform(lambda x: x.shift(1))
+
         
         pred=pred.dropna()
         

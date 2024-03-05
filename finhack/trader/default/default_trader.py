@@ -16,6 +16,9 @@ from runtime.constant import LOGS_DIR
 from .context import context,g
 from datetime import datetime
 from finhack.library.mydb import mydb
+from multiprocessing import Process,Pool,Semaphore
+
+
 class DefaultTrader:
     def load_strategy(self,strategy_name):
         if os.path.exists(f"{BASE_DIR}/strategy/{strategy_name}.py"):
@@ -87,7 +90,43 @@ class DefaultTrader:
             print("未找到与当前实例ID相匹配的数据记录。")
     
     
-    def run(self):
+    def run_trader(self, args):
+        with self.semaphore:
+            self.run(args)
+    
+    def auto(self):
+        trader = DefaultTrader()
+        self.semaphore = Semaphore(2)
+        # 定义策略和模型ID的列表
+        strategies = [
+            ('AITopNStrategy', '4367901764ca783755ed8ccb19504bb7'),
+            ('AITopNStrategy', '07b87ac507f3ab689ad3cdca75cb978c'),
+            ('AITopNStrategy', '9570af1a7ddcb21663e7c402b599c554'),
+            ('AITopNStrategy', '922687d0eedcb66fa43cacfb2b3faacf'),
+            ('AITopNStrategy', 'e2971016152ebb19cd6c33f0d8c19765'),
+            ('AITopNStrategy', 'd2f4e695254abcd539f058d63baf1074'),
+            ('AITopNStrategy', '9211ba85c3a7e47e2552268bed21b15f'),
+            ('AITopNStrategy', '7b80d7ccbf816068f137af3bb6861875'),
+            # 更多策略和模型ID组合
+        ]        
+        # 创建并启动多个进程
+        processes = []
+        for strategy_name, model_id in strategies:
+            args = self.args
+            args.strategy = strategy_name
+            args.model_id = model_id
+            p = Process(target=self.run_trader, args=(args,))
+            p.start()
+            processes.append(p)
+
+        # 等待所有进程完成
+        for p in processes:
+            p.join()    
+    
+    
+    def run(self,args=None):
+        if args!=None:
+            self.args=args
         t1=time.time()
         starttime=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         init_context(self.args)

@@ -37,7 +37,8 @@ class DefaultTestmodule():
         factorAnalyzer.alphalens("pe_0")
         
     def run4(self):
-        factors=factorManager.getFactors(['ADOSC_0','AD_0','APO_0','AROONDOWN_0','ARRONUP_0','pe_0','alpha101_012','alpha101_013'],start_date='20150101',end_date="20230101")
+        #factorPkl.save()
+        factors=factorManager.getFactors(['open','close','ADOSC_0','AD_0','APO_0','AROONDOWN_0','ARRONUP_0'],start_date='20150101',end_date="20230101",stock_list=['000001.SZ','000002.SZ','002624.SZ'])
         print(factors)
         
         
@@ -49,6 +50,10 @@ class DefaultTestmodule():
 
         # ddf_single = dd.read_parquet('/data/code/finhack/examples/demo-project/data/factors/single_factors_parquet/turnoverRatef_0.parquet')
         # print(ddf_single)
+
+        df_price=AStock.getStockDailyPriceByCode("000023.SZ",fq='hfq',db="tushare")
+        print(df_price[df_price['trade_date']=='20100104'])
+        exit()
 
         df=factorManager.getFactors(factor_list=['open','close'])
         # 首先定义你想要选取的索引列表

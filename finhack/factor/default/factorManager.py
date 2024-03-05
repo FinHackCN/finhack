@@ -131,6 +131,7 @@ class factorManager:
                 # 筛选对应日期的因子数据
                 factor_data = factor_data.iloc[start_index:end_index+1]
                 factor_dfs.append(factor_data)
+                
                 del factor_data
             else:
                 print(f"Warning: {factor_file} not found")
@@ -140,7 +141,6 @@ class factorManager:
     
         df_factor = index_df.join(combined_factors_df, how='left')
 
-    
         if stock_list != []:
             df_list = []
             combined_factors_df=df_factor.copy()
@@ -154,12 +154,12 @@ class factorManager:
             
             pass
 
-
+        
         del combined_factors_df,index_df,factor_dfs,df_tmp
 
         df_factor = df_factor.set_index(['ts_code', 'trade_date'])
-        df_factor = df_factor.sort_index()    
-    
+        df_factor = df_factor.sort_index()           
+        
         return df_factor
 
 

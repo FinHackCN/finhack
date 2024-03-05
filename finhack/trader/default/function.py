@@ -277,7 +277,7 @@ def order_buy(security,amount):
         pos=Position(code=security,amount=o.amount,enable_amount=o.enable_amount,last_sale_price=o.last_sale_price)
         pos.total_cost=pos.total_cost+o.cost
         context.portfolio.positions[security]=pos
-        context.portfolio.cash=context.portfolio.cash-o.value-o.cost
+        context.portfolio.cash=context.portfolio.cash-o.value-o.cost-o.slip_value
         context.portfolio.positions_value=context.portfolio.positions_value+o.value
         context.portfolio.total_value=context.portfolio.cash+context.portfolio.positions_value
         
@@ -292,7 +292,7 @@ def order_buy(security,amount):
         pos.cost_basis=pos.total_cost/pos.amount
         pos.total_value=pos.amount*pos.last_sale_price
         
-        context.portfolio.cash=context.portfolio.cash-o.value-o.cost
+        context.portfolio.cash=context.portfolio.cash-o.value-o.cost-o.slip_value
         context.portfolio.positions_value=context.portfolio.positions_value+o.value
         context.portfolio.total_value=context.portfolio.cash+context.portfolio.positions_value
         
@@ -323,7 +323,7 @@ def order_sell(security,amount):
         return
     
     if security in context.portfolio.positions:
-        context.portfolio.cash=context.portfolio.cash+o.value-o.cost
+        context.portfolio.cash=context.portfolio.cash+o.value-o.cost-o.slip_value
         pos=context.portfolio.positions[security]
         if pos.amount-o.amount==0:
             del context.portfolio.positions[security]
@@ -340,8 +340,8 @@ def order_sell(security,amount):
         context.portfolio.total_value=context.portfolio.cash+context.portfolio.positions_value
     
     
-            #卖价>均价
-    if (o.value-o.cost)/o.amount>pos.cost_basis:
+    #卖价>均价
+    if (o.value-o.cost-o.slip_value)/o.amount>pos.cost_basis:
         context.performance.win=context.performance.win+1
     context.performance.trade_num=context.performance.trade_num+1
     
@@ -358,7 +358,7 @@ def order_sell(security,amount):
     trade_return=(o.value-o.cost)/o.amount/pos.cost_basis-1
     context.logs.trade_returns.append(trade_return)
     
-    log(f"卖出{o.code}共计{o.amount}股，单价为{round(pos.last_sale_price,2)}，价值为{round(o.value,2)}")   
+    log(f"卖出{o.code}共计{o.amount}股，单价为{round(pos.last_sale_price,2)}，价值为{round(o.value,2)}，收益{round(trade_return*100,2)}%({round(trade_return*o.value,2)})")   
     log('---------------------------------','trace')
     log(f"当前现金："+str(context.portfolio.cash),'trace')
     log(f"当前持仓："+str(context.portfolio.positions_value),'trace')

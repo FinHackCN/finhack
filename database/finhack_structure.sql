@@ -38,7 +38,7 @@ CREATE TABLE `auto_train` (
   `filter` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci DEFAULT '',
   `score` double(10,10) DEFAULT NULL,
   PRIMARY KEY (`id`)
-) ENGINE=InnoDB AUTO_INCREMENT=12690 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=12753 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -92,7 +92,7 @@ CREATE TABLE `backtest` (
   `strategy_code` text,
   PRIMARY KEY (`id`),
   UNIQUE KEY `instence_id` (`instance_id`)
-) ENGINE=InnoDB AUTO_INCREMENT=389420 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=389449 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -112,13 +112,13 @@ CREATE TABLE `factors_analysis` (
   `formula` text CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci,
   `IC` float(10,5) DEFAULT NULL,
   `IR` float(10,5) DEFAULT NULL,
-  `IRR` float(10,5) DEFAULT NULL,
+  `Sharpe` float(10,5) DEFAULT NULL,
   `score` float(10,5) DEFAULT NULL,
   `max_up_corr` float(10,7) DEFAULT NULL,
   `hash` varchar(255) DEFAULT NULL,
   `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`)
-) ENGINE=InnoDB AUTO_INCREMENT=2417 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=3035 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -161,13 +161,13 @@ CREATE TABLE `factors_mining` (
   `formula` text CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci,
   `IC` float(20,5) DEFAULT NULL,
   `IR` float(20,5) DEFAULT NULL,
-  `IRR` float(20,5) DEFAULT NULL,
+  `Sharpe` float(20,5) DEFAULT NULL,
   `score` float(10,5) DEFAULT NULL,
   `hash` varchar(255) DEFAULT NULL,
   `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   UNIQUE KEY `hash` (`hash`(32)) USING BTREE
-) ENGINE=InnoDB AUTO_INCREMENT=31354 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=31635 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 /*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;
 
@@ -179,4 +179,4 @@ CREATE TABLE `factors_mining` (
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
--- Dump completed on 2024-03-01 23:36:26
+-- Dump completed on 2024-03-05 17:57:11

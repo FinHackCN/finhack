@@ -12,6 +12,7 @@ from finhack.factor.default.factorMining import factorMining
 from finhack.library.mycache import mycache
 import gc
 import tracemalloc
+from finhack.library.mydb import mydb
 
 class DefaultFactor:
     def __init__(self):
@@ -35,7 +36,9 @@ class DefaultFactor:
         print(factor.describe())
         
     def analys(self):
+        stock300=self.args.stock300.split(',')
         factor_name=self.args.factor
+        factorAnalyzer.analys(factor_name=factor_name,source='default',replace=True,stock_list=stock300)
         factorAnalyzer.alphalens(factor_name)
 
 
@@ -44,8 +47,12 @@ class DefaultFactor:
         factor_list=factorManager.getFactorsList()
         stock300=self.args.stock300.split(',')
         for factor in factor_list:
-            factorAnalyzer.analys(factor_name=factor,source='default',replace=True,stock_list=stock300)
-
+            factorAnalyzer.analys(factor_name=factor,source='default',replace=False,stock_list=stock300)
+            # sql=f"select * from factors_analysis where updated_at<\"2024-03-01\" and factor_name=\"{factor}\""
+            # has=mydb.selectToDf(sql,"finhack")
+            # if not has.empty:
+            #     factorAnalyzer.analys(factor_name=factor,source='default',replace=True,stock_list=stock300)
+        
             # current_memory, peak_memory = tracemalloc.get_traced_memory()
             # print(f"Current memory usage: {round(current_memory / 10**9,2)} GB")
             # print(f"Peak memory usage: {round(peak_memory / 10**9,2)} GB")
@@ -99,7 +106,7 @@ class DefaultFactor:
     def calc(self):
         formula=self.args.formula
         print(formula)
-        df_alpha=alphaEngine.calc(formula=formula,name="alpha",check=True,replace=False)
+        df_alpha=alphaEngine.calc(formula=formula,name="alpha",check=True)
         print(df_alpha)
         
         factorAnalyzer.alphalens(factor_name='alpha',df=df_alpha)

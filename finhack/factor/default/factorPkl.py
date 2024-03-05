@@ -12,23 +12,20 @@ class factorPkl:
         # 读取 CSV 文件
         factor_name = os.path.basename(file_path).split('.')[0]
         df = pd.read_csv(file_path, names=['ts_code', 'trade_date', factor_name])
+        # 设置索引
         df.set_index(['ts_code', 'trade_date'], inplace=True)
-    
         # 对齐索引并填充缺失数据
         aligned_df = all_dates_df.join(df, how='left')
         aligned_df[factor_name] = aligned_df[factor_name].fillna(method='ffill')
-    
+        
         # 按照索引排序
         aligned_df.sort_index(inplace=True)
-    
-        # 去除索引
-        aligned_df.reset_index(drop=True, inplace=True)
-    
+        
+        # 重置索引之前，按照 ts_code 和 trade_date 排序
+        aligned_df = aligned_df.reset_index().sort_values(by=['ts_code', 'trade_date'])
+        
         # 仅保存因子值到 pkl 文件
         aligned_df[[factor_name]].to_pickle(os.path.join(output_dir, f'{factor_name}.pkl'))
-
-        
-        
         
         
     def save():
@@ -37,7 +34,7 @@ class factorPkl:
         output_dir = SINGLE_FACTORS_PKL_TMP_DIR
         open_path = SINGLE_FACTORS_DIR+'open.csv'  # 替换为 open_0.csv 文件的实际路径
         open_df = pd.read_csv(open_path, names=['ts_code', 'trade_date', 'open'])
-
+        open_df = open_df.sort_values(by=['ts_code', 'trade_date'])
         # 设置 'ts_code' 和 'trade_date' 为索引
         open_df.set_index(['ts_code', 'trade_date'], inplace=True)
         
@@ -45,7 +42,7 @@ class factorPkl:
         all_dates_df = pd.DataFrame(index=open_df.index)
         # all_dates_df = pd.DataFrame(index=all_indices)
 
-
+        
                 
         # 检查 output_dir是否存在
         if os.path.exists(output_dir):
