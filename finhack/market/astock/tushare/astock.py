@@ -344,8 +344,8 @@ def getStockDailyPriceByCode(code,where="",startdate='',enddate='',fq='hfq',db='
                         
     
                     else:
-                        #后复权价格 = close × (first_adj × adj_factor / last_adj)
-    
+                        #后复权价格 = close × adj_factor / first_adj
+                        #有些算法是直接close × adj_factor，这里除去了首次的复权因子，整体无影响，但跟行情软件会差异较大
                         df["open"]=df["open"].astype(float)*df["adj_factor"].astype(float)/first_adj
                         df["high"]=df["high"].astype(float)*df["adj_factor"].astype(float)/first_adj
                         df["low"]=df["low"].astype(float)*df["adj_factor"].astype(float)/first_adj

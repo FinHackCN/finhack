@@ -332,6 +332,7 @@ class Data:
                     'downLimit':float(value[16]),
                     
                 })
+                
                 return info
 
     #根据当前时间获取价格

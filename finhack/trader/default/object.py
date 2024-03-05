@@ -25,6 +25,7 @@ class Order():
         self.order_id = self.generate_order_id()
         self.is_buy=is_buy
         self.cost=0
+        self.slip_value=0 #滑点滑掉了多少
         self.last_sale_price=None
         #正常
         self.status=-1 if self.price==None else 1

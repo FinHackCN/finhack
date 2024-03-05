@@ -11,6 +11,7 @@ import empyrical as ey
 import hashlib
 import numpy as np
 from tabulate import tabulate
+from runtime.constant import *
 class Performance:
     def analyse(context):
         context.performance.returns=pd.DataFrame(context.performance.returns,columns=['trade_date', 'returns'])
@@ -85,6 +86,7 @@ class Performance:
         
         Performance.show_chart(context)
         Performance.show_table(context)
+        Performance.save(context)
         # #Performance.notebook(context,index)
         # print('')
         # performance_data=context.performance.indicators
@@ -153,3 +155,18 @@ class Performance:
     def show_notebook(p_values,i_values):
         qs.extend_pandas()
         qs.reports.full(p_values,i_values)
+        
+    def save(context):
+        p_df=context.performance.returns
+        i_df=context.performance.bench_returns    
+        print(p_df)
+        print(i_df)
+        qs.reports.html(
+            returns=p_df,  # 策略的市场价值
+            benchmark=i_df,  # 基准指数的回报率
+            output='bt_'+context.id+'.html',  # 输出HTML文件的名称
+            download_filename=REPORTS_DIR+'bt_'+context.id+'.html',  # 下载HTML文件的名称
+            title=context['trade']['strategy'],  # 报告的标题
+            lang='cn'  # 报告语言设置为中文
+        )
+        print(REPORTS_DIR+'bt_'+context.id+'.html')

@@ -43,6 +43,7 @@ class Rules():
             commission=account['min_commission']
         cost=tax+commission
         self.order.value=value
+        self.order.slip_value=self.context.trade.slip*value
         self.order.cost=cost
         self.order.last_sale_price=self.order.price
         if self.order.last_sale_price==None:
@@ -84,14 +85,36 @@ class Rules():
                 return False
         return True
                 
+                
     #滑点
     def rule_slip(self):
+        #默认有滑点
+        # if self.order.is_buy==True:
+        #     self.order.price=self.order.price*(1+self.context.trade.slip)
+        # else:
+        #     self.order.price=self.order.price*(1-self.context.trade.slip)
+        
         if self.order.is_buy==True:
-            self.order.price=self.order.price*(1+self.context.trade.slip)
-        else:
-            self.order.price=self.order.price*(1-self.context.trade.slip)
-        return True
-                
+            action='open'
+            #这里其实应该用self.order.filled，但是怕后面有坑
+            value=self.order.amount*self.order.price
+            account=self.context.account
+            slip_value=self.context.trade.slip*value
+            tax=value*account[action+"_tax"]
+            commission=value*account[action+"_commission"]
+            if commission<account['min_commission']:
+                commission=account['min_commission']
+            cost=tax+commission
+            if self.context.portfolio.cash-value<(cost+slip_value):
+                if (context.portfolio.cash-cost-slip_value)<0:
+                    self.log(f"{self.order.code} 现金不足以支付手续费及滑点！",'warning') 
+                    return False
+                self.order.amount=(context.portfolio.cash-cost-slip_value)/self.order.price
+                self.order.filled=self.order.amount
+        return True        
+        
+        
+        
                 
                 
     #量比           
@@ -132,8 +155,6 @@ class Rules():
     #数量
     def rule_volume_num(self):
         amount=int(self.order.amount)
-        
-        
         
         if self.order.is_buy==False:
             #没有这个持仓

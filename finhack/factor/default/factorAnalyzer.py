@@ -16,6 +16,7 @@ from finhack.factor.default.factorManager import factorManager
 from finhack.market.astock.astock import AStock
 from scipy.stats import zscore
 import gc
+import finhack.library.log as Log
 class factorAnalyzer():
     
     
@@ -107,9 +108,8 @@ class factorAnalyzer():
             df=factorManager.getFactors(factor_list=['close',factor_name])
         else:
             df_close=factorManager.getFactors(factor_list=['close'])
-        
-        df_close[factor_name]=df
-        df=df_close
+            df_close[factor_name]=df
+            df=df_close
         
 
         # 假设 df 是您提供的 DataFrame，我们首先重置索引
@@ -216,7 +216,6 @@ class factorAnalyzer():
     
     def analys(factor_name,df=pd.DataFrame(),days=[1,2,3,5,8,13,21],source='mining',start_date='20100101',end_date='20200101',formula="",replace=False,table='factors_analysis',ignore_error=False,stock_list=[]):
         try:
-        
             hashstr=factor_name+'-'+(str(days))+'-'+source+'-'+start_date+':'+end_date+'#'+formula
             md5=hashlib.md5(hashstr.encode(encoding='utf-8')).hexdigest()
             
@@ -243,9 +242,7 @@ class factorAnalyzer():
 
             df=df.set_index(['ts_code','trade_date'])
             
-            
-            #print(df)
-            
+
             
             
             IC_list=[]
@@ -256,10 +253,10 @@ class factorAnalyzer():
   
             desc=df[factor_name].describe()
             
-            # print(df)
+            #print(df)
             # exit()
             
-            if desc['mean']==desc['max']:
+            if 'mean' in desc and desc['mean']==desc['max']:
                 if factor_name!='alpha':
                     updatesql="update finhack.factors_list set check_type=%s,status='acvivate' where factor_name='%s'"  % ('14',factor_name)
                     mydb.exec(updatesql,'finhack')  
@@ -267,6 +264,7 @@ class factorAnalyzer():
             
             
             Sharpe_list=[]
+
             for day in days:
                 df['return']=df.groupby('ts_code',group_keys=False).apply(lambda x: x['close'].shift(-1*day)/x['open'].shift(-1))
                 df_tmp=df.copy().dropna()
@@ -279,40 +277,42 @@ class factorAnalyzer():
                 IC_list.append(IC)
                 del df_tmp
                 
-            IRR=IR/np.std(IR_list)/len(days)
             
             IC=np.sum(IC_list)/len(IC_list)
             IR=np.sum(IR_list)/len(IR_list)
+            max_sharpe=np.max(Sharpe_list)
+            score=abs(IC)*10+abs(IR)+abs(max_sharpe)
             
-            score=np.max(Sharpe_list)
 
             if formula=="":
-                print("factor_name:%s,IC=%s,IR=%s,IRR=%s,score=%s" % (factor_name,str(IC),str(IR),str(IRR),str(score)))
+                Log.logger.info("factor_name:%s,IC=%s,IR=%s,Sharpe=%s,score=%s" % (factor_name,str(IC),str(IR),str(max_sharpe),str(score)))
             else:
-                print("%s\nIC=%s,IR=%s,IRR=%s,score=%s\n" % (formula,str(IC),str(IR),str(IRR),str(score)))
+                Log.logger.info("%s\nIC=%s,IR=%s,Sharpe=%s,score=%s\n" % (formula,str(IC),str(IR),str(max_sharpe),str(score)))
             if pd.isna(score):
                 #print("score na:"+formula)
                 return False
             
             
             if table!="":
-                #有值且不替换
+                #有值且替换
                 if(not has.empty and  replace):  
                     del_sql="DELETE FROM `finhack`.`%s` WHERE `hash` = '%s'" % (table,md5)    
                     mydb.exec(del_sql,'finhack')
-                insert_sql="INSERT INTO `finhack`.`%s`(`factor_name`, `days`, `source`, `start_date`, `end_date`, `formula`, `IC`, `IR`, `IRR`, `score`, `hash`) VALUES ( '%s', '%s', '%s', '%s', '%s', '%s', %s, %s, %s, %s, '%s')" %  (table,factor_name,str(days),source,start_date,end_date,formula,str(IC),str(IR),str(IRR),str(score),md5)
+                insert_sql="INSERT INTO `finhack`.`%s`(`factor_name`, `days`, `source`, `start_date`, `end_date`, `formula`, `IC`, `IR`, `Sharpe`, `score`, `hash`) VALUES ( '%s', '%s', '%s', '%s', '%s', '%s', %s, %s, %s, %s, '%s')" %  (table,factor_name,str(days),source,start_date,end_date,formula,str(IC),str(IR),str(max_sharpe),str(score),md5)
                 mydb.exec(insert_sql,'finhack')
             #print(insert_sql)
             
             # print(IC_list)
             # print(IR_list)
 
-            return factor_name,IC,IR,IRR,score
+            return factor_name,IC,IR,sharpe_ratio,score
     
         except Exception as e:
+
+            
             if not ignore_error:
-                print(factor_name+" error:"+str(e))
-                print("err exception is %s" % traceback.format_exc())
+                Log.logger.info(factor_name+" error:"+str(e))
+                Log.logger.info("err exception is %s" % traceback.format_exc())
     
     
     
@@ -357,10 +357,10 @@ class factorAnalyzer():
         for quantile in df['alpha_quantile'].unique():
             mean_df=grouped['return'].mean().fillna(1)
             quantile_return_lists[quantile] = mean_df.loc[pd.IndexSlice[:, quantile]].tolist()       
-            
             excess_returns = [x - 1 for x in quantile_return_lists[quantile]]
             # 计算平均超额收益率
             average_excess_return = np.mean(excess_returns)
+            #print(average_excess_return)
             # 计算超额收益率的标准差
             standard_deviation = np.std(excess_returns)
             # 计算夏普比率
