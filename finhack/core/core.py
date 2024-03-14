@@ -38,6 +38,7 @@ finhack -h
             self.generate_global()
             self.init_logger()
         else:
+            sys.path.append(self.project_path)
             sys.path.append(self.project_path+'/data/cache/')
 
 
@@ -47,6 +48,7 @@ finhack -h
         
     #追加配置文件中的参数
     def append_args(self):
+        sys.path.append(self.project_path)
         sys.path.append(self.project_path+'/data/cache/')
         from finhack.library.config import Config 
         my_args_group_list=Config.get_section_list('args')

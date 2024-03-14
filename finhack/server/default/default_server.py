@@ -1,6 +1,7 @@
 from runtime.constant import *
 import runtime.global_var as global_var
 from finhack.library.class_loader import ClassLoader
+import threading
 
 import os
 import importlib
@@ -25,4 +26,4 @@ class DefaultServer:
             return send_from_directory(root_directory, 'index.html')
 
         # 不再需要检查 __name__ == '__main__'，因为这个方法将被直接调用
-        app.run(debug=True)
+        app.run(debug=True,port=int(self.args.port))

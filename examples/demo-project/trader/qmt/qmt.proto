@@ -1,0 +1,120 @@
+syntax = "proto3";
+
+package qmt;
+
+// 价格请求消息
+message PriceRequest {
+    string code = 1;
+}
+
+// 价格响应消息
+message PriceResponse {
+    double last_price = 1;
+}
+
+// 每日信息请求消息
+message DailyInfoRequest {
+    string code = 1;
+}
+
+// 每日信息响应消息
+message DailyInfoResponse {
+    string ts_code = 1;
+    double open = 2;
+    double high = 3;
+    double low = 4;
+    double close = 5;
+    double volume = 6;
+    double amount = 7;
+    string name = 8;
+    double vwap = 9;
+    int32 stop = 10;
+    double up_limit = 11;
+    double down_limit = 12;
+}
+
+// 订单请求消息
+message OrderRequest {
+    string code = 1;
+    int32 amount = 2;
+    double price = 3;
+    string strategy = 4;
+    string remark = 5;
+}
+
+// 订单响应消息
+message OrderResponse {
+    int32 seq = 1;
+}
+
+// 查询订单请求消息
+message QueryOrdersRequest {
+
+}
+
+// 订单详情消息
+message OrderDetail {
+    string stock_code = 1;
+    string order_id = 2;
+    string order_sysid = 3;
+    string order_time = 4;
+    int32 order_type = 5;
+    int32 order_volume = 6;
+    int32 price_type = 7;
+    double price = 8;
+    int32 traded_volume = 9;
+    double traded_price = 10;
+    int32 order_status = 11;
+    string status_msg = 12;
+    string strategy_name = 13;
+    string order_remark = 14;
+}
+
+// 订单列表响应消息
+message OrdersResponse {
+    repeated OrderDetail orders = 1;
+}
+
+// 资产请求消息
+message AssetRequest {
+
+}
+
+// 资产响应消息
+message AssetResponse {
+    string user = 1;
+    double cash = 2;
+    double frozen_cash = 3;
+    double market_value = 4;
+    double total_value = 5;
+}
+
+// 持仓响应消息
+message PositionsResponse {
+    repeated PositionDetail positions = 1;
+}
+
+// 持仓详情消息
+message PositionDetail {
+    string stock_code = 1;
+    int32 volume = 2;
+    int32 can_use_volume = 3;
+    double open_price = 4;
+    double market_value = 5;
+    int32 frozen_volume = 6;
+}
+
+
+
+// 定义服务
+service QmtService {
+    rpc GetPrice(PriceRequest) returns (PriceResponse) {}
+    rpc GetDailyInfo(DailyInfoRequest) returns (DailyInfoResponse) {}    
+    rpc OrderBuy(OrderRequest) returns (OrderResponse) {}
+    rpc OrderSell(OrderRequest) returns (OrderResponse) {}
+    rpc QueryOrders(QueryOrdersRequest) returns (OrdersResponse) {}
+    rpc CancelOrders(QueryOrdersRequest) returns (OrdersResponse) {}
+    rpc RetryOrders(QueryOrdersRequest) returns (OrdersResponse) {}
+    rpc GetAsset(AssetRequest) returns (AssetResponse) {}
+    rpc GetPositions(AssetRequest) returns (PositionsResponse) {}
+}
