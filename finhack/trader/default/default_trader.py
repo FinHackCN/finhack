@@ -11,8 +11,6 @@ from .data import Data
 from .function import *
 from .object import *
 from .performance import Performance 
-import runtime.global_var as global_var
-from runtime.constant import LOGS_DIR
 from .context import context,g
 from datetime import datetime
 from finhack.library.mydb import mydb
