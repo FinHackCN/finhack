@@ -59,22 +59,40 @@ class qmtClient():
         context['portfolio']['positions']=positions
 
     def sync(self,context):
+        print("同步实盘数据")
         self.assetSync(context)
         self.positionSync(context)
 
 
     def getPrice(self,code):
-        response=self.stub.GetPrice(qmt_pb2.PriceRequest(code=code))
-        asset= self.protobuf_to_dict(response)
-        return asset['last_price']
-    
-    def getInfo(self,code):
-        response=self.stub.GetDailyInfo(qmt_pb2.DailyInfoRequest(code=code))
-        info=self.protobuf_to_dict(response)
-        info['downLimit']=info['down_limit']
-        info['upLimit']=info['up_limit']
-        return info
+        try:
+            response=self.stub.GetPrice(qmt_pb2.PriceRequest(code=code))
+            asset= self.protobuf_to_dict(response)
+            return asset['last_price']
+        except grpc._channel._InactiveRpcError as e:
+            print(f"RPC failed: {e.code()}")
+            print(f"Details: {e.details()}")
+            return None
+        except Exception as e:
+            print(f"An unexpected error occurred: {e}")
+            return None
 
+
+    def getInfo(self,code):
+        try:
+            response=self.stub.GetDailyInfo(qmt_pb2.DailyInfoRequest(code=code))
+            info=self.protobuf_to_dict(response)
+            info['downLimit']=info['down_limit']
+            info['upLimit']=info['up_limit']
+            return info
+        except grpc._channel._InactiveRpcError as e:
+            print(f"RPC failed: {e.code()}")
+            print(f"Details: {e.details()}")
+            return None
+        except Exception as e:
+            print(f"An unexpected error occurred: {e}")
+            return None
+        
     def OrderBuy(self,code, amount, price=0, strategy='strategy', remark='remark'):
         response=self.stub.OrderBuy(qmt_pb2.OrderRequest(code=code, amount=amount, price=price, strategy=strategy, remark=remark))
         seq=self.protobuf_to_dict(response)

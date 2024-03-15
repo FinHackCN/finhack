@@ -69,9 +69,7 @@ def init_context(args):
     hash_value = hashlib.md5(context_json.encode()).hexdigest()
     context.id=hash_value
     qclient.assetSync(context)
-    print(context['portfolio']['positions'])
     qclient.positionSync(context)
-    print(context['portfolio']['positions'])
 
 
 def set_benchmark(code):
@@ -158,6 +156,8 @@ def order(security, amount, style=None, side='long', pindex=0, close_today=False
 #按价值下单
 def order_value(security, value, style=None, side='long', pindex=0, close_today=False):
     price=Data.get_price(code=security,context=context)
+    if price==0:
+        return
     #print(price)
     if price==None:
         #print(f"can not get price of {security}")
@@ -242,12 +242,12 @@ def get_trades():
 
 def order_buy(security,amount,price=0):  
     qclient.OrderBuy(security,amount,price)
-    log(f"下单买入{o.code}共计{o.amount}股")   
+    log(f"下单买入{security}共计{amount}股")   
       
 
 def order_sell(security,amount,price=0):
     qclient.OrderSell(security,amount,price)
-    log(f"下单卖出{o.code}共计{o.amount}股")   
+    log(f"下单卖出{security}共计{amount}股")   
     
 
     

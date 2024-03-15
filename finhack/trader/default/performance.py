@@ -159,8 +159,8 @@ class Performance:
     def save(context):
         p_df=context.performance.returns
         i_df=context.performance.bench_returns    
-        print(p_df)
-        print(i_df)
+        # print(p_df)
+        # print(i_df)
         qs.reports.html(
             returns=p_df,  # 策略的市场价值
             benchmark=i_df,  # 基准指数的回报率

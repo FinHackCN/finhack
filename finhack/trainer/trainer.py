@@ -14,6 +14,9 @@ class Trainer:
     
     def getPredData(model_id,start_date,end_date,norm=False):
         feature_list=mydb.selectToDf(f"SELECT * FROM `auto_train` WHERE `hash` = '{model_id}'",'finhack')
+        if feature_list.empty:
+            print("model error")
+            return pd.DataFrame()
         feature_list=feature_list['features'].to_list()
         feature_list=feature_list[0]
         feature_list=feature_list.split(',')

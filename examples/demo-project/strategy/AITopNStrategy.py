@@ -38,6 +38,7 @@ def initialize(context):
     preds_data=load_preds_data(model_id)
     clsLgbTrainer=LightgbmTrainer()
     preds=clsLgbTrainer.pred(preds_data,md5=model_id,save=False)
+
     g.preds=preds
 
 

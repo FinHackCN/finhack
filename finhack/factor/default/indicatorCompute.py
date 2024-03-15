@@ -237,6 +237,8 @@ class indicatorCompute():
                             
                 #否则计算250日数据
                 else:
+                    if df_250 is None:
+                        return False
                     if not factor_name in df_250.columns:
                         if(diff_date>0 and factor_name in df_factor.columns):
                             df_250=indicatorCompute.computeFactorByStock(ts_code,factor_name,df_250,where=where,db='factors')

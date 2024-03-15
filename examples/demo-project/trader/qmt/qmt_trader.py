@@ -1,6 +1,7 @@
 from runtime.constant import *
 import runtime.global_var as global_var
 from finhack.library.class_loader import ClassLoader
+import cloudpickle as pickle
 
 import os
 import importlib
@@ -14,6 +15,7 @@ from trader.qmt.context import context,g
 from datetime import datetime
 
 
+#finhack trader run --model_id=4367901764ca783755ed8ccb19504bb7 --strategy=QMTStrategy --vendor=qmt
 
 class QmtTrader:
     def load_strategy(self,strategy_name):
@@ -26,13 +28,46 @@ class QmtTrader:
             Log.logger.error(f"{BASE_DIR}strategy/{strategy_name}.py  NotFound")
         pass    
 
-    
+
+
+    def save_context(self,context_id,g):
+        context.g=g
+        running_dir = RUNNING_DIR
+        context_file_path = os.path.join(running_dir, f"{context_id}.pkl")
+        with open(context_file_path, 'wb') as context_file:
+            pickle.dump(context, context_file)
+        Log.logger.info(f"Context saved to {context_file_path}")
+
+    def load_context(self,context_id):
+        running_dir = RUNNING_DIR
+        context_file_path = os.path.join(running_dir, f"{context_id}.pkl")
+        if os.path.exists(context_file_path):
+            with open(context_file_path, 'rb') as context_file:
+                loaded_context = pickle.load(context_file)
+            Log.logger.info(f"Context loaded from {context_file_path}")
+            return loaded_context
+        else:
+            Log.logger.error(f"Context file {context_file_path} not found")
+            return None 
+
+
     def run(self,args=None):
+        global context
+        global g
         if args!=None:
             self.args=args
         t1=time.time()
         starttime=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         init_context(self.args)
+        # loaded_context = self.load_context(context.id)
+        # if loaded_context is not None:
+        #     context = loaded_context
+        #     g=context.g
+        # else:
+        #     pass
+
+
+
 
         start_time=context['trade']['start_time']
         end_time=context['trade']['end_time']
@@ -60,19 +95,25 @@ class QmtTrader:
         bind_action(strategy)
         strategy.log=Log.logger
         strategy.g=g
-        
+
         log("正在执行策略initialize函数")
         strategy.initialize(context)
+
+        # if loaded_context is not None:
+        #     context = loaded_context
+        # else:
+        #     pass
+
         
         #这里后面放到redis里，这样就可以模拟和实盘了
         # print(context)
         # print(context.portfolio)
-        
+        #self.save_context(context.id,g)
         while context.data.event_list:
             event = context.data.event_list.pop(0)
             event_time = datetime.strptime(event['event_time'], '%Y-%m-%d %H:%M:%S')
             current_time = datetime.now()  # 去除毫秒部分
-            
+            context.current_dt=current_time
             # 如果 event_time 比当前时间晚，则将事件放回列表并等待
             if event_time > current_time:
                 context.data.event_list.insert(0, event)  # 将事件放回列表
@@ -100,3 +141,4 @@ class QmtTrader:
             # 打印信息（可选）
             print(event_time)
             print(current_time)
+            #self.save_context(context.id,g)
