@@ -26,7 +26,7 @@ context_attr= {
                 'sliptype':'pricerelated',
                 'rule_list':''
             }),
-        
+            'g':{},
             'account':DictObj({
                 'username':'',
                 'password':'',

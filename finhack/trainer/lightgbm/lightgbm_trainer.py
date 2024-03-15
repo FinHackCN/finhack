@@ -305,10 +305,7 @@ class LightgbmTrainer(Trainer):
     def pred(self,df_pred,data_path=DATA_DIR,md5='test',save=False):
         if 'symbol' in df_pred:
             df_pred=df_pred.drop('symbol', axis=1)   
-        
-        
-        
-        
+
         gbm = lgb.Booster(model_file=data_path+'/models/lgb_model_'+md5+'.txt')
         pred=df_pred[['ts_code','trade_date']]
         if 'label' in df_pred:
@@ -326,6 +323,24 @@ class LightgbmTrainer(Trainer):
         y_pred = gbm.predict(x_pred, num_iteration=gbm.best_iteration)
         pred['pred']=y_pred
         #今天预测的，其实是明天要操作的;所以要把今天的数据写成昨天的值
+
+
+        # 确定数据集中的最后一个交易日
+        last_trade_date = pd.to_datetime(pred['trade_date'].max(), format='%Y%m%d')
+        # 计算下一个交易日（注意这里没有考虑周末或假日）
+        next_trade_date = (last_trade_date + pd.Timedelta(days=1)).strftime('%Y%m%d')
+
+        # 获取最后一个交易日的预测值
+        last_trade_date_pred = pred[pred['trade_date'] == last_trade_date.strftime('%Y%m%d')]
+
+        # 创建新的DataFrame，包含每个ts_code的下一个交易日
+        next_day_pred = last_trade_date_pred.copy()
+        next_day_pred['trade_date'] = next_trade_date  # 设置新的交易日为下一个交易日
+
+        # 将新的交易日DataFrame添加到原始预测DataFrame中
+        pred = pd.concat([pred, next_day_pred], ignore_index=True)
+
+
         pred=pred.sort_values('trade_date')
         pred['pred'] = pred.groupby('ts_code')['pred'].transform(lambda x: x.shift(1))
 
