@@ -31,6 +31,7 @@ def init_context(args):
 
     if args['args']!=None and args['args']!='':
         aargs=json.loads(args['args'])
+        context['args']=aargs
         if 'model_id' in aargs:
             context['trade']['model_id']=aargs['model_id']
     if args['model_id']!='':
@@ -241,11 +242,31 @@ def get_trades():
 #         self.total_value=amount*last_sale_price
 
 def order_buy(security,amount,price=0):  
+    o=Order(code=security,amount=amount,is_buy=True,context=context)
+    rules=Rules(order=o,context=context,log=log)
+    
+    o=rules.apply()
+    print(o)
+
+    if o.status!=1:
+        return
+    if o.amount==0:
+        #log(f"{o.code}--{o.amount}，买单数为0，自动取消订单")  
+        return
+
     qclient.OrderBuy(security,amount,price)
     log(f"下单买入{security}共计{amount}股")   
       
 
 def order_sell(security,amount,price=0):
+    o=Order(code=security,amount=amount,is_buy=False,context=context)
+    rules=Rules(order=o,context=context,log=log)
+    o=rules.apply()
+    if o.status!=1:
+        return
+    if o.amount==0:
+        log(f"{o.code}--{o.amount}，卖单数为0，自动取消订单")  
+        return
     qclient.OrderSell(security,amount,price)
     log(f"下单卖出{security}共计{amount}股")   
     

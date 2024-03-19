@@ -38,7 +38,7 @@ class preCheck():
         
         if len(check_list)>0:
             preCheck.checkIndicatorsType(check_list)
-        preCheck.checkAlphas()  #当前Alphas应该不会存在未来函数，跳过检测
+        preCheck.checkAlphas()
         preCheck.afterCheck()    
         print("checkAllFactors--End---")
         return check_list
@@ -172,7 +172,7 @@ class preCheck():
         for date in daterange:
 
             df_tmp=df_250e[(df_250e.trade_date>=daterange[0]) & (df_250e.trade_date<=date)].copy()
-            factor_tmp=indicatorCompute.computeListByStock(ts_code=ts_code,df_price=df_tmp,check=True,factor_list=check_list,pure=False,db='tushare')
+            factor_tmp=indicatorCompute.computeListByStock(ts_code=ts_code,df_price=df_tmp,check=True,factor_list=check_list,pure=False,save=False,db='tushare')
             if 'None' in str(type(factor_tmp)) or len(factor_tmp)==0:
                 continue
             # print(factor_tmp)
@@ -196,14 +196,14 @@ class preCheck():
         #  print(df_250)
         #  print()
        
-        factors250=indicatorCompute.computeListByStock(ts_code,list_name='all',df_price=df_250,check=True,factor_list=check_list,pure=False,db='tushare')
+        factors250=indicatorCompute.computeListByStock(ts_code,list_name='all',df_price=df_250,check=True,factor_list=check_list,pure=False,save=False,db='tushare')
         factors250=factors250.tail(len(factors250e))
         #factors250=factors250.drop(labels='index', axis=1)
         factors250=factors250.reset_index(drop=True) 
         factors250=factors250.fillna(0)
         #print(factors250)
         
-        factorsAll=indicatorCompute.computeListByStock(ts_code,list_name='all',df_price=df_all,check=True,factor_list=check_list,pure=False,db='tushare')
+        factorsAll=indicatorCompute.computeListByStock(ts_code,list_name='all',df_price=df_all,check=True,factor_list=check_list,pure=False,save=False,db='tushare')
         factorsAll=factorsAll.tail(len(factors250e))
         #factorsAll=factorsAll.drop(labels='index', axis=1)
         factorsAll=factorsAll.reset_index(drop=True) 
@@ -300,16 +300,24 @@ class preCheck():
         try:
             #
             ftype=preCheck.getFactorCheckType(factor_name=alphaname, indicators=listname, func_name=alphaname, code=alpha, return_fileds=[alphaname])
-            if int(ftype)<10:
+            if int(ftype)<10 or int(ftype)==77:
                 print("checking "+alphaname)
                 check_stock=['000001.SZ','000002.SZ','000004.SZ','000005.SZ','000006.SZ','000007.SZ','000008.SZ','000009.SZ','000010.SZ','000011.SZ']
-                price_all=AStock.getStockDailyPrice(check_stock,where='',startdate='20150619',enddate='20200805',fq='hfq')
+
+                col_list=alphaEngine.get_col_list(alpha)
+                # price_all=AStock.getStockDailyPrice(check_stock,where='',startdate='20150619',enddate='20200805',fq='hfq')
+                # price_all=price_all.set_index(['ts_code','trade_date'])
+                price_all=factorManager.getFactors(factor_list=col_list)
+                price_all=price_all.reset_index() 
+                #以前这里检测的是alpha101和alpha191，全是olhc数据，直接用price即可，现在改成自定义alpha，就必须读取原始数据了，速度会慢
+               
+                # print(price_all)
+                price_all = price_all[price_all['ts_code'].isin(check_stock)]
+                price_250=price_all[price_all['trade_date']>='20180619']
+                price_250=price_250[price_250['trade_date']<='20200805']
                 price_all=price_all.set_index(['ts_code','trade_date'])
-                price_250=AStock.getStockDailyPrice(check_stock,where='',startdate='20180619',enddate='20200805',fq='hfq')
                 price_250a=price_250.set_index(['ts_code','trade_date'])
                 factorsAll=alphaEngine.calc(formula=alpha,df=price_all,name=alphaname,check=True)
-                print(factorsAll)
-               
                 if factorsAll.empty:
                     ftype=77
                 elif not '000001.SZ' in factorsAll.index:
@@ -384,7 +392,7 @@ class preCheck():
             if ftype==41:
                 pass
         except Exception as e:
-            print("precheck error:",str(e))
+            print("precheck %s error: %s",(alpha,str(e)))
  
 
             

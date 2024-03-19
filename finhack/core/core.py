@@ -44,26 +44,59 @@ finhack -h
 
     def init_logger(self):
         from runtime.constant import LOGS_DIR
-        Log.logger=Log.Log(module=self.args.module,logs_dir=LOGS_DIR,background=self.args.background).logger
+        vendor="default" if self.args.vendor is None else self.args.vendor
+        action="run" if self.args.action is None else self.args.action
+        Log.logger=Log.Log(module=self.args.module,vendor=vendor,action=action,logs_dir=LOGS_DIR,background=self.args.background).logger
         
     #追加配置文件中的参数
     def append_args(self):
         sys.path.append(self.project_path)
         sys.path.append(self.project_path+'/data/cache/')
         from finhack.library.config import Config 
-        my_args_group_list=Config.get_section_list('args')
-        
-        
-        
-        args, unknown = self.parser.parse_known_args()
 
         
+        #待添加的args列表
+        args_list={
+
+        }
+
+        #读取args文件下所有分区
+        my_args_group_list=Config.get_section_list('args')
+        args, unknown = self.parser.parse_known_args()
+
+        #[global]
         for my_args_group in my_args_group_list:
-            if my_args_group==args.module or my_args_group=='global':
+            if my_args_group=='global':
                 my_args_list=Config.get_config('args',my_args_group)
-                group = self.parser.add_argument_group(my_args_group)
                 for arg,default in my_args_list.items():
-                    group.add_argument('--'+arg,metavar='', default=default)
+                    args_list[arg]=default
+
+        vendor="default" if args.vendor is None else args.vendor
+        #[model]
+        for my_args_group in my_args_group_list:
+            if my_args_group==args.module:
+                my_args_list=Config.get_config('args',my_args_group)
+                for arg,default in my_args_list.items():
+                    args_list[arg]=default
+
+        #[model-vendor]
+        for my_args_group in my_args_group_list:
+            if my_args_group==args.module+'-'+vendor:
+                my_args_list=Config.get_config('args',my_args_group)
+                for arg,default in my_args_list.items():
+                    args_list[arg]=default
+
+        #[model-vendor-action]
+        for my_args_group in my_args_group_list:
+            if my_args_group==args.module+'-'+vendor+'-'+args.action:
+                my_args_list=Config.get_config('args',my_args_group)
+                for arg,default in my_args_list.items():
+                    args_list[arg]=default
+
+
+        for arg,default in args_list.items():
+                group = self.parser.add_argument_group(my_args_group)
+                group.add_argument('--'+arg,metavar='', default=default)
         args=self.parse_args()
         self.args=args
         

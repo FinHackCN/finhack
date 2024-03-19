@@ -30,6 +30,7 @@ def init_context(args):
 
     if args['args']!=None and args['args']!='':
         aargs=json.loads(args['args'])
+        context['args']=aargs
         if 'model_id' in aargs:
             context['trade']['model_id']=aargs['model_id']
     if args['model_id']!='':

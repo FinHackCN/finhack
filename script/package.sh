@@ -24,6 +24,8 @@ rsync -av --include='*/' --include='factorlist/' --include='factorlist/**'  \
 	
 rm -rf ./finhack/widgets/templates/empty_project/data/factors/date_factors/*
 
+rm -f ./finhack/widgets/templates/empty_project/data/config/factorlist/alphalist/alpha999
+
 sed -i '/password=/s/=.*/=/' ./finhack/widgets/templates/empty_project/data/config/db.conf
 sed -i '/token=/s/=.*/=/' ./finhack/widgets/templates/empty_project/data/config/ts.conf
 sed -i '/feishu_webhook=/s/=.*/=/' ./finhack/widgets/templates/empty_project/data/config/alert.conf
