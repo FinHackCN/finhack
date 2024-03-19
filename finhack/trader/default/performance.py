@@ -118,7 +118,7 @@ class Performance:
         print(tabulate(table_data, headers=["Metric", "Value"], tablefmt="grid"))
         
         
-    def show_chart(context):
+    def show_chart(context,save=False):
         p_df=context.performance.returns+1
         i_df=context.performance.bench_returns+1
         
@@ -152,21 +152,57 @@ class Performance:
         plt.grid(True)
         plt.show()       
         
+
+    def save_chart(context):
+        p_df=context.performance.returns+1
+        i_df=context.performance.bench_returns+1
+        
+        try:
+            p_dates = p_df.index.strftime('%d/%m/%Y').tolist()
+        except Exception as e:
+            p_dates = p_df
+            
+        p_values = (p_df.values.cumprod()).tolist()
+        
+        try:
+            i_dates = i_df.index.strftime('%d/%m/%Y').tolist()
+        except Exception as e:
+            i_dates = i_df.index.strftime('%d/%m/%Y').tolist()
+            
+ 
+        i_values = (i_df.values.cumprod()).tolist()
+        
+        # 绘图
+        # 设置图表样式
+        plt.plotsize(100, 30)
+        plt.canvas_color("default")  # 设置透明背景
+        plt.ticks_color("default")  # 设置刻度颜色以匹配终端默认颜色
+        plt.axes_color("default") 
+
+        plt.plot(p_dates, p_values, marker='dot',label = context['trade']['strategy'])
+        plt.plot(i_dates, i_values, marker='dot',label = context.trade.benchmark)
+        # plt.title("Daily Returns")
+        # plt.xlabel("Date")
+        # plt.ylabel("Return")
+        # 保存图表为PNG文件
+        plt.savefig(REPORTS_DIR+'/static/images/bt_'+context.id+'.png')
+
+
+
     def show_notebook(p_values,i_values):
         qs.extend_pandas()
         qs.reports.full(p_values,i_values)
         
     def save(context):
+        Performance.save_chart(context)
         p_df=context.performance.returns
-        i_df=context.performance.bench_returns    
-        # print(p_df)
-        # print(i_df)
+        i_df=context.performance.bench_returns   
         qs.reports.html(
             returns=p_df,  # 策略的市场价值
             benchmark=i_df,  # 基准指数的回报率
             output='bt_'+context.id+'.html',  # 输出HTML文件的名称
-            download_filename=REPORTS_DIR+'bt_'+context.id+'.html',  # 下载HTML文件的名称
+            download_filename=REPORTS_DIR+'/static/trader/bt_'+context.id+'.html',  # 下载HTML文件的名称
             title=context['trade']['strategy'],  # 报告的标题
             lang='cn'  # 报告语言设置为中文
         )
-        print(REPORTS_DIR+'bt_'+context.id+'.html')
+        #print(REPORTS_DIR+'/static/trader/bt_'+context.id+'.html')
