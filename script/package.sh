@@ -19,7 +19,7 @@ rm -rf build/*
 rm -rf finhack.egg-info
 
 rsync -av --include='*/' --include='factorlist/' --include='factorlist/**'  \
-	--include='*.py' --include='*.conf' --exclude='*' --exclude='__pycache__/' \
+	--include='*.py' --include='*.conf' --include='index.html' --exclude='*' --exclude='__pycache__/' \
 	./examples/demo-project/ ./finhack/widgets/templates/empty_project 
 	
 rm -rf ./finhack/widgets/templates/empty_project/data/factors/date_factors/*
