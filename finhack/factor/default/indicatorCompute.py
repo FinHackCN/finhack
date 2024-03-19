@@ -237,7 +237,7 @@ class indicatorCompute():
                             
                 #否则计算250日数据
                 else:
-                    if df_250 is None:
+                    if df_250 is None or isinstance(df_250, bool):
                         return False
                     if not factor_name in df_250.columns:
                         if(diff_date>0 and factor_name in df_factor.columns):

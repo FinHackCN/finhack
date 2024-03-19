@@ -758,7 +758,7 @@ def save_lastdate(res,name):
     return res
 
 class alphaEngine():
-    def get_df(formula="",df=pd.DataFrame(),name="alpha",ignore_notice=False,stock_list=[],diff=True):
+    def get_df(formula="",df=pd.DataFrame(),name="alpha",check=False,ignore_notice=False,stock_list=[],diff=True):
         try:
             #根据 $符号匹配列名
             col_list=alphaEngine.get_col_list(formula)
@@ -777,12 +777,14 @@ class alphaEngine():
                 max_date=df_old['trade_date'].max()
                 today=time.strftime("%Y%m%d",time.localtime())
                 diff_date=int(today)-int(max_date)
-    
+
+
             if df.empty:
                 df=factorManager.getFactors(factor_list=col_list,cache=True)
             else:
                 df=df.sort_index()
-            
+
+
             #需要对比差异然后再计算
             if diff:
                 if diff_date>0 and diff_date<100:
@@ -802,7 +804,7 @@ class alphaEngine():
                 df=df.set_index(['ts_code','trade_date'])
                 
             df=df.fillna(0)
-            return df
+            return diff_date,max_date,df
 
         except Exception as e:
             if ignore_notice:
@@ -810,7 +812,7 @@ class alphaEngine():
             else:
                 Log.logger.error("%s error:%s" % (name,str(e))) 
                 Log.logger.error("err exception is %s" % traceback.format_exc())
-            return pd.DataFrame()        
+            return 999,max_date,pd.DataFrame()        
         
     def get_col_list(formula):
             #根据 $符号匹配列名
@@ -823,14 +825,14 @@ class alphaEngine():
         # print(formula)
         try:
             if df.empty:
-                df=alphaEngine.get_df(formula=formula,df=df,name=name,ignore_notice=False,stock_list=stock_list,diff=diff)
+                diff_date,max_date,df=alphaEngine.get_df(formula=formula,df=df,name=name,check=check,ignore_notice=False,stock_list=stock_list,diff=diff)
             if df.empty:
                 return df
                 
             col_list=alphaEngine.get_col_list(formula)
             
             # #缓存路径
-            # data_path=SINGLE_FACTORS_DIR+name+'.csv'   
+            data_path=SINGLE_FACTORS_DIR+name+'.csv'   
             # diff_date=999
             # max_date=''
             
@@ -883,13 +885,18 @@ class alphaEngine():
             # fields=['$open','$high','$low','$close','$amount','$volume','$vwap','$returns']
             # for field in fields:
             #     formula=formula.replace(field,"df['%s']" % (field[1:]))
-    
+            try:
+                for col in col_list:
+                    formula=formula.replace(col,"df['%s']" % (col[1:]))
+                    df[col[1:]]=df[col[1:]].astype(float)
+            except KeyError:
+                if check:
+                    Log.logger.error("%s error:%s" % (formula,str(e))) 
+                    return pd.DataFrame()
+                else:
+                    Log.logger.error("%s error:%s" % (formula,str(e))) 
+                    return pd.DataFrame()
 
-            for col in col_list:
-                formula=formula.replace(col,"df['%s']" % (col[1:]))
-                df[col[1:]]=df[col[1:]].astype(float)
-    
-            
             if '?' in formula:
                 formula=ternary_trans(formula)
  
@@ -901,7 +908,7 @@ class alphaEngine():
             
             #这里的res是近700天的数据，可以和old_df拼接起来变成完整数据
             
-            #print(res)
+            # print(res)
             
             #如果是用来检测，或者不保存，则直接返回
             if check or save==False:

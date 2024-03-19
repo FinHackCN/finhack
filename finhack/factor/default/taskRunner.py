@@ -11,7 +11,6 @@ from concurrent.futures import ThreadPoolExecutor,ProcessPoolExecutor, wait, ALL
 from finhack.factor.default.factorPkl import factorPkl
 
 
-
     
 class taskRunner:
     def runTask(task_list):

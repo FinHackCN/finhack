@@ -1,12 +1,8 @@
 import sys
 from loguru import logger
 class Log():
-    def __init__(self,module,logs_dir="",background=False):
-
-        log_path=logs_dir+module+'.log'
-        
-        #print(log_path)
-
+    def __init__(self,module,vendor,action,logs_dir="",background=False):
+        log_path=f"{logs_dir}{module}_{vendor}_{action}.log"
         logger.remove(handler_id=None) 
         fmt = "{time} - {name} - {level} - {message}"
         logger.add(log_path, level="DEBUG", format=fmt, retention='7 days', filter=lambda record: record["extra"].get("name") == "core")

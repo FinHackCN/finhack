@@ -47,7 +47,7 @@ class factorMining():
                     continue
                 
                 
-                df_check=alphaEngine.get_df(formula=alpha,df=pd.DataFrame(),name='alpha',ignore_notice=True,stock_list=stock_list,diff=False)
+                diff_date,max_date,df_check=alphaEngine.get_df(formula=alpha,df=pd.DataFrame(),name='alpha',check=False,ignore_notice=True,stock_list=stock_list,diff=False)
                 df_alpha=alphaEngine.calc(formula=alpha,df=df_check,name='alpha',check=False,save=False,ignore_notice=True)
                 if df_alpha.empty:
                     #print('err')
