@@ -31,3 +31,6 @@ FinHack®，一个易于拓展的量化金融框架，它在当前版本中集�
 
 ## 量化回测
 ![image](https://github.com/FinHackCN/finhack/assets/6196607/45210870-8167-425b-ba98-17d80d79ee7b)
+![image](https://github.com/FinHackCN/finhack/assets/6196607/74e12eae-93fb-487c-a43f-92c79c8f75d6)
+![image](https://github.com/FinHackCN/finhack/assets/6196607/19ce463e-9323-4f28-982b-17298c53e1d7)
+
