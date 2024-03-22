@@ -15,7 +15,7 @@ import os
 import pandas as pd
 from finhack.trainer.trainer import Trainer
 import shutil
-
+from datetime import datetime, timedelta
 def init_context(args):
     args=args.__dict__
     
@@ -34,6 +34,8 @@ def init_context(args):
         context['args']=aargs
         if 'model_id' in aargs:
             context['trade']['model_id']=aargs['model_id']
+    else:
+        context['args']={}
     if args['model_id']!='':
         context['trade']['model_id']=args['model_id']
 
@@ -69,8 +71,8 @@ def init_context(args):
     context_json = str(args)+str(context['trade'])+str(context['account'])+str(context['portfolio']['cash'])
     hash_value = hashlib.md5(context_json.encode()).hexdigest()
     context.id=hash_value
-    qclient.assetSync(context)
-    qclient.positionSync(context)
+    # qclient.assetSync(context)
+    # qclient.positionSync(context)
 
 
 def set_benchmark(code):
@@ -147,9 +149,9 @@ def order_target(security, amount, style=None, side='long', pindex=0, close_toda
 #按股数下单
 def order(security, amount, style=None, side='long', pindex=0, close_today=False):
     if amount>0:
-        order_buy(security,amount)
+        return order_buy(security,amount)
     else:
-        order_sell(security,-amount)
+        return order_sell(security,-amount)
 
 
 
@@ -158,17 +160,17 @@ def order(security, amount, style=None, side='long', pindex=0, close_today=False
 def order_value(security, value, style=None, side='long', pindex=0, close_today=False):
     price=Data.get_price(code=security,context=context)
     if price==0:
-        return
+        return False
     #print(price)
     if price==None:
         #print(f"can not get price of {security}")
-        return
+        return  False
     if value>0:
         amount=int(value/price)
-        order_buy(security,amount)
+        return order_buy(security,amount)
     elif value<0:
         amount=-int(value/price)
-        order_sell(security,amount)
+        return order_sell(security,amount)
         
 
 # #目标股数下单
@@ -184,11 +186,11 @@ def order_target_value(security, value, style=None, side='long', pindex=0, close
     price=Data.get_price(code=security,context=context)
     if price==None:
         #print(f"can not get price of {security}")
-        return  
+        return  False
     target_amount=int(value/price)
     now_amount=context.portfolio.positions[security].amount
     change_amount=target_amount-now_amount
-    order(security,change_amount)
+    return order(security,change_amount)
     
     # now_value=0
     # price=Data.get_price(code=security,context=context)
@@ -249,13 +251,14 @@ def order_buy(security,amount,price=0):
     print(o)
 
     if o.status!=1:
-        return
+        return False
     if o.amount==0:
         #log(f"{o.code}--{o.amount}，买单数为0，自动取消订单")  
-        return
+        return False
 
-    qclient.OrderBuy(security,amount,price)
-    log(f"下单买入{security}共计{amount}股")   
+    qclient.OrderBuy(o.code,o.amount,o.price)
+    log(f"下单买入{o.code}共计{o.amount}股，单价{o.price}")   
+    return True
       
 
 def order_sell(security,amount,price=0):
@@ -263,12 +266,13 @@ def order_sell(security,amount,price=0):
     rules=Rules(order=o,context=context,log=log)
     o=rules.apply()
     if o.status!=1:
-        return
+        return False
     if o.amount==0:
         log(f"{o.code}--{o.amount}，卖单数为0，自动取消订单")  
-        return
-    qclient.OrderSell(security,amount,price)
-    log(f"下单卖出{security}共计{amount}股")   
+        return False
+    qclient.OrderSell(o.code,o.amount,o.price)
+    log(f"下单卖出{o.code}共计{o.amount}股，单价{o.price}")   
+    return True
     
 
     
@@ -300,8 +304,15 @@ def load_preds_data(model_id,cache=False):
                 return pred_data
         except Exception as e:
             pass
-    start_date=context.trade.start_time.replace("-",'')[0:8]
-    end_date=context.trade.end_time.replace("-",'')[0:8]
+    # start_date=context.trade.start_time.replace("-",'')[0:8]
+    # end_date=context.trade.end_time.replace("-",'')[0:8]
+
+    # 获取当前日期和时间
+    now = datetime.now()
+    # 将上周的日期时间对象转换为 'yyyymmdd' 格式的字符串
+    start_date = (now-timedelta(days=10)).strftime('%Y%m%d')
+    end_date=now.strftime('%Y%m%d')
+
     preds_df=Trainer.getPredData(model_id,start_date,end_date)
     if cache==True:
         preds_df.to_pickle(pred_data_path)

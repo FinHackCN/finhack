@@ -37,7 +37,7 @@
         <tbody>
             {% for item in data %}
             <tr>
-                <td width="10%"><a href="/static/trader/bt_{{ item.instance_id }}.html">{{ item.instance_id }}</td>
+                <td width="10%"><a href="/static/trader/bt_{{ item.instance_id }}.html" target="_blank">{{ item.instance_id }}</td>
                 <td>{{item.strategy}}</td>
                 <td>{{ item.init_cash  }}</td>
                 <td>{{ item.alpha  | round(2)}}</td>

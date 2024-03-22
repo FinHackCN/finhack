@@ -2,6 +2,8 @@ from trader.qmt.data import Data
 import finhack.library.log as Log
 from trader.qmt.function import *
 import pandas as pd
+from finhack.trainer.trainer import Trainer
+from finhack.trainer.lightgbm.lightgbm_trainer import LightgbmTrainer
 class Event:
     def __init__(self):
         pass
@@ -17,7 +19,8 @@ class Event:
         
         event['astock']={
             'start_interval':'00:00:00',
-            'before_market':'09:00:00',
+            # 'before_market':'09:00:00',
+            'before_market':'19:23:00',
             'pre_opening_start':'09:15:00',
             'pre_opening_end':'09:20:00',
             'matching_start':'09:25:00',
@@ -64,21 +67,13 @@ class Event:
         pass
         
         
-    #开盘先刷新可用持仓
-    def refresh_enable_amount(context):
-        for code,pos in context.portfolio.positions.items():
-            pos.enable_amount=pos.amount
-            
-            
-    #送股事件  
-    def stock_split(context):
-        pass
-                        
-                        
+
     def before_market(context):
-        Event.refresh_enable_amount(context)
-        Event.stock_split(context)
-        
+        model_id=context.trade.model_id
+        preds_data=load_preds_data(model_id)
+        clsLgbTrainer=LightgbmTrainer()
+        preds=clsLgbTrainer.pred(preds_data,md5=model_id,save=False)
+        context.g.preds=preds
   
 
 

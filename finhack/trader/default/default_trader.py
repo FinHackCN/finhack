@@ -75,6 +75,7 @@ class DefaultTrader:
 
 
             calendar=pd.to_datetime(calendar)
+            calendar=calendar[0:len(context.performance.returns)]
 
 
             context.performance.returns = pd.DataFrame(context.performance.returns, index=calendar)
@@ -83,6 +84,8 @@ class DefaultTrader:
 
             Performance.show_chart(context)
             Performance.show_table(context)
+            context.trade.strategy_code="..."
+            print(context.trade)
             print("数据已从数据库查询并还原到 context 变量中。")
         else:
             print("未找到与当前实例ID相匹配的数据记录。")
@@ -133,7 +136,7 @@ class DefaultTrader:
         Log.tlogger=Log.tLog(context.id,logs_dir=LOGS_DIR,background=self.args.background,level=self.args.log_level).logger
         log("正在初始化交易上下文")
 
-        hassql='select * from backtest where instance_id="%s"' % (context.id)
+        hassql='select id from backtest where instance_id="%s"' % (context.id)
         has=mydb.selectToDf(hassql,'finhack')
         if(not has.empty): 
             log("存在相同回测记录，本次回测结束！")

@@ -60,6 +60,25 @@ class Rules():
             return False
         return True
     
+
+
+    #ST
+    def rule_st(self):
+        if self.order.price!=None and 'ST' in self.order.info.name:
+            self.order.filled=0
+            self.log(f"{self.order.code}ST股，不买入！",'warning')     
+            return False
+        return True
+
+
+    #非主板
+    def rule_mainboard(self):
+        if self.order.price!=None and not self.order.code.startswith(('600', '601', '603','000')):
+            self.order.filled=0
+            self.log(f"{self.order.code}非主板，不买入！",'warning')     
+            return False
+        return True    
+
     #停牌
     def rule_stop(self):
         if(np.isnan(self.order.price) or int(self.order.info.stop)==1 or self.order.price==0):
@@ -84,6 +103,17 @@ class Rules():
                 self.log(f"{self.order.code}跌停，无法卖出！",'warning')  
                 return False
         return True
+
+    def rule_100(self):
+        print('---')
+        print(self.order.amount)
+        print(int(self.order.amount/100)*100)
+        print('---')
+        if self.order.amount!=int(self.order.amount/100)*100:
+            self.order.amount=int(self.order.amount/100)*100
+            self.log(f"{self.order.code}自动调整交易数量为{self.order.amount}！",'warning')  
+        return True
+
                 
                 
     #滑点

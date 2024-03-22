@@ -33,6 +33,8 @@ def init_context(args):
         context['args']=aargs
         if 'model_id' in aargs:
             context['trade']['model_id']=aargs['model_id']
+    else:
+        context['args']={}
     if args['model_id']!='':
         context['trade']['model_id']=args['model_id']
 
@@ -146,6 +148,7 @@ def order_target(security, amount, style=None, side='long', pindex=0, close_toda
     cash=context['portfolio']['available_cash']
     context['portfolio']['cash']=context['portfolio']['cash']+cash
     context['portfolio']['available_cash']=context['portfolio']['available_cash']+cash
+    #todo
     
     
 
@@ -166,9 +169,9 @@ def compute_cost(value,action='open'):
 #按股数下单
 def order(security, amount, style=None, side='long', pindex=0, close_today=False):
     if amount>0:
-        order_buy(security,amount)
+        return order_buy(security,amount)
     else:
-        order_sell(security,-amount)
+        return order_sell(security,-amount)
 
 
 
@@ -179,13 +182,13 @@ def order_value(security, value, style=None, side='long', pindex=0, close_today=
     #print(price)
     if price==None:
         #print(f"can not get price of {security}")
-        return
+        return False
     if value>0:
         amount=int(value/price)
-        order_buy(security,amount)
+        return order_buy(security,amount)
     elif value<0:
         amount=-int(value/price)
-        order_sell(security,amount)
+        return order_sell(security,amount)
         
 
 # #目标股数下单
@@ -201,11 +204,11 @@ def order_target_value(security, value, style=None, side='long', pindex=0, close
     price=Data.get_price(code=security,context=context)
     if price==None:
         #print(f"can not get price of {security}")
-        return  
+        return  False
     target_amount=int(value/price)
     now_amount=context.portfolio.positions[security].amount
     change_amount=target_amount-now_amount
-    order(security,change_amount)
+    return order(security,change_amount)
     
     # now_value=0
     # price=Data.get_price(code=security,context=context)
@@ -267,10 +270,10 @@ def order_buy(security,amount):
     
     
     if o.status!=1:
-        return
+        return False
     if o.amount==0:
         #log(f"{o.code}--{o.amount}，买单数为0，自动取消订单")  
-        return
+        return False
     is_new=False
     #没有持仓
     if security not in context.portfolio.positions:
@@ -311,17 +314,18 @@ def order_buy(security,amount):
     log(f"-------------------{is_new}-------------",'trace')
     log(f"当前现金："+str(context.portfolio.cash),'trace')
     log(f"当前持仓："+str(context.portfolio.positions_value),'trace')
-    log(f"当前市值："+str(context.portfolio.total_value),'trace')        
+    log(f"当前市值："+str(context.portfolio.total_value),'trace')    
+    return True    
 
 def order_sell(security,amount):
     o=Order(code=security,amount=amount,is_buy=False,context=context)
     rules=Rules(order=o,context=context,log=log)
     o=rules.apply()
     if o.status!=1:
-        return
+        return False
     if o.amount==0:
         log(f"{o.code}--{o.amount}，卖单数为0，自动取消订单")  
-        return
+        return False
     
     if security in context.portfolio.positions:
         context.portfolio.cash=context.portfolio.cash+o.value-o.cost-o.slip_value
@@ -363,7 +367,9 @@ def order_sell(security,amount):
     log('---------------------------------','trace')
     log(f"当前现金："+str(context.portfolio.cash),'trace')
     log(f"当前持仓："+str(context.portfolio.positions_value),'trace')
-    log(f"当前市值："+str(context.portfolio.total_value),'trace')        
+    log(f"当前市值："+str(context.portfolio.total_value),'trace')    
+
+    return True    
     
     # print(security)
     # print(value)
@@ -479,7 +485,9 @@ def delete_preds_data(model_id):
     if os.path.exists(pred_data_path):
         os.remove(pred_data_path)
     
- 
+def sync(context):
+    return True
+
 def bind_action(strategy):
     strategy.set_benchmark=set_benchmark
     strategy.set_option=set_option
@@ -497,6 +505,7 @@ def bind_action(strategy):
     strategy.log=log
     strategy.load_preds_data=load_preds_data
     strategy.get_price=Data.get_price
+    strategy.sync=sync
 
 
 

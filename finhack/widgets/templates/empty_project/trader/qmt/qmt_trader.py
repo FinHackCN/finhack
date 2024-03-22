@@ -1,8 +1,8 @@
 from runtime.constant import *
 import runtime.global_var as global_var
 from finhack.library.class_loader import ClassLoader
-import cloudpickle as pickle
-
+import pickle
+import sys
 import os
 import importlib
 import finhack.library.log as Log
@@ -30,15 +30,22 @@ class QmtTrader:
 
 
 
-    def save_context(self,context_id,g):
-        context.g=g
+    def save_context(self,context):
+        context_id=context.id
         running_dir = RUNNING_DIR
+        event_list_tmp=context.data.event_list
+        preds_tmp=context.g.preds
+        context.g.preds=None
+        context.data.event_list=[]
         context_file_path = os.path.join(running_dir, f"{context_id}.pkl")
         with open(context_file_path, 'wb') as context_file:
             pickle.dump(context, context_file)
+        context.data.event_list=event_list_tmp
+        context.g.preds=preds_tmp
         Log.logger.info(f"Context saved to {context_file_path}")
 
-    def load_context(self,context_id):
+    def load_context(self,context):
+        context_id=context.id
         running_dir = RUNNING_DIR
         context_file_path = os.path.join(running_dir, f"{context_id}.pkl")
         if os.path.exists(context_file_path):
@@ -59,15 +66,11 @@ class QmtTrader:
         t1=time.time()
         starttime=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         init_context(self.args)
-        # loaded_context = self.load_context(context.id)
-        # if loaded_context is not None:
-        #     context = loaded_context
-        #     g=context.g
-        # else:
-        #     pass
-
-
-
+        loaded_context = self.load_context(context)
+        if loaded_context is not None:
+            context = loaded_context
+        else:
+            pass
 
         start_time=context['trade']['start_time']
         end_time=context['trade']['end_time']
@@ -96,19 +99,16 @@ class QmtTrader:
         strategy.log=Log.logger
         strategy.g=g
 
-        log("正在执行策略initialize函数")
-        strategy.initialize(context)
-
-        # if loaded_context is not None:
-        #     context = loaded_context
-        # else:
-        #     pass
-
         
-        #这里后面放到redis里，这样就可以模拟和实盘了
-        # print(context)
-        # print(context.portfolio)
-        #self.save_context(context.id,g)
+ 
+
+        if loaded_context is not None:
+            pass
+        else:
+            strategy.initialize(context)
+
+        self.save_context(context)
+
         while context.data.event_list:
             event = context.data.event_list.pop(0)
             event_time = datetime.strptime(event['event_time'], '%Y-%m-%d %H:%M:%S')
@@ -127,6 +127,9 @@ class QmtTrader:
                     print("do something")
                     print(event_time)
                     print(current_time)
+                    print(event)
+                    strategy.sync(context)
+                    print('xxx')
                     event['event_func'](context)  # 执行事件函数
                 else:
                     continue  # 如果时间早于当前时间超过10秒，则跳过此事件
@@ -141,4 +144,4 @@ class QmtTrader:
             # 打印信息（可选）
             print(event_time)
             print(current_time)
-            #self.save_context(context.id,g)
+            self.save_context(context)
