@@ -25,7 +25,7 @@ class DefaultBacktest():
         strategy_list = self.args.strategy.split(',')
         model_list = mydb.selectToDf('select * from auto_train order by score desc', 'finhack')
         
-        semaphore = multiprocessing.Semaphore(int(self.args.p))  # 创建一个信号量，最大允许p个进程同时运行
+        semaphore = multiprocessing.Semaphore(int(self.args.process))  # 创建一个信号量，最大允许process个进程同时运行
         # print(model_list)
         # exit()
 

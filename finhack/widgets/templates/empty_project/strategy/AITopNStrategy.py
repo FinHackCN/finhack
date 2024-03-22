@@ -31,20 +31,22 @@ def initialize(context):
     g.days = 0 
     # 调仓频率
     g.refresh_rate = int(context.get('args', {}).get('refresh_rate', 10))
-    
-    run_daily(trade, time="09:30")
-    model_id=context.trade.model_id
 
+    model_id=context.trade.model_id
     preds_data=load_preds_data(model_id)
     clsLgbTrainer=LightgbmTrainer()
     preds=clsLgbTrainer.pred(preds_data,md5=model_id,save=False)
-
     g.preds=preds
+
+    run_daily(trade, time="19:30")
+    
+
 
 
 
 ## 交易函数
 def trade(context):
+    sync(context)
     if g.days%g.refresh_rate == 0:
         #print(context.portfolio.cash)
         sell_list = list(context.portfolio.positions.keys()) 
@@ -66,15 +68,21 @@ def trade(context):
         #print(stock_list)
         ## 买入股票
         for stock in stock_list:
-            if len(context.portfolio.positions.keys()) < g.stocknum:
+            n=0
+            # if len(context.portfolio.positions.keys()) < g.stocknum:
+            if True:
                 i=len(context.portfolio.positions.keys())+1
                 N=g.stocknum
                 a1=N
                 ai=N-(i-1)*(N/i)
                 Sn=N*N/2
                 wi=ai/Sn
-                order_value(stock, Cash*wi*10)
+                o=order_value(stock, Cash*wi*10)
                 #order_value(stock, Cash/(N-i+1))
+                if o==True:
+                    n=n+1
+                if n==g.stocknum:
+                    break 
 
         # 天计数加一
         g.days = 1

@@ -140,19 +140,20 @@ class Performance:
  
         i_values = (i_df.values.cumprod()).tolist()
         
-
         # 绘图
-        mplt.figure(figsize=(10, 5))  # 设置图像大小
-        mplt.plot(p_dates, p_values, color='red', marker='.', label=context['trade']['strategy'])
-        mplt.plot(i_dates, i_values, color='blue', marker='.', label=context.trade.benchmark)
-        mplt.xlabel("Date")
-        mplt.ylabel("Cumulative Return")
-        # 不显示图例
-        mplt.legend()  # 这行代码已经被注释掉，不会再显示图例
+        # 设置图表样式
+        plt.plotsize(100, 30)
+        plt.canvas_color("default")  # 设置透明背景
+        plt.ticks_color("default")  # 设置刻度颜色以匹配终端默认颜色
+        plt.axes_color("default") 
 
-        # 确保REPORTS_DIR变量是正确的路径，并且该路径存在
-        mplt.show()
-        
+        plt.plot(p_dates, p_values, marker='dot',label = context['trade']['strategy'])
+        plt.plot(i_dates, i_values, marker='dot',label = context.trade.benchmark)
+        plt.title("Daily Returns")
+        plt.xlabel("Date")
+        plt.ylabel("Return")
+        plt.grid(True)
+        plt.show()   
 
     def save_chart(context):
         p_df=context.performance.returns+1

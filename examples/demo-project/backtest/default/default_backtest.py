@@ -8,6 +8,8 @@ from runtime.constant import *
 from finhack.library.config import Config 
 import itertools
 import json
+import psutil
+import time
 class DefaultBacktest():
     def __init__(self):
         pass
@@ -15,6 +17,13 @@ class DefaultBacktest():
     def run_command_with_semaphore(self, cmd, semaphore):
         with semaphore:
             try:
+                available_memory=1
+                total_memory=100
+                #如果当前可用内存不足1/10
+                while available_memory/total_memory<0.1:
+                    time.sleep(10)
+                    total_memory = psutil.virtual_memory().total
+                    available_memory = psutil.virtual_memory().available
                 os.system(cmd)
             except Exception as e:
                 print(f'An error occurred: {e}')
@@ -23,9 +32,9 @@ class DefaultBacktest():
         Data.init_data(cache=True)
         cash_list = self.args.cash.split(',')
         strategy_list = self.args.strategy.split(',')
-        model_list = mydb.selectToDf('select * from auto_train order by score desc', 'finhack')
+        model_list = mydb.selectToDf('select * from auto_train order by rand()', 'finhack')
         
-        semaphore = multiprocessing.Semaphore(int(self.args.p))  # 创建一个信号量，最大允许p个进程同时运行
+        semaphore = multiprocessing.Semaphore(int(self.args.process))  # 创建一个信号量，最大允许process个进程同时运行
         # print(model_list)
         # exit()
 
@@ -68,17 +77,23 @@ class DefaultBacktest():
                     args_list = [dict(zip(split_values.keys(), combination)) for combination in product_combinations]
                     # 打印结果
                     for args in args_list:
+                        time.sleep(1)
+                        active_processes = len(multiprocessing.active_children())
+                        while active_processes>int(self.args.process):
+                            active_processes = len(multiprocessing.active_children())
+                            time.sleep(1)
+
                         cmd = f"finhack trader run --strategy={strategy_name} --log_level=ERROR --model_id={model_hash}  --cash={cash} --project_path={BASE_DIR} --args='{json.dumps(args)}'"
                         # 创建Process对象，传入函数和需要的参数，包括信号量
                         p = multiprocessing.Process(target=self.run_command_with_semaphore, args=(cmd, semaphore))
                         processes.append(p)
                         p.start()
     
-            # 等待当前model的所有进程完成
-            for p in processes:
-                p.join()
+            # # 等待当前model的所有进程完成
+            # for p in processes:
+            #     p.join()
     
             # 当前model的所有进程执行完毕，可以进行下一个model的处理
-            delete_preds_data(model_hash)
+            # delete_preds_data(model_hash)
     
      

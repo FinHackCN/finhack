@@ -8,6 +8,24 @@ class DictObj:
                 attr[key] = DictObj(value)
         self._attributes = attr
 
+
+    def __getstate__(self):
+        # 在序列化时调用，返回对象的状态
+        # 将所有 DictObj 实例转换为普通字典
+        state = self._attributes.copy()
+        for key, value in state.items():
+            if isinstance(value, DictObj):
+                state[key] = value.__getstate__()  # 递归调用以处理嵌套的 DictObj
+        return state
+
+    def __setstate__(self, state):
+        # 在反序列化时调用，使用保存的状态重新构建对象
+        # 将所有普通字典转换回 DictObj 实例
+        for key, value in state.items():
+            if isinstance(value, dict):
+                state[key] = DictObj(value)  # 递归调用以处理嵌套的字典
+        self._attributes = state
+
     def get(self, key, default=None):
         return self._attributes.get(key, default)
         

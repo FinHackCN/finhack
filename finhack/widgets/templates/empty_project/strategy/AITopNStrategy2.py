@@ -68,19 +68,25 @@ def trade(context):
         num_stocks_to_buy = min(g.stocknum - len(current_holdings), len(potential_buys))
         
         # 如果有股票需要买入
+        n=0
         if num_stocks_to_buy > 0:
             # 计算每只股票的买入资金
+            sync(context)
             cash_per_stock = context.portfolio.cash / num_stocks_to_buy
             # 买入股票
-            for i, row in potential_buys.head(num_stocks_to_buy).iterrows():
+            for i, row in potential_buys.iterrows():
                 stock_to_buy = row['ts_code']
                 # 如果股票不在当前持仓中，则买入
                 if stock_to_buy not in current_holdings:
-                    order_value(stock_to_buy, cash_per_stock)
+                    o=order_value(stock_to_buy, cash_per_stock)
+                    if o==True:
+                        n=n+1
+                    if n==num_stocks_to_buy:
+                        break
 
         # 更新交易日计数器
         g.days = 1
     else:
         # 如果不是调仓日，交易日计数器累加
         g.days += 1
-
+ 

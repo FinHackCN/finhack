@@ -3,7 +3,9 @@ from trader.qmt.dictobj import DictObj
 
 
 
-g=DictObj()
+g=DictObj({
+    'preds':None
+})
 
  
 context_attr= {
@@ -26,7 +28,7 @@ context_attr= {
                 'sliptype':'pricerelated',
                 'rule_list':''
             }),
-            'g':{},
+            'g':g,
             'account':DictObj({
                 'username':'',
                 'password':'',

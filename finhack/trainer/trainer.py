@@ -21,6 +21,7 @@ class Trainer:
         feature_list=feature_list[0]
         feature_list=feature_list.split(',')
         df=factorManager.getFactors(feature_list,start_date=start_date,end_date=end_date)
+        #print(df)
         df.reset_index(inplace=True)
         # df=df[df.trade_date>=start_date]
         # df=df[df.trade_date<=end_date]
