@@ -14,6 +14,7 @@ import os
 import pandas as pd
 from finhack.trainer.trainer import Trainer
 import shutil
+from finhack.trainer.lightgbm.lightgbm_trainer import LightgbmTrainer
 
 def init_context(args):
     args=args.__dict__
@@ -464,7 +465,7 @@ def log(message,level='info'):
     
 
 
-def load_preds_data(model_id,cache=False):
+def load_preds_data(model_id,cache=False,trainer='lightgbm',start_time="",end_time=""):
     pred_data_path=PREDS_DIR+f"model_{model_id}_pred.pkl"
     if cache==True:
         try:
@@ -473,12 +474,18 @@ def load_preds_data(model_id,cache=False):
                 return pred_data
         except Exception as e:
             pass
-    start_date=context.trade.start_time.replace("-",'')[0:8]
-    end_date=context.trade.end_time.replace("-",'')[0:8]
+
+    start_time=context.trade.start_time if start_time=="" else start_time
+    end_time=context.trade.end_time if end_time=="" else end_time
+    start_date=start_time.replace("-",'')[0:8]
+    end_date=end_time.replace("-",'')[0:8]
     preds_df=Trainer.getPredData(model_id,start_date,end_date)
+    clsLgbTrainer=LightgbmTrainer()
+    preds=clsLgbTrainer.pred(preds_df,md5=model_id,save=False)
+    del preds_df
     if cache==True:
-        preds_df.to_pickle(pred_data_path)
-    return preds_df
+        preds.to_pickle(pred_data_path)
+    return preds
     
 def delete_preds_data(model_id):
     pred_data_path=PREDS_DIR+f"model_{model_id}_pred.pkl"

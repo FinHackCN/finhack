@@ -137,6 +137,30 @@ class DefaultTestmodule():
                     print("-")
             except Exception as e:
                 print("/")
+
+    def run8():
+        from finhack.trainer.trainer import Trainer
+        from finhack.trainer.lightgbm.lightgbm_trainer import LightgbmTrainer
+        preds_df=Trainer.getPredData(model_id="04e084fda50a9c3813ee02fa245dc280",start_date="20200101",end_date="20240101")
+        clsLgbTrainer=LightgbmTrainer()
+        preds=clsLgbTrainer.pred(preds_df,md5=model_id,save=False)    
+        print(preds)
+
+    def run9(self):
+        import pickle
+
+        # 假设你有一个.pkl文件的路径
+        pkl_file_path = '/data/code/demo_project/data/preds/model_15bd82b2d1f19aa38d00c0f15404bf51_pred.pkl'
+
+        # 打开文件以进行读取（注意：以二进制模式读取）
+        with open(pkl_file_path, 'rb') as file:
+            # 使用pickle的load函数加载文件内容
+            data = pickle.load(file)
+
+        # 现在data包含了.pkl文件中的Python对象
+        print(data)
+
+
     def limit12(self):
         calendar=Calendar.get_calendar("2019-03-20 00:00:00","2024-03-20 00:00:00",market='astock')
         #print(calendar)
