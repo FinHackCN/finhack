@@ -33,9 +33,7 @@ def initialize(context):
     g.refresh_rate = int(context.get('args', {}).get('refresh_rate', 10))
 
     model_id=context.trade.model_id
-    preds_data=load_preds_data(model_id)
-    clsLgbTrainer=LightgbmTrainer()
-    preds=clsLgbTrainer.pred(preds_data,md5=model_id,save=False)
+    preds=load_preds_data(model_id)
     g.preds=preds
 
     run_daily(trade, time="19:30")

@@ -50,7 +50,7 @@ class LightgbmTrainer(Trainer):
 
     def auto(self):
         args = global_var.args
-        max_processes=int(args.p)
+        max_processes=int(args.process)
         
         processes = []
 
@@ -106,73 +106,6 @@ class LightgbmTrainer(Trainer):
                     if not p.is_alive():
                         break
 
-# class LightgbmTrainer(Trainer):
-#     def auto(self):
-#         args=global_var.args
-#         tracemalloc.start()
-#         while True:
-#                 try:
-#                     flist=factorManager.getFactorsList()
-#                     #print(flist)
-                    
-#                     random.shuffle(flist)
-#                     n=random.randint(int(args.min_f),int(args.max_f))
-#                     factor_list=[]
-#                     for i in range(0,n):
-#                         factor_list.append(flist.pop())
-#                     factor_list.sort()
-#                     df=factorManager.getFactors(factor_list=factor_list+['open','close'])
-#                     correlation_matrix = df.corr(numeric_only=True)
-#                     new_factor_list=[]
-#                     # 遍历每一对名称和相关系数
-#                     for factor in factor_list:
-#                         if factor in  ['open','close'] :
-#                             continue
-#                         append=True
-#                         for factor2 in new_factor_list:
-        
-#                             for column1, series in correlation_matrix.items():
-#                                 if column1!=factor:
-#                                     continue
-#                                 for column2, correlation in series.items():
-#                                     if column1==column2:
-#                                         continue
-#                                     if column2!=factor2:
-#                                         continue
-#                                     if abs(correlation)>0.7:
-#                                         append=False
-        
-#                         if append:
-#                             new_factor_list.append(factor)
-        
-                    
-#                     factor_list=new_factor_list
-        
-#                     self.start_train(
-#                         start_date=args.start_date,
-#                         valid_date=args.valid_date,
-#                         end_date=args.end_date,
-#                         features=factor_list,
-#                         label=args.label,
-#                         shift=int(args.shift),
-#                         param=json.loads(args.param) if args.param!='' else {},
-#                         loss=args.loss,
-#                         filter_name=args.filter_name,
-#                         replace=args.replace
-#                     )
-#                 except Exception as e:
-#                     print("error:"+str(e))
-#                     print("err exception is %s" % traceback.format_exc())
-                    
-#                 current_memory, peak_memory = tracemalloc.get_traced_memory()
-#                 print(f"Current memory usage: {round(current_memory / 10**9,2)} GB")
-#                 print(f"Peak memory usage: {round(peak_memory / 10**9,2)} GB")
-#                 snapshot = tracemalloc.take_snapshot()
-#                 #top_stats = snapshot.statistics('lineno')
-#                 # # 打印内存占用前十的变量
-#                 # for stat in top_stats[:3]:
-#                 #     print(stat)
-        
         
     def run(self):
         args=global_var.args

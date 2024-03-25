@@ -7,51 +7,51 @@ g=DictObj()
 
  
 context_attr= {
-            'id':'',
-            'universe':[],
-            'previous_date':None,
-            'current_dt':None,
-            'args':None,
+            'id':'', #本次运行的唯一id
+            'universe':[],    #universe，暂时没用到
+            'previous_date':None, #universe，上个交易日
+            'current_dt':None, #universe，当前交易日
+            'args':None, #执行策略时传入的参数
             'trade':DictObj({
-                'market':'',
-                'model_id':'',
+                'market':'',  #交易市场
+                'model_id':'',  #模型id
                 'start_time':'',
                 'end_time':'',
                 'benchmark':'000001',
-                'log_type':'',
-                'record_type':'',
-                'strategy':'',
-                'order_volume_ratio':1,
-                'slip':0,
-                'sliptype':'pricerelated',
-                'rule_list':''
+                'log_type':'',  #暂时没用到
+                'record_type':'',  #暂时没用到
+                'strategy':'',  #策略名称
+                'order_volume_ratio':1,   #最大成交比例
+                'slip':0,  #滑点
+                'sliptype':'pricerelated',  #滑点类型
+                'rule_list':''  #规则列表，(如涨跌停限制、最大笔数等)
             }),
         
             'account':DictObj({
                 'username':'',
                 'password':'',
                 'account_id':'',
-                'open_tax':0,
-                'close_tax':0.001,
-                'open_commission':0.0003,
-                'close_commission':0.0003,
-                'close_today_commission':0, 
-                'min_commission':5
+                'open_tax':0,  #买入税费
+                'close_tax':0.001,  #卖出税费
+                'open_commission':0.0003,  #买入手续费
+                'close_commission':0.0003,  #卖出手续费
+                'close_today_commission':0,   #当日卖出手续费
+                'min_commission':5  #最低手续费
                 
             }),
             
             'portfolio':DictObj({
                 'inout_cash':0,
-                'cash':0,
-                'transferable_cash':0,
+                'cash':0,  #现金
+                'transferable_cash':0,  #可交易现金，暂时没用到
                 'locked_cash':0,
                 'margin':0,
-                'total_value':0,
+                'total_value':0,  #总市值，和账户市值有些重复，目前以这个为主
                 'previous_value':0,
                 'returns':0,
                 'starting_cash':0,
-                'positions_value':0,
-                'portfolio_value':0,
+                'positions_value':0,  #持仓市值
+                'portfolio_value':0,  #账户市值
                 'locked_cash_by_purchase':0,
                 'locked_cash_by_redeem':0,
                 'locked_amound_by_redeen':0,
@@ -60,7 +60,7 @@ context_attr= {
                 }
             }),
             
-            'data':DictObj({
+            'data':DictObj({ #行情数据源等设置
                 'calendar':[],
                 'event_list':[],
                 'data_source':'file',
@@ -70,7 +70,7 @@ context_attr= {
                 'client':None
             }),
             
-            'logs':DictObj({
+            'logs':DictObj({  #这里主要是记录一些日志
                 'trade_list':[],
                 'order_list':[],
                 'position_list':[],
@@ -78,7 +78,7 @@ context_attr= {
                 'trade_returns':[],
                 'history':{}
             }),
-            'performance':DictObj({
+            'performance':DictObj({ #这个是策略的表现
                 'returns':[],
                 'bench_returns':[],
                 'turnover':[],
