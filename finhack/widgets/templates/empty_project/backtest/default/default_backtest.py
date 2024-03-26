@@ -12,6 +12,7 @@ import psutil
 import time
 import glob
 import gc
+import sys
 
 class DefaultBacktest():
     def __init__(self):
@@ -54,18 +55,17 @@ class DefaultBacktest():
         DefaultBacktest.del_model_if_idle()
         with semaphore:
             try:
-                available_memory=1
-                total_memory=100
-                #如果当前可用内存不足1/10
-                while available_memory/total_memory<0.1:
-                    time.sleep(10)
-                    total_memory = psutil.virtual_memory().total
-                    available_memory = psutil.virtual_memory().available
                 os.system(cmd)
             except Exception as e:
                 print(f'An error occurred: {e}')
 
     def run(self):
+        # 获取入口文件的完整路径
+        if hasattr(sys, 'frozen'):  # 特别检查，如果是使用 PyInstaller 等工具打包的可执行文件
+            entry_file_path = os.path.realpath(sys.executable)
+        else:
+            entry_file_path = os.path.realpath(sys.argv[0])
+
         Data.init_data(cache=True)
         cash_list = self.args.cash.split(',')
         strategy_list = self.args.strategy.split(',')
@@ -74,6 +74,7 @@ class DefaultBacktest():
         semaphore = multiprocessing.Semaphore(int(self.args.process))  # 创建一个信号量，最大允许process个进程同时运行
         # print(model_list)
         # exit()
+
 
         for row in model_list.itertuples():
             model_hash = getattr(row, 'hash')
@@ -90,11 +91,11 @@ class DefaultBacktest():
 
             cfgTrade=Config.get_config('args','trader')
 
-            p = multiprocessing.Process(target=load_preds_data, args=(model_hash, True, 'lightgbm', cfgTrade['start_time'], cfgTrade['end_time']))
+            pt = multiprocessing.Process(target=load_preds_data, args=(model_hash, True, 'lightgbm', cfgTrade['start_time'], cfgTrade['end_time']))
             # 启动进程
-            p.start()
+            pt.start()
             # 等待进程完成
-            p.join()           
+            pt.join()           
             # preds=load_preds_data(model_id=model_hash, cache=True,trainer='lightgbm',start_time=cfgTrade['start_time'],end_time=cfgTrade['end_time'])
             # del preds
 
@@ -122,11 +123,15 @@ class DefaultBacktest():
                     for args in args_list:
                         time.sleep(1)
                         active_processes = len(multiprocessing.active_children())
-                        while active_processes>int(self.args.process):
-                            active_processes = len(multiprocessing.active_children())
+                        available_memory=1
+                        total_memory=100
+                        while  available_memory/total_memory<0.1 or active_processes>int(self.args.process):
                             time.sleep(1)
-
-                        cmd = f"finhack trader run --strategy={strategy_name} --log_level=ERROR --model_id={model_hash}  --cash={cash} --project_path={BASE_DIR} --args='{json.dumps(args)}'"
+                            active_processes = len(multiprocessing.active_children())
+                            total_memory = psutil.virtual_memory().total
+                            available_memory = psutil.virtual_memory().available
+                            #print(available_memory/total_memory)
+                        cmd = f"{entry_file_path} trader run --strategy={strategy_name} --log_level=ERROR --model_id={model_hash}  --cash={cash} --project_path={BASE_DIR} --args='{json.dumps(args)}'"
                         # 创建Process对象，传入函数和需要的参数，包括信号量
                         p = multiprocessing.Process(target=self.run_command_with_semaphore, args=(cmd, semaphore))
                         processes.append(p)

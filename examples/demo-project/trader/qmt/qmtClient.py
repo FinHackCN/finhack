@@ -102,8 +102,8 @@ class qmtClient():
     def OrderBuy(self,code, amount, price=0, strategy='strategy', remark='remark'):
         try:
             Log.logger.info(f"向qmtServer下单买入{code}共{amount}股，单价{price}]")
-            # response=self.stub.OrderBuy(qmt_pb2.OrderRequest(code=code, amount=amount, price=price, strategy=strategy, remark=remark))
-            # seq=self.protobuf_to_dict(response)
+            response=self.stub.OrderBuy(qmt_pb2.OrderRequest(code=code, amount=amount, price=price, strategy=strategy, remark=remark))
+            seq=self.protobuf_to_dict(response)
             return seq['seq']
         except grpc._channel._InactiveRpcError as e:
             Log.logger.error(f"RPC failed: {e.code()}")
@@ -116,8 +116,8 @@ class qmtClient():
     def OrderSell(self,code, amount, price=0, strategy='strategy', remark='remark'):
         try:
             Log.logger.info(f"向qmtServer下单卖出{code}共{amount}股，单价{price}")
-            # response=self.stub.OrderSell(qmt_pb2.OrderRequest(code=code, amount=amount, price=price, strategy=strategy, remark=remark))
-            # seq=self.protobuf_to_dict(response)
+            response=self.stub.OrderSell(qmt_pb2.OrderRequest(code=code, amount=amount, price=price, strategy=strategy, remark=remark))
+            seq=self.protobuf_to_dict(response)
             return seq
         except grpc._channel._InactiveRpcError as e:
             Log.logger.error(f"RPC failed: {e.code()}")
@@ -166,9 +166,7 @@ class qmtClient():
 
     def getAsset(self):
         try:
-            print(111111111)
             response=self.stub.GetAsset(qmt_pb2.AssetRequest())
-            print(222222222)
             asset=self.protobuf_to_dict(response)
             return asset
         except grpc._channel._InactiveRpcError as e:
