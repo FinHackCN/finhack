@@ -125,7 +125,7 @@ class Rules():
 
     #非主板
     def rule_mainboard(self):
-        if self.order.price!=None and not self.order.code.startswith(('600', '601', '603','000')):
+        if self.order.price!=None and not self.order.code.startswith(('600', '601', '603','000','002')):
             self.order.filled=0
             self.log(f"{self.order.code}非主板，不买入！",'warning')     
             return False

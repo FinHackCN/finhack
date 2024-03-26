@@ -15,7 +15,7 @@ from trader.qmt.context import context,g
 from datetime import datetime
 
 
-#finhack trader run --model_id=4367901764ca783755ed8ccb19504bb7 --strategy=QMTStrategy --vendor=qmt
+#finhack trader run --model_id=f7fd6531b6ec1ad6bc884ec5c6faeedb --strategy=ChatgptAIStrategy --vendor=qmt
 
 class QmtTrader:
     def load_strategy(self,strategy_name):

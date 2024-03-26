@@ -7,7 +7,7 @@ from finhack.factor.default.factorManager import factorManager
 from finhack.market.astock.astock import AStock
 from finhack.trainer.trainer import Trainer
 from finhack.trainer.lightgbm.lightgbm_trainer import LightgbmTrainer
-
+#finhack trader run --strategy=ChatgptAIStrategy --args='{"model_id":"b6ae6db48944caf7f0138452701bcdd1",stocknum:5, refresh_rate:3}' --cash=20000
 # 初始化函数
 def initialize(context):
     # 设定基准
@@ -88,8 +88,14 @@ def trade(context):
             g.days += 1
             return 
         cash_per_stock = context.portfolio.cash / num_stocks_to_buy
-        for stock in stock_list[:num_stocks_to_buy]:
+        successed=0
+        for stock in stock_list:
             if should_buy(stock, context):
-                order_value(stock, cash_per_stock)
+                status=order_value(stock, cash_per_stock)
+                if status:
+                    successed=successed+1
+                if successed>=num_stocks_to_buy:
+                    break
+
                 
     g.days += 1

@@ -70,11 +70,11 @@ def init_context(args):
         client = redis.Redis(connection_pool=redisPool) 
         context.data.client=client
     
-    context_json = str(args)+str(context['trade'])+str(context['account'])+str(context['portfolio']['cash'])
+    context_json = str(args)+str(context['trade'])+str(context['account'])
     hash_value = hashlib.md5(context_json.encode()).hexdigest()
     context.id=hash_value
-    # qclient.assetSync(context)
-    # qclient.positionSync(context)
+    qclient.assetSync(context)
+    qclient.positionSync(context)
 
 
 def set_benchmark(code):
