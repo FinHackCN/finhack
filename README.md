@@ -2,7 +2,7 @@
 ## 项目介绍
 <div>FinHack®, an easily extensible quantitative finance framework, integrates a complete workflow for quantitative investment research in its current version, including data collection, factor computation, factor mining, factor analysis, machine learning, strategy development, and quantitative backtesting. In later stages, it will expand to include more data sources, trading instruments, analytical tools, and practical plugins, aiming to create an open, customizable, and high-level quantitative finance framework to aid Quants and researchers in related fields with their financial research work.</div>
 <br/>
-FinHack®，一个易于拓展的量化金融框架，它在当前版本中集成了<B>数据采集、因子计算、因子挖掘、因子分析、机器学习、策略编写、量化回测</B>等全流程的量化投研工作，后期它将拓展出更多的数据源、交易品种与分析工具与实用插件(如WebUI、实盘接入、插件商城等)，力求打造一个开放的、可定制的、高水平的量化金融框架，助力广大Quant与相关学科工作者的金融研究工作。
+FinHack®，一个易于拓展的量化金融框架，它在当前版本中集成了<B>数据采集、因子计算、因子挖掘、因子分析、机器学习、策略编写、量化回测、实盘接入</B>等全流程的量化投研工作，后期它将拓展出更多的数据源、交易品种与分析工具与实用插件，力求打造一个开放的、可定制的、高水平的量化金融框架，助力广大Quant与相关学科工作者的金融研究工作。
 
 ## 项目特点
 - 良好的拓展性，包括但不限于拓展自己的数据源、因子、AI模型、量化策略以及回测规则
@@ -34,3 +34,7 @@ FinHack®，一个易于拓展的量化金融框架，它在当前版本中集�
 ![image](https://github.com/FinHackCN/finhack/assets/6196607/74e12eae-93fb-487c-a43f-92c79c8f75d6)
 ![image](https://github.com/FinHackCN/finhack/assets/6196607/19ce463e-9323-4f28-982b-17298c53e1d7)
 
+## 实盘接入
+![image](https://github.com/FinHackCN/finhack/assets/6196607/6bafbb9d-0798-4623-bddb-ae5d4f7e2fba)
+![image](https://github.com/FinHackCN/finhack/assets/6196607/d84e4f1a-d950-49f6-afd9-c3632fe563d0)
+![image](https://github.com/FinHackCN/finhack/assets/6196607/eacc7656-7161-4a81-8d1a-0a22cf85a76d)
