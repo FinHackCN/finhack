@@ -102,6 +102,7 @@ message PositionDetail {
     double open_price = 4;
     double market_value = 5;
     int32 frozen_volume = 6;
+    double avg_price = 7;
 }
 
 

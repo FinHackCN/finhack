@@ -1,8 +1,6 @@
 from trader.qmt.dictobj import DictObj
 
 
-
-
 g=DictObj({
     'preds':None
 })

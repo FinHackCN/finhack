@@ -72,9 +72,13 @@ def init_context(args):
     
     context_json = str(args)+str(context['trade'])+str(context['account'])
     hash_value = hashlib.md5(context_json.encode()).hexdigest()
-    context.id=hash_value
+    if args['id']!='':
+        context.id=args['id']
+    else:
+        context.id=hash_value
     qclient.assetSync(context)
     qclient.positionSync(context)
+
 
 
 def set_benchmark(code):
@@ -169,10 +173,10 @@ def order_value(security, value, style=None, side='long', pindex=0, close_today=
         return  False
     if value>0:
         amount=int(value/price)
-        return order_buy(security,amount)
+        return order_buy(security,amount,0)
     elif value<0:
         amount=-int(value/price)
-        return order_sell(security,amount)
+        return order_sell(security,amount,0)
         
 
 # #目标股数下单

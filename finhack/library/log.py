@@ -16,7 +16,7 @@ class tLog():
         log_path=logs_dir+"/trader/"+id+'.log'
         #logger.remove(handler_id=None) 
         fmt = "{message}"
-        logger.add(log_path, level=level, format=fmt, filter=lambda record: record["extra"].get("trader") == "core")
+        logger.add(log_path, level=level, format=fmt, filter=lambda record: record["extra"].get("name") == "trader")
         
         if background==False:
             logger.add(sys.stderr, level=level, format=fmt, filter=lambda record: record["extra"].get("name") == "trader")

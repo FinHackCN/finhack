@@ -1,3 +1,6 @@
+'''
+finhack trader run --strategy=QMTStrategy --args='{"model_id":"f7fd6531b6ec1ad6bc884ec5c6faeedb"}'
+'''
 import numpy as np
 import datetime
 import os
@@ -7,7 +10,7 @@ from finhack.factor.default.factorManager import factorManager
 from finhack.market.astock.astock import AStock
 from finhack.trainer.trainer import Trainer
 from finhack.trainer.lightgbm.lightgbm_trainer import LightgbmTrainer
-#finhack trader run --strategy=ChatgptAIStrategy --args='{"model_id":"b6ae6db48944caf7f0138452701bcdd1",stocknum:5, refresh_rate:3}' --cash=20000
+
 # 初始化函数
 def initialize(context):
     # 设定基准
@@ -35,7 +38,10 @@ def initialize(context):
     g.days = 0  # 交易日计时器
     
     # 每日运行
-    run_daily(trade, time="09:30")
+    run_daily(trade, time="15:30")
+    run_daily(trade, time="15:40")
+    run_daily(trade, time="15:50")
+    run_daily(trade, time="15:55")
 
 # 动态调整策略参数
 def adjust_dynamic_parameters(context):
@@ -78,7 +84,8 @@ def trade(context):
     # 卖出逻辑
     for stock in list(context.portfolio.positions.keys()):
         if should_sell(stock, context):
-            order_target_value(stock, 0)
+            print(f"should_sell:{stock}")
+            # order_target_value(stock, 0)
     
     # 买入逻辑
     if g.days % g.refresh_rate == 0:
@@ -90,12 +97,13 @@ def trade(context):
         cash_per_stock = context.portfolio.cash / num_stocks_to_buy
         successed=0
         for stock in stock_list:
-            if should_buy(stock, context):
-                status=order_value(stock, cash_per_stock)
-                if status:
-                    successed=successed+1
-                if successed>=num_stocks_to_buy:
-                    break
+            print(f"should_buy:{stock},{cash_per_stock}")
+            # if should_buy(stock, context):
+            #     status=order_value(stock, cash_per_stock)
+            #     if status:
+            #         successed=successed+1
+            #     if successed>=num_stocks_to_buy:
+            #         break
 
                 
     g.days += 1

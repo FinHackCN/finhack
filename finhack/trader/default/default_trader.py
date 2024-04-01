@@ -29,10 +29,8 @@ class DefaultTrader:
         pass    
     
     
-    
-    def show(self):
-        # 查询数据库中存储的数据
-        sql = 'SELECT * FROM backtest WHERE instance_id="%s"' % (self.args.id)
+    def get(id):
+        sql = 'SELECT * FROM backtest WHERE instance_id="%s"' % (id)
         result = mydb.selectToDf(sql, 'finhack')
 
         if not result.empty:
@@ -41,11 +39,13 @@ class DefaultTrader:
 
             # 还原 trade 相关的字段
             context.trade.model_id = row['model']
+            context.args= row['args']
             context.trade.strategy = row['strategy']
             context.trade.start_time = row['start_date']
             context.trade.end_time = row['end_date']
             context.trade.benchmark = row['benchmark']
             context.trade.strategy_code = row['strategy_code']
+            context.features_list=row['features_list']
 
             # 还原 portfolio 相关的字段
             context.portfolio.starting_cash = row['init_cash']
@@ -80,16 +80,26 @@ class DefaultTrader:
 
             context.performance.returns = pd.DataFrame(context.performance.returns, index=calendar)
             context.performance.bench_returns = pd.DataFrame(context.performance.bench_returns, index=calendar)
+            return context
+        else:
+            return False
 
 
+
+    
+    def show(self):
+        # 查询数据库中存储的数据
+        if context:
+            context=DefaultTrader.get(self.args.id)
+            print("数据已从数据库查询并还原到 context 变量中。")
             Performance.show_chart(context)
             Performance.show_table(context)
             context.trade.strategy_code="..."
-            print(context.trade)
-            print("数据已从数据库查询并还原到 context 变量中。")
         else:
             print("未找到与当前实例ID相匹配的数据记录。")
     
+
+        
     
     def run_trader(self, args):
         with self.semaphore:
@@ -128,6 +138,8 @@ class DefaultTrader:
     def run(self,args=None):
         if args!=None:
             self.args=args
+        else:
+            args=self.args.__dict__
         t1=time.time()
         starttime=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         init_context(self.args)
@@ -138,7 +150,7 @@ class DefaultTrader:
 
         hassql='select id from backtest where instance_id="%s"' % (context.id)
         has=mydb.selectToDf(hassql,'finhack')
-        if(not has.empty): 
+        if(not has.empty and args['replace'].lower()[0:1]!="t"): 
             log("存在相同回测记录，本次回测结束！")
             return  
 

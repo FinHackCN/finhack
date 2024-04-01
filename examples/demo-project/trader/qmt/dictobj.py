@@ -18,6 +18,7 @@ class DictObj:
                 state[key] = value.__getstate__()  # 递归调用以处理嵌套的 DictObj
         return state
 
+
     def __setstate__(self, state):
         # 在反序列化时调用，使用保存的状态重新构建对象
         # 将所有普通字典转换回 DictObj 实例
