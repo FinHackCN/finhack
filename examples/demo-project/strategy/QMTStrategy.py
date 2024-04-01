@@ -1,6 +1,3 @@
-'''
-finhack trader run --strategy=QMTStrategy --args='{"model_id":"f7fd6531b6ec1ad6bc884ec5c6faeedb"}'
-'''
 import numpy as np
 import datetime
 import os
@@ -10,7 +7,7 @@ from finhack.factor.default.factorManager import factorManager
 from finhack.market.astock.astock import AStock
 from finhack.trainer.trainer import Trainer
 from finhack.trainer.lightgbm.lightgbm_trainer import LightgbmTrainer
-
+#finhack trader run --strategy=ChatgptAIStrategy --args='{"model_id":"b6ae6db48944caf7f0138452701bcdd1",stocknum:5, refresh_rate:3}' --cash=20000
 # 初始化函数
 def initialize(context):
     # 设定基准
@@ -38,7 +35,8 @@ def initialize(context):
     g.days = 0  # 交易日计时器
     
     # 每日运行
-    run_daily(trade, time="09:50")
+    run_daily(trade_open, time="09:30")
+    run_daily(trade_close, time="14:57")
 
 # 动态调整策略参数
 def adjust_dynamic_parameters(context):
@@ -53,10 +51,6 @@ def select_stocks(context):
     preds_data=g.preds
     # 筛选今日预测数据，并排序
     pred_today = preds_data[preds_data['trade_date'] == now_date]
-
-    print(preds_data)
-    print(pred_today)
-
     pred_today_sorted = pred_today.sort_values(by='pred', ascending=False)
     
     # 返回股票列表
@@ -78,16 +72,15 @@ def should_buy(stock, context):
     # 此处可加入财务指标、技术指标等筛选条件，示例留空
     return True
 
-# 交易逻辑
-def trade(context):
-    sync(context)
+# 开盘逻辑
+def trade_open(context):
     adjust_dynamic_parameters(context)
     
     # 卖出逻辑
     for stock in list(context.portfolio.positions.keys()):
         if should_sell(stock, context):
             order_target_value(stock, 0)
-    sync(context)
+    
     # 买入逻辑
     if g.days % g.refresh_rate == 0:
         stock_list = select_stocks(context)
@@ -96,8 +89,24 @@ def trade(context):
             g.days += 1
             return 
         cash_per_stock = context.portfolio.cash / num_stocks_to_buy
-        for stock in stock_list[:num_stocks_to_buy]:
+        successed=0
+        for stock in stock_list:
             if should_buy(stock, context):
-                order_value(stock, cash_per_stock)
+                status=order_value(stock, cash_per_stock)
+                if status:
+                    successed=successed+1
+                if successed>=num_stocks_to_buy:
+                    break
+
                 
     g.days += 1
+
+
+# 盘尾逻辑
+def trade_close(context):
+    adjust_dynamic_parameters(context)
+    
+    # 卖出逻辑
+    for stock in list(context.portfolio.positions.keys()):
+        if should_sell(stock, context):
+            order_target_value(stock, 0)

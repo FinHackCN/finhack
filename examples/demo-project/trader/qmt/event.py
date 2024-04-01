@@ -2,6 +2,7 @@ from trader.qmt.data import Data
 import finhack.library.log as Log
 from trader.qmt.function import *
 import pandas as pd
+from datetime import datetime, timedelta
 from finhack.trainer.trainer import Trainer
 from finhack.trainer.lightgbm.lightgbm_trainer import LightgbmTrainer
 class Event:
@@ -20,7 +21,7 @@ class Event:
         event['astock']={
             'start_interval':'00:00:00',
             # 'before_market':'09:00:00',
-            'before_market':'19:23:00',
+            'before_market':'09:10:00',
             'pre_opening_start':'09:15:00',
             'pre_opening_end':'09:20:00',
             'matching_start':'09:25:00',
@@ -69,11 +70,14 @@ class Event:
         
 
     def before_market(context):
+        # 获取今天的日期
+        today = datetime.today().strftime('%Y%m%d')
+        # 获取今天前三天的日期
+        thirty_days_ago = (datetime.today() - timedelta(days=30)).strftime('%Y%m%d')
         model_id=context.trade.model_id
-        preds_data=load_preds_data(model_id)
-        clsLgbTrainer=LightgbmTrainer()
-        preds=clsLgbTrainer.pred(preds_data,md5=model_id,save=False)
+        preds=load_preds_data(model_id=model_id,start_time=thirty_days_ago,end_time=today)
         context.g.preds=preds
+        return True
   
 
 

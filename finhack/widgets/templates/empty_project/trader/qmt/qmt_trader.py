@@ -1,7 +1,7 @@
 from runtime.constant import *
 import runtime.global_var as global_var
 from finhack.library.class_loader import ClassLoader
-import pickle
+import cloudpickle as pickle
 import sys
 import os
 import importlib
@@ -11,9 +11,9 @@ from trader.qmt.event import Event
 from trader.qmt.data import Data
 from trader.qmt.function import *
 from trader.qmt.object import *
-from trader.qmt.context import context,g
+from trader.qmt.context import context
 from datetime import datetime
-
+import time
 
 #finhack trader run --model_id=f7fd6531b6ec1ad6bc884ec5c6faeedb --strategy=ChatgptAIStrategy --vendor=qmt
 
@@ -33,14 +33,14 @@ class QmtTrader:
     def save_context(self,context):
         context_id=context.id
         running_dir = RUNNING_DIR
-        event_list_tmp=context.data.event_list
+        # event_list_tmp=context.data.event_list
         preds_tmp=context.g.preds
         context.g.preds=None
-        context.data.event_list=[]
+        #context.data.event_list=[]
         context_file_path = os.path.join(running_dir, f"{context_id}.pkl")
         with open(context_file_path, 'wb') as context_file:
             pickle.dump(context, context_file)
-        context.data.event_list=event_list_tmp
+        # context.data.event_list=event_list_tmp
         context.g.preds=preds_tmp
         Log.logger.info(f"Context saved to {context_file_path}")
 
@@ -60,9 +60,9 @@ class QmtTrader:
 
     def run(self,args=None):
         global context
-        global g
         if args!=None:
             self.args=args
+
         t1=time.time()
         starttime=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         init_context(self.args)
@@ -88,7 +88,7 @@ class QmtTrader:
         log("正在加载交易策略")
         strategy=self.load_strategy(context['trade']['strategy'])
         context['data']['calendar']=calendar
-        event_list=Event.load_event(context,start_time,end_time)
+        
  
         
         log("正在绑定交易对象")
@@ -97,7 +97,7 @@ class QmtTrader:
         log("正在绑定交易动作")
         bind_action(strategy)
         strategy.log=Log.logger
-        strategy.g=g
+        strategy.g=context.g
 
         
  
@@ -105,6 +105,7 @@ class QmtTrader:
         if loaded_context is not None:
             pass
         else:
+            event_list=Event.load_event(context,start_time,end_time)
             strategy.initialize(context)
 
         self.save_context(context)
@@ -114,8 +115,12 @@ class QmtTrader:
             event_time = datetime.strptime(event['event_time'], '%Y-%m-%d %H:%M:%S')
             current_time = datetime.now()  # 去除毫秒部分
             context.current_dt=current_time
+
             # 如果 event_time 比当前时间晚，则将事件放回列表并等待
             if event_time > current_time:
+                # time.sleep(1)
+                # print(event)
+                # continue
                 context.data.event_list.insert(0, event)  # 将事件放回列表
                 time_to_wait = (event_time - current_time).total_seconds()
                 print(f"下次事件时间{event_time}，将在{time_to_wait}秒后执行，正在sleep等待…")
@@ -129,7 +134,6 @@ class QmtTrader:
                     print(current_time)
                     print(event)
                     strategy.sync(context)
-                    print('xxx')
                     event['event_func'](context)  # 执行事件函数
                 else:
                     continue  # 如果时间早于当前时间超过10秒，则跳过此事件

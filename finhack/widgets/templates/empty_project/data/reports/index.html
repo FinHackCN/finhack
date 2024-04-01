@@ -33,6 +33,7 @@
                 <th>最大回撤</th>
                 <th>交易次数</th>
                 <th>胜率</th>
+                <th>详情</th>
                 
             </tr>
         </thead>
@@ -51,6 +52,7 @@
                 <td>{{ (item.max_down * 100)  | round(2) }}%</td>
                 <td>{{ item.trade_num }}</td>
                 <td>{{ (item.win/item.trade_num*100) | round(2)}}%</td>
+                <td width="10%"><a href="/detail?id={{ item.instance_id }}" target="_blank">详情</td>
             </tr>
             {% endfor %}
         </tbody>

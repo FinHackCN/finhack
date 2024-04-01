@@ -57,7 +57,7 @@ class qmtClient():
                 "amount":pos['volume'],
                 "enable_amount":pos['can_use_volume'],
                 "last_sale_price":pos['open_price'],
-                "cost_basis":0,
+                "cost_basis":pos['avg_price'],
                 "total_value":pos['market_value'],
             }
         context['portfolio']['positions']=positions

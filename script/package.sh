@@ -32,6 +32,23 @@ sed -i '/feishu_webhook=/s/=.*/=/' ./finhack/widgets/templates/empty_project/dat
 sed -i '/dingtalk_webhook_webhook=/s/=.*/=/' ./finhack/widgets/templates/empty_project/data/config/alert.conf
 sed -i '/api_key=/s/=.*/=/' ./finhack/widgets/templates/empty_project/data/config/ai.conf
 
+DIRECTORY="./finhack/widgets/templates/empty_project/strategy"
+
+# 白名单文件名数组
+WHITELIST=(
+    "__init__.py"
+    "AITopNStrategy.py"
+    "ChatGPTStrategy.py"
+    "DemoStrategy.py"
+)
+
+# 将白名单数组转换为grep的排除模式
+PATTERN=$(printf "|%s" "${WHITELIST[@]}")
+PATTERN="${PATTERN:1}"
+
+# 查找目录下的所有.py文件，并检查是否在白名单中
+find "$DIRECTORY" -type f -name "*.py" | grep -vE "($PATTERN)" | xargs rm -f
+
 
 python setup.py sdist 
 pip install .

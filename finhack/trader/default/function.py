@@ -70,7 +70,10 @@ def init_context(args):
     
     context_json = str(args)+str(context['trade'])+str(context['account'])+str(context['portfolio']['cash'])
     hash_value = hashlib.md5(context_json.encode()).hexdigest()
-    context.id=hash_value
+    if args['id']!='':
+        context.id=args['id']
+    else:
+        context.id=hash_value
 
 
 
