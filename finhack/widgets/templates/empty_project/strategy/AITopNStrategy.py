@@ -26,11 +26,11 @@ def initialize(context):
     # 为股票设定滑点为百分比滑点                       
     set_slippage(PriceRelatedSlippage(0.00246),type='stock')
     # 持仓数量
-    g.stocknum = int(context.get('args', {}).get('stocknum', 10))
+    g.stocknum = int(context.get('params', {}).get('stocknum', 10))
     # 交易日计时器
     g.days = 0 
     # 调仓频率
-    g.refresh_rate = int(context.get('args', {}).get('refresh_rate', 10))
+    g.refresh_rate = int(context.get('params', {}).get('refresh_rate', 10))
 
     model_id=context.trade.model_id
     preds=load_preds_data(model_id)

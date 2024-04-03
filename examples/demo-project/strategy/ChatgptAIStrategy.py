@@ -26,8 +26,8 @@ def initialize(context):
     g.preds=preds_data
 
     # 全局变量初始化
-    g.stock_num = int(context.get('args', {}).get('stocknum', 10))  # 持仓股票数量
-    g.refresh_rate = int(context.get('args', {}).get('refresh_rate', 10))  # 调仓频率，动态调整
+    g.stock_num = int(context.get('params', {}).get('stocknum', 10))  # 持仓股票数量
+    g.refresh_rate = int(context.get('params', {}).get('refresh_rate', 10))  # 调仓频率，动态调整
     g.max_drawdown_limit = 0.2  # 最大回撤限制
     g.max_portfolio_exposure = 0.95  # 最大投资组合暴露度
     g.stop_loss_threshold = 0.95  # 止损阈值

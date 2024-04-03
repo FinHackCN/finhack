@@ -19,7 +19,7 @@ from finhack.trainer.lightgbm.lightgbm_trainer import LightgbmTrainer
 def init_context(args):
     args=args.__dict__
     
-    context['args']=args['args']
+    context['params']=args['params']
     context['trade']['market']=args['market']
     context['trade']['start_time']=args['start_time']
     context['trade']['end_time']=args['end_time']
@@ -29,13 +29,13 @@ def init_context(args):
     with open(strategy_path, 'r', encoding='utf-8') as file:
         context['trade']['strategy_code'] = file.read()
 
-    if args['args']!=None and args['args']!='':
-        aargs=json.loads(args['args'])
-        context['args']=aargs
-        if 'model_id' in aargs:
-            context['trade']['model_id']=aargs['model_id']
+    if args['params']!=None and args['params']!='':
+        params=json.loads(args['params'])
+        context['params']=params
+        if 'model_id' in params:
+            context['trade']['model_id']=params['model_id']
     else:
-        context['args']={}
+        context['params']={}
     if args['model_id']!='':
         context['trade']['model_id']=args['model_id']
 

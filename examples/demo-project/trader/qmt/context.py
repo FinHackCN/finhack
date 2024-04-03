@@ -11,7 +11,7 @@ context_attr= {
             'universe':[],
             'previous_date':None,
             'current_dt':None,
-            'args':None,
+            'params':None,
             'trade':DictObj({
                 'market':'',
                 'model_id':'',

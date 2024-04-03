@@ -20,14 +20,26 @@ from finhack.library.ai import AI
 
 
 class factorMining():
+
+    def kimi(prompt,model,stock_list):
+        return factorMining.openai(prompt,model,stock_list,'kimi')
+        pass
+
     def gpt(prompt,model,stock_list):
+        return factorMining.openai(prompt,model,stock_list,'gpt')
+        pass
+
+    def openai(prompt,model,stock_list,s="gpt"):
         
         flist=factorManager.getFactorsList()+['open','high','low','close','amount','volume','vwap','returns']
         
         while True:
             print("本批次alpha公式生成中...\n")
             prompt=AI.load_prompt('autoalpha')
-            res=AI.ChatGPT(prompt,model)
+            if s=="gpt":
+                res=AI.ChatGPT(prompt,model)
+            elif s=="kimi":
+                res=AI.Kimi(prompt,model)
             lines = res.splitlines()
             alphas = [line for line in lines if '$' in line and '(' in line]
             # 遍历列表，逐行输出
@@ -62,6 +74,8 @@ class factorMining():
 
                 factorAnalyzer.analys('alpha',df=merged_df,formula=alpha,source='chatgpt',table='factors_mining',ignore_error=True)
                 #print("\n")
+
+
 
     def gplearn(train,label,_df_tmp,df_check,source='gplearn'):
         df_tmp=_df_tmp

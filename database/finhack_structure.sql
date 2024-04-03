@@ -59,7 +59,7 @@ CREATE TABLE `backtest` (
   `start_date` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci DEFAULT NULL,
   `end_date` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci DEFAULT NULL,
   `init_cash` double(100,5) DEFAULT NULL,
-  `args` mediumtext CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci,
+  `params` mediumtext CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci,
   `history` mediumtext CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci,
   `returns` mediumtext CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci,
   `logs` mediumtext CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci,
@@ -93,7 +93,7 @@ CREATE TABLE `backtest` (
   `strategy_code` text,
   PRIMARY KEY (`id`),
   UNIQUE KEY `instence_id` (`instance_id`)
-) ENGINE=InnoDB AUTO_INCREMENT=410817 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=411731 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -168,7 +168,7 @@ CREATE TABLE `factors_mining` (
   `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   UNIQUE KEY `hash` (`hash`(32)) USING BTREE
-) ENGINE=InnoDB AUTO_INCREMENT=33135 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=33145 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 /*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;
 
@@ -180,4 +180,4 @@ CREATE TABLE `factors_mining` (
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
--- Dump completed on 2024-04-01 10:04:28
+-- Dump completed on 2024-04-03 10:20:33

@@ -11,7 +11,7 @@ context_attr= {
             'universe':[],    #universe，暂时没用到
             'previous_date':None, #universe，上个交易日
             'current_dt':None, #universe，当前交易日
-            'args':None, #执行策略时传入的参数
+            'params':None, #执行策略时传入的参数
             'trade':DictObj({
                 'market':'',  #交易市场
                 'model_id':'',  #模型id
@@ -26,7 +26,7 @@ context_attr= {
                 'sliptype':'pricerelated',  #滑点类型
                 'rule_list':''  #规则列表，(如涨跌停限制、最大笔数等)
             }),
-        
+            'g':g,
             'account':DictObj({
                 'username':'',
                 'password':'',

@@ -33,3 +33,27 @@ class AI:
             model=model
         )
         return chat_completion.choices[0].message.content 
+
+
+    def Kimi(prompt,model=""):
+        cfgAI=Config.get_config('ai','kimi')
+        
+        if model=="":
+            model=cfgAI['model']
+        
+        client = OpenAI(
+            base_url=cfgAI['base_url'],
+            api_key=cfgAI['api_key'],
+            max_retries=int(cfgAI['max_retries'])
+        )
+        
+        chat_completion = client.chat.completions.create(
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt,
+                }
+            ],
+            model=model
+        )
+        return chat_completion.choices[0].message.content 

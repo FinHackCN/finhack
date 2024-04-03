@@ -93,6 +93,18 @@ finhack -h
                 for arg,default in my_args_list.items():
                     args_list[arg]=default
 
+        #model.conf [args]
+        my_args_list=Config.get_config(args.module,'args')
+        for arg,default in my_args_list.items():
+            args_list[arg]=default
+
+
+        #model.conf [args.section]
+        if args.section!=None and args.section!='':
+            my_args_list=Config.get_config(args.module,args.section)
+            for arg,default in my_args_list.items():
+                args_list[arg]=default
+
 
         for arg,default in args_list.items():
                 group = self.parser.add_argument_group(my_args_group)
@@ -180,6 +192,7 @@ finhack -h
         parser.add_argument("--background",  default=False, action='store_true', help="是否在后台运行")
         parser.add_argument('--project_path',metavar='', help='项目路径')
         parser.add_argument("--vendor",  metavar='',  help="模块的供给侧")
+        parser.add_argument("--section",  metavar='',  help="配置文件section")
         self.parser=parser
         return parser
         

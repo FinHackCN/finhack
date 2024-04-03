@@ -103,6 +103,10 @@ class DefaultFactor:
         elif method.lower()=="gpt" or method.lower()=="chatgpt":
             factorMining.gpt(self.args.prompt,self.args.model,stock300)
         
+
+        elif method.lower()=="kimi":
+            factorMining.kimi(self.args.prompt,self.args.model,stock300)
+
     def calc(self):
         formula=self.args.formula
         print(formula)
