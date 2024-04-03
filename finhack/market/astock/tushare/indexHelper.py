@@ -1,8 +1,9 @@
-from library.mydb import mydb
+from finhack.library.mydb import mydb
 from runtime.constant import *
 import pandas as pd
 from functools import lru_cache
 import datetime
+import os
 class indexHelper:
     @lru_cache(None)
     def get_index_weights(idx_code="000001.SH", date="20220101"):

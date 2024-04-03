@@ -104,23 +104,23 @@ class DefaultBacktest():
             processes = []
             for cash in cash_list:
                 for strategy_name in strategy_list:
-                    s_args={}
+                    s_params={}
 
-                    strategy_args=Config.get_config('backtest','args')
-                    for k,v in strategy_args.items():
-                        s_args[k]=v
+                    strategy_params=Config.get_config('backtest','params')
+                    for k,v in strategy_params.items():
+                        s_params[k]=v
 
-                    strategy_args=Config.get_config('backtest',strategy_name)
-                    for k,v in strategy_args.items():
-                        s_args[k]=v
+                    strategy_params=Config.get_config('backtest',strategy_name)
+                    for k,v in strategy_params.items():
+                        s_params[k]=v
                     # 将每个键对应的字符串分割为列表
-                    split_values = {k: v.split(',') for k, v in s_args.items()}
+                    split_values = {k: v.split(',') for k, v in s_params.items()}
                     # 使用itertools.product生成所有可能的组合
                     product_combinations = itertools.product(*split_values.values())
                     # 为每个组合创建一个字典，并将它们组成一个列表
-                    args_list = [dict(zip(split_values.keys(), combination)) for combination in product_combinations]
+                    params_list = [dict(zip(split_values.keys(), combination)) for combination in product_combinations]
                     # 打印结果
-                    for args in args_list:
+                    for params in params_list:
                         time.sleep(1)
                         active_processes = len(multiprocessing.active_children())
                         available_memory=1
@@ -131,7 +131,7 @@ class DefaultBacktest():
                             total_memory = psutil.virtual_memory().total
                             available_memory = psutil.virtual_memory().available
                             #print(available_memory/total_memory)
-                        cmd = f"{entry_file_path} trader run --strategy={strategy_name} --log_level=ERROR --model_id={model_hash}  --cash={cash} --project_path={BASE_DIR} --args='{json.dumps(args)}'"
+                        cmd = f"{entry_file_path} trader run --strategy={strategy_name} --log_level=ERROR --model_id={model_hash}  --cash={cash} --project_path={BASE_DIR} --params='{json.dumps(params)}'"
                         # 创建Process对象，传入函数和需要的参数，包括信号量
                         p = multiprocessing.Process(target=self.run_command_with_semaphore, args=(cmd, semaphore))
                         processes.append(p)

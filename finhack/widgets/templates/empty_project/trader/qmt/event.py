@@ -20,8 +20,8 @@ class Event:
         
         event['astock']={
             'start_interval':'00:00:00',
-            # 'before_market':'09:00:00',
             'before_market':'09:10:00',
+            #'before_market':'07:52:00',
             'pre_opening_start':'09:15:00',
             'pre_opening_end':'09:20:00',
             'matching_start':'09:25:00',
@@ -73,7 +73,7 @@ class Event:
         # 获取今天的日期
         today = datetime.today().strftime('%Y%m%d')
         # 获取今天前三天的日期
-        thirty_days_ago = (datetime.today() - timedelta(days=30)).strftime('%Y%m%d')
+        thirty_days_ago = (datetime.today() - timedelta(days=3)).strftime('%Y%m%d')
         model_id=context.trade.model_id
         preds=load_preds_data(model_id=model_id,start_time=thirty_days_ago,end_time=today)
         context.g.preds=preds

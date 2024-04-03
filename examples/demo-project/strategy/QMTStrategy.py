@@ -3,13 +3,16 @@ import datetime
 import os
 import random
 import json
+from datetime import datetime, timedelta
 from finhack.factor.default.factorManager import factorManager
 from finhack.market.astock.astock import AStock
 from finhack.trainer.trainer import Trainer
 from finhack.trainer.lightgbm.lightgbm_trainer import LightgbmTrainer
+# from trader.qmt.context import context,g
 #finhack trader run --strategy=ChatgptAIStrategy --args='{"model_id":"b6ae6db48944caf7f0138452701bcdd1",stocknum:5, refresh_rate:3}' --cash=20000
 # 初始化函数
 def initialize(context):
+    g=context.g
     # 设定基准
     set_benchmark('000001.SH')
     # 开启动态复权模式
@@ -20,23 +23,32 @@ def initialize(context):
     set_order_cost(OrderCost(open_tax=0, close_tax=0.001, open_commission=0.0003, close_commission=0.0003, min_commission=5), type='stock')
     # 设定滑点
     set_slippage(PriceRelatedSlippage(0.00246), type='stock')
-    
     model_id = context.trade.model_id
     preds_data = load_preds_data(model_id)
     g.preds=preds_data
-
     # 全局变量初始化
-    g.stock_num = int(context.get('args', {}).get('stocknum', 10))  # 持仓股票数量
-    g.refresh_rate = int(context.get('args', {}).get('refresh_rate', 10))  # 调仓频率，动态调整
+    g.stock_num = int(context.get('params', {}).get('stocknum', 10))  # 持仓股票数量
+    g.refresh_rate = int(context.get('params', {}).get('refresh_rate', 10))  # 调仓频率，动态调整
     g.max_drawdown_limit = 0.2  # 最大回撤限制
     g.max_portfolio_exposure = 0.95  # 最大投资组合暴露度
     g.stop_loss_threshold = 0.95  # 止损阈值
-    g.stop_gain_threshold = 1.2  # 止盈阈值
+    g.stop_gain_threshold = 1.20  # 止盈阈值
     g.days = 0  # 交易日计时器
     
     # 每日运行
     run_daily(trade_open, time="09:30")
     run_daily(trade_close, time="14:57")
+
+    # # 获取当前时间
+    # current_time = datetime.now()
+    # # 计算10秒后的时间
+    # start_time = current_time + timedelta(seconds=120)
+    # # 循环执行六次，每次增加10秒
+    # for i in range(20):
+    #     # 计算事件时间
+    #     event_time = (start_time + timedelta(seconds=i*10)).strftime('%H:%M:%S')
+    #     run_daily(test, time=event_time)
+
 
 # 动态调整策略参数
 def adjust_dynamic_parameters(context):
@@ -46,19 +58,19 @@ def adjust_dynamic_parameters(context):
 # 选股策略
 def select_stocks(context):
     # 加载AI模型预测数据
-
+    g=context.g
     now_date = context.current_dt.strftime('%Y%m%d')
     preds_data=g.preds
     # 筛选今日预测数据，并排序
     pred_today = preds_data[preds_data['trade_date'] == now_date]
     pred_today_sorted = pred_today.sort_values(by='pred', ascending=False)
-    
     # 返回股票列表
     return pred_today_sorted['ts_code'].tolist()
 
 # 是否卖出
 def should_sell(stock, context):
     # 止损和止盈逻辑
+    g=context.g
     current_price = get_price(stock, context)
     if current_price==None:
         return False
@@ -74,6 +86,7 @@ def should_buy(stock, context):
 
 # 开盘逻辑
 def trade_open(context):
+    g=context.g
     adjust_dynamic_parameters(context)
     
     # 卖出逻辑
@@ -82,7 +95,7 @@ def trade_open(context):
             order_target_value(stock, 0)
     
     # 买入逻辑
-    if g.days % g.refresh_rate == 0:
+    if  g.days % g.refresh_rate == 0:
         stock_list = select_stocks(context)
         num_stocks_to_buy = min(len(stock_list), g.stock_num - len(context.portfolio.positions))
         if num_stocks_to_buy==0:
@@ -97,13 +110,14 @@ def trade_open(context):
                     successed=successed+1
                 if successed>=num_stocks_to_buy:
                     break
-
-                
     g.days += 1
+    
 
 
 # 盘尾逻辑
 def trade_close(context):
+    # sync(context)
+    g=context.g
     adjust_dynamic_parameters(context)
     
     # 卖出逻辑

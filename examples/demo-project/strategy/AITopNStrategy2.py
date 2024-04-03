@@ -28,11 +28,11 @@ def initialize(context):
     # 持仓数量
 
     
-    g.stocknum = int(context.get('args', {}).get('stocknum', 10))
+    g.stocknum = int(context.get('params', {}).get('stocknum', 10))
     # 交易日计时器
     g.days = 0 
     # 调仓频率
-    g.refresh_rate = int(context.get('args', {}).get('refresh_rate', 10))
+    g.refresh_rate = int(context.get('params', {}).get('refresh_rate', 10))
     
     run_daily(trade, time="09:30")
     model_id=context.trade.model_id

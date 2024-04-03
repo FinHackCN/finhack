@@ -39,7 +39,7 @@ class DefaultTrader:
 
             # 还原 trade 相关的字段
             context.trade.model_id = row['model']
-            context.args= row['args']
+            context.params= row['params']
             context.trade.strategy = row['strategy']
             context.trade.start_time = row['start_date']
             context.trade.end_time = row['end_date']
@@ -140,6 +140,7 @@ class DefaultTrader:
             self.args=args
         else:
             args=self.args.__dict__
+
         t1=time.time()
         starttime=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         init_context(self.args)
@@ -192,7 +193,7 @@ class DefaultTrader:
         
         while context.data.event_list:
             event = context.data.event_list.pop(0)
-            #print(event['event_time'],event['event_name'],event['event_type'])
+            print(event['event_time'],event['event_name'],event['event_type'])
             event_time=datetime.strptime(event['event_time'], '%Y-%m-%d %H:%M:%S')
                 # 如果 event_time 大于当前时间，退出循环
             if event_time > datetime.now():
@@ -238,7 +239,7 @@ class DefaultTrader:
                 features_list=model['features']
                 train=model['algorithm']+"_"+model['loss']
 
-        sql="INSERT INTO `finhack`.`backtest`(`instance_id`,`features_list`, `train`, `model`, `strategy`, `start_date`, `end_date`, `init_cash`, `args`, `history`, `returns`, `logs`, `total_value`, `alpha`, `beta`, `annual_return`, `cagr`, `annual_volatility`, `info_ratio`, `downside_risk`, `R2`, `sharpe`, `sortino`, `calmar`, `omega`, `max_down`, `SQN`,filter,win,server,trade_num,runtime,starttime,endtime,benchReturns,roto,benchmark,strategy_code) VALUES ( '%s','%s', '%s', '%s', '%s', '%s', '%s', %s, '%s', '%s', '%s', '%s', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,'%s',%s,'%s',%s,'%s','%s','%s','%s','%s','%s','%s')" % \
+        sql="INSERT INTO `finhack`.`backtest`(`instance_id`,`features_list`, `train`, `model`, `strategy`, `start_date`, `end_date`, `init_cash`, `params`, `history`, `returns`, `logs`, `total_value`, `alpha`, `beta`, `annual_return`, `cagr`, `annual_volatility`, `info_ratio`, `downside_risk`, `R2`, `sharpe`, `sortino`, `calmar`, `omega`, `max_down`, `SQN`,filter,win,server,trade_num,runtime,starttime,endtime,benchReturns,roto,benchmark,strategy_code) VALUES ( '%s','%s', '%s', '%s', '%s', '%s', '%s', %s, '%s', '%s', '%s', '%s', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,'%s',%s,'%s',%s,'%s','%s','%s','%s','%s','%s','%s')" % \
         (context.id,  \
         features_list,  \
         train,  \
@@ -247,7 +248,7 @@ class DefaultTrader:
         context.trade.start_time,  \
         context.trade.end_time,  \
         context.portfolio.starting_cash,  \
-        str(context.args).replace("'",'"'),  \
+        str(context.params).replace("'",'"'),  \
         'history',  \
         returns_string,  \
         'logs',  \

@@ -59,7 +59,11 @@ class DefaultServer:
 
         @app.route('/')
         def redirect_to_index():
-            bt_list=mydb.selectToList("SELECT id, instance_id, features_list, train, model, strategy, start_date, end_date, init_cash, args, total_value, alpha, beta, annual_return, cagr, annual_volatility, info_ratio, downside_risk, R2, sharpe, sortino, calmar, omega, max_down, SQN, created_at, filter, win, server, trade_num, runtime, starttime, endtime,  roto, simulate, benchmark, strategy_code FROM `finhack`.`backtest`  order by sharpe desc LIMIT 100",'finhack')   
+            strategy = request.args.get('strategy')
+            if strategy:
+                bt_list=mydb.selectToList(f"SELECT id, instance_id, features_list, train, model, strategy, start_date, end_date, init_cash, args, total_value, alpha, beta, annual_return, cagr, annual_volatility, info_ratio, downside_risk, R2, sharpe, sortino, calmar, omega, max_down, SQN, created_at, filter, win, server, trade_num, runtime, starttime, endtime,  roto, simulate, benchmark, strategy_code FROM `finhack`.`backtest` where strategy='{strategy}' order by sharpe desc LIMIT 100",'finhack')
+            else:
+                bt_list=mydb.selectToList("SELECT id, instance_id, features_list, train, model, strategy, start_date, end_date, init_cash, args, total_value, alpha, beta, annual_return, cagr, annual_volatility, info_ratio, downside_risk, R2, sharpe, sortino, calmar, omega, max_down, SQN, created_at, filter, win, server, trade_num, runtime, starttime, endtime,  roto, simulate, benchmark, strategy_code FROM `finhack`.`backtest`  order by sharpe desc LIMIT 100",'finhack')   
             
             return render_template('index.html', data=bt_list)
 
