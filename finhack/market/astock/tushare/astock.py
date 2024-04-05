@@ -60,12 +60,21 @@ def getIndexPrice(ts_code='000300.SH',start_date=None,end_date=None):
         if not end_date==None:
             c2=" and trade_date<='%s' " % (end_date)
         
-        sql = "select trade_date,close from astock_index_daily where ts_code='%s' %s %s order by trade_date asc" % (ts_code,c1,c2)
+        sql = "select * from astock_index_daily where ts_code='%s' %s %s order by trade_date asc" % (ts_code,c1,c2)
         
         #print(sql)
         
         try:
             df=mydb.selectToDf(sql,'tushare')
+            df["open"]=df["open"].astype(float)
+            df["high"]=df["high"].astype(float)
+            df["low"]=df["low"].astype(float)
+            df["close"]=df["close"].astype(float)
+            df["pre_close"]=df["pre_close"].astype(float)
+            df["change"]=df["change"].astype(float)
+            df["pct_chg"]=df["pct_chg"].astype(float)
+            df["vol"]=df["vol"].astype(float)
+            df['amount']=df['amount'].astype(float)
             return df
         except Exception as e:
             print("MySQL getStockCodeList Error:%s" % str(e))  

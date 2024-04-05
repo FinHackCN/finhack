@@ -29,10 +29,8 @@ def initialize(context):
     # 全局变量初始化
     g.stock_num = int(context.get('params', {}).get('stocknum', 10))  # 持仓股票数量
     g.refresh_rate = int(context.get('params', {}).get('refresh_rate', 10))  # 调仓频率，动态调整
-    g.max_drawdown_limit = 0.2  # 最大回撤限制
-    g.max_portfolio_exposure = 0.95  # 最大投资组合暴露度
-    g.stop_loss_threshold = 0.95  # 止损阈值
-    g.stop_gain_threshold = 1.20  # 止盈阈值
+    g.stop_loss_threshold = float(context.get('params', {}).get('stop_loss_threshold', 0.95))   # 止损阈值
+    g.stop_gain_threshold = float(context.get('params', {}).get('stop_gain_threshold', 1.20))   # 止盈阈值
     g.days = 0  # 交易日计时器
     
     # 每日运行

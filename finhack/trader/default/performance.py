@@ -25,7 +25,8 @@ class Performance:
         end_date=context.trade.end_time[0:10].replace('-','')
         
         index=AStock.getIndexPrice(ts_code=benchmark,start_date=start_date,end_date=end_date)
-        index['returns']=index['close']/index['close'].shift(1)
+        #index['returns']=index['close']/index['close'].shift(1)
+        index['returns']=index['pct_chg']/100
         index['values']=index['returns'].cumprod()
         index["trade_date"] = pd.to_datetime(index["trade_date"], format='%Y%m%d')
         index=index.set_index('trade_date')         
@@ -35,9 +36,7 @@ class Performance:
         
         
         
-        benchReturns=index['returns']-1
-        benchReturns.iloc[0] = 0
-        
+        benchReturns=index['returns']
         
         try:
             alpha, beta = ey.alpha_beta(returns = returns, factor_returns = benchReturns, annualization=252) 
@@ -130,7 +129,7 @@ class Performance:
         except Exception as e:
             p_dates = p_df
             
-        p_values = (p_df.values.cumprod()).tolist()
+        p_values = (p_df.values.cumprod()-1).tolist()
         
         try:
             i_dates = i_df.index.strftime('%d/%m/%Y').tolist()
@@ -138,7 +137,7 @@ class Performance:
             i_dates = i_df.index.strftime('%d/%m/%Y').tolist()
             
  
-        i_values = (i_df.values.cumprod()).tolist()
+        i_values = (i_df.values.cumprod()-1).tolist()
         
         # 绘图
         # 设置图表样式
@@ -158,27 +157,25 @@ class Performance:
     def save_chart(context):
         p_df=context.performance.returns+1
         i_df=context.performance.bench_returns+1
-        
+        e_df=(p_df-i_df)+1
         try:
             p_dates = p_df.index.strftime('%d/%m/%Y').tolist()
         except Exception as e:
             p_dates = p_df
-            
-        p_values = (p_df.values.cumprod()).tolist()
-        
+        p_values = (p_df.values.cumprod()-1).tolist()
         try:
             i_dates = i_df.index.strftime('%d/%m/%Y').tolist()
         except Exception as e:
             i_dates = i_df.index.strftime('%d/%m/%Y').tolist()
-            
- 
-        i_values = (i_df.values.cumprod()).tolist()
+        i_values = (i_df.values.cumprod()-1).tolist()
+        e_values = (e_df.values.cumprod()-1).tolist()
         
 
         # 绘图
         mplt.figure(figsize=(4, 2))  # 设置图像大小
         mplt.plot(p_dates, p_values, color='red', label=context['trade']['strategy'])
         mplt.plot(i_dates, i_values, color='blue', label=context.trade.benchmark)
+        mplt.plot(i_dates, e_values, color='orange', label="excess")
         # mplt.xlabel("Date")
         # mplt.ylabel("Cumulative Return")
         # 不显示图例

@@ -77,7 +77,7 @@ class DefaultTrader:
             calendar=pd.to_datetime(calendar)
             calendar=calendar[0:len(context.performance.returns)]
 
-
+            
             context.performance.returns = pd.DataFrame(context.performance.returns, index=calendar)
             context.performance.bench_returns = pd.DataFrame(context.performance.bench_returns, index=calendar)
             return context
@@ -193,7 +193,7 @@ class DefaultTrader:
         
         while context.data.event_list:
             event = context.data.event_list.pop(0)
-            print(event['event_time'],event['event_name'],event['event_type'])
+            #print(event['event_time'],event['event_name'],event['event_type'])
             event_time=datetime.strptime(event['event_time'], '%Y-%m-%d %H:%M:%S')
                 # 如果 event_time 大于当前时间，退出循环
             if event_time > datetime.now():
