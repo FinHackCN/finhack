@@ -39,7 +39,7 @@ CREATE TABLE `auto_train` (
   `score` double(10,10) DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `hash` (`hash`)
-) ENGINE=InnoDB AUTO_INCREMENT=14088 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=14092 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -93,7 +93,7 @@ CREATE TABLE `backtest` (
   `strategy_code` text,
   PRIMARY KEY (`id`),
   UNIQUE KEY `instence_id` (`instance_id`)
-) ENGINE=InnoDB AUTO_INCREMENT=411731 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=420775 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -180,4 +180,4 @@ CREATE TABLE `factors_mining` (
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
--- Dump completed on 2024-04-03 10:20:33
+-- Dump completed on 2024-04-05  0:30:46

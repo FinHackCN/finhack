@@ -98,7 +98,6 @@ class DefaultBacktest():
             pt.join()           
             # preds=load_preds_data(model_id=model_hash, cache=True,trainer='lightgbm',start_time=cfgTrade['start_time'],end_time=cfgTrade['end_time'])
             # del preds
-
             # gc.collect()
             #continue
             processes = []
