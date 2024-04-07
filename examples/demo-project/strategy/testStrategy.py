@@ -84,6 +84,7 @@ def trade_open(context):
     adjust_dynamic_parameters(context)
     
     # 卖出逻辑
+    print(context.portfolio.positions.keys())
     for stock in list(context.portfolio.positions.keys()):
         if should_sell(stock, context):
             order_target_value(stock, 0)

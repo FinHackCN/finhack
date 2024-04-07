@@ -75,7 +75,9 @@ def init_context(args):
     else:
         context.id=hash_value
 
-
+    # print(context_json)
+    # print(hash_value)
+    # exit()
 
 def set_benchmark(code):
     context['trade']['benchmark']=code

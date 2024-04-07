@@ -46,17 +46,17 @@ def init_context(args):
     context['trade']['rule_list']=args['rule_list']
     
     
-    # context['account']['username']=args['username']
-    # context['account']['password']=args['password']
-    # context['account']['account_id']=''
+    context['account']['username']=args['username']
+    context['account']['password']=args['password']
+    context['account']['account_id']=''
 
 
-    # context['account']['open_tax']=args['open_tax']
-    # context['account']['close_tax']=args['close_tax']
-    # context['account']['open_commission']=args['open_commission']
-    # context['account']['close_commission']=args['close_commission']
-    # context['account']['close_today_commission']=args['close_today_commission']
-    # context['account']['min_commission']=args['min_commission']
+    context['account']['open_tax']=args['open_tax']
+    context['account']['close_tax']=args['close_tax']
+    context['account']['open_commission']=args['open_commission']
+    context['account']['close_commission']=args['close_commission']
+    context['account']['close_today_commission']=args['close_today_commission']
+    context['account']['min_commission']=args['min_commission']
         
     context['portfolio']['previous_value']=float(args['cash'])
     context['portfolio']['total_value']=float(args['cash'])
@@ -70,7 +70,7 @@ def init_context(args):
         client = redis.Redis(connection_pool=redisPool) 
         context.data.client=client
     
-    context_json = str(args)+str(context['trade'])+str(context['account'])
+    context_json = str(args)+str(context['trade'])+str(context['account'])+str(context['portfolio']['cash'])
     hash_value = hashlib.md5(context_json.encode()).hexdigest()
     if args['id']!='':
         context.id=args['id']
