@@ -27,7 +27,7 @@
                 <th>初始资金</th>
                 <th>alpha</th>
                 <th>夏普</th>
-                <th>索提诺</th>
+                <!--<th>索提诺</th>-->
                 <th>年化</th>
                 <th>预览</th>
                 <th>最大回撤</th>
@@ -40,19 +40,19 @@
         <tbody>
             {% for item in data %}
             <tr>
-                <td width="10%"><a href="/static/trader/bt_{{ item.instance_id }}.html" target="_blank">{{ item.instance_id }}</td>
-                <td>{{item.model}}</td>
+                <td width="10%"><a href="/static/trader/bt_{{ item.instance_id }}.html" target="_blank">{{ item.instance_id[0:16] }}...</td>
+                <td>{{item.model[:16]}}...</td>
                 <td>{{item.strategy}}</td>
                 <td>{{ item.init_cash  }}</td>
                 <td>{{ item.alpha  | round(2)}}</td>
                 <td>{{ item.sharpe | round(2)}}</td>
-                <td>{{ item.sortino | round(2)}}</td>
+                <!--<td>{{ item.sortino | round(2)}}</td>-->
                 <td>{{  (item.annual_return * 100)  | round(2) }}%</td>
                 <td width="10%"><img src="/static/images/bt_{{ item.instance_id }}.png"  width="150" /></td>
                 <td>{{ (item.max_down * 100)  | round(2) }}%</td>
                 <td>{{ item.trade_num }}</td>
                 <td>{{ (item.win/item.trade_num*100) | round(2)}}%</td>
-                <td width="10%"><a href="/detail?id={{ item.instance_id }}" target="_blank">详情</td>
+                <td><a href="/detail?id={{ item.instance_id }}" target="_blank">详情</td>
             </tr>
             {% endfor %}
         </tbody>

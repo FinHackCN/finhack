@@ -1,4 +1,3 @@
-import json
 class DictObj:
     def __init__(self, attr=None):
         if attr is None:
@@ -19,6 +18,7 @@ class DictObj:
                 state[key] = value.__getstate__()  # 递归调用以处理嵌套的 DictObj
         return state
 
+
     def __setstate__(self, state):
         # 在反序列化时调用，使用保存的状态重新构建对象
         # 将所有普通字典转换回 DictObj 实例
@@ -26,6 +26,7 @@ class DictObj:
             if isinstance(value, dict):
                 state[key] = DictObj(value)  # 递归调用以处理嵌套的字典
         self._attributes = state
+
 
     def get(self, key, default=None):
         return self._attributes.get(key, default)
@@ -84,7 +85,3 @@ class DictObj:
     def pop(self, key, default=None):
         """从字典中移除指定的键并返回其值，如果键不存在，则返回default。"""
         return self._attributes.pop(key, default)
-
-    def to_json(self):
-        """将对象转换为JSON字符串。"""
-        return json.dumps(self.__getstate__(), ensure_ascii=False)

@@ -1,3 +1,4 @@
+import json
 class DictObj:
     def __init__(self, attr=None):
         if attr is None:
@@ -85,3 +86,7 @@ class DictObj:
     def pop(self, key, default=None):
         """从字典中移除指定的键并返回其值，如果键不存在，则返回default。"""
         return self._attributes.pop(key, default)
+    
+    def to_json(self):
+        """将对象转换为JSON字符串。"""
+        return json.dumps(self.__getstate__(), ensure_ascii=False)
