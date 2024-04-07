@@ -1,4 +1,4 @@
-# FinHack® 炼金术(内测中，文档完善中)
+# FinHack® 炼金术(自测中，5月份开放内测)
 ## 项目介绍
 <div>FinHack®, an easily extensible quantitative finance framework, integrates a complete workflow for quantitative investment research in its current version, including data collection, factor computation, factor mining, factor analysis, machine learning, strategy development, and quantitative backtesting. In later stages, it will expand to include more data sources, trading instruments, analytical tools, and practical plugins, aiming to create an open, customizable, and high-level quantitative finance framework to aid Quants and researchers in related fields with their financial research work.</div>
 <br/>
@@ -38,3 +38,10 @@ FinHack®，一个易于拓展的量化金融框架，它在当前版本中集�
 ![image](https://github.com/FinHackCN/finhack/assets/6196607/6bafbb9d-0798-4623-bddb-ae5d4f7e2fba)
 ![image](https://github.com/FinHackCN/finhack/assets/6196607/d84e4f1a-d950-49f6-afd9-c3632fe563d0)
 ![image](https://github.com/FinHackCN/finhack/assets/6196607/eacc7656-7161-4a81-8d1a-0a22cf85a76d)
+
+## TODO List
+- 增加更新提醒、公告通知
+- 增加会员注册、数据下载
+- 增加对期货、外汇、美股、比特币的数据、回测、实盘支持
+- 增加多种及其学习算法的支持
+- 策略市场、应用商店
