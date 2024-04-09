@@ -155,9 +155,9 @@ def order_target(security, amount, style=None, side='long', pindex=0, close_toda
 #按股数下单
 def order(security, amount, style=None, side='long', pindex=0, close_today=False):
     if amount>0:
-        return order_buy(security,amount)
+        return order_buy(security,amount,9999)
     else:
-        return order_sell(security,-amount)
+        return order_sell(security,-amount,-1)
 
 
 
@@ -173,10 +173,10 @@ def order_value(security, value, style=None, side='long', pindex=0, close_today=
         return  False
     if value>0:
         amount=int(value/price)
-        return order_buy(security,amount,0)
+        return order_buy(security,amount,9999)
     elif value<0:
         amount=-int(value/price)
-        return order_sell(security,amount,0)
+        return order_sell(security,amount,-1)
         
 
 # #目标股数下单
@@ -249,25 +249,24 @@ def get_trades():
 #         self.cost_basis=last_sale_price
 #         self.total_value=amount*last_sale_price
 
-def order_buy(security,amount,price=0):  
+def order_buy(security,amount,price=None):  
     o=Order(code=security,amount=amount,is_buy=True,context=context)
     rules=Rules(order=o,context=context,log=log)
-    
     o=rules.apply()
-    print(o)
 
     if o.status!=1:
         return False
     if o.amount==0:
         #log(f"{o.code}--{o.amount}，买单数为0，自动取消订单")  
         return False
-
+    if price!=None:
+        o.price=price
     qclient.OrderBuy(o.code,o.amount,o.price)
     log(f"下单买入{o.code}共计{o.amount}股，单价{o.price}")   
     return True
       
 
-def order_sell(security,amount,price=0):
+def order_sell(security,amount,price=None):
     o=Order(code=security,amount=amount,is_buy=False,context=context)
     rules=Rules(order=o,context=context,log=log)
     o=rules.apply()
@@ -276,6 +275,8 @@ def order_sell(security,amount,price=0):
     if o.amount==0:
         log(f"{o.code}--{o.amount}，卖单数为0，自动取消订单")  
         return False
+    if price!=None:
+        o.price=price
     qclient.OrderSell(o.code,o.amount,o.price)
     log(f"下单卖出{o.code}共计{o.amount}股，单价{o.price}")   
     return True

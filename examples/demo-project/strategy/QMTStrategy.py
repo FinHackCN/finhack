@@ -23,8 +23,13 @@ def initialize(context):
     set_order_cost(OrderCost(open_tax=0, close_tax=0.001, open_commission=0.0003, close_commission=0.0003, min_commission=5), type='stock')
     # 设定滑点
     set_slippage(PriceRelatedSlippage(0.00246), type='stock')
+    
     model_id = context.trade.model_id
-    preds_data = load_preds_data(model_id)
+    preds_cache=context.get('params', {}).get('preds_cache', 'False')
+    if preds_cache.lower()[0:1]=='t':
+        preds_data = load_preds_data(model_id,True)
+    else:
+        preds_data = load_preds_data(model_id)
     g.preds=preds_data
     # 全局变量初始化
     g.stock_num = int(context.get('params', {}).get('stocknum', 10))  # 持仓股票数量
@@ -34,18 +39,8 @@ def initialize(context):
     g.days = 0  # 交易日计时器
     
     # 每日运行
-    run_daily(trade_open, time="09:30")
+    run_daily(trade_open, time="09:25")
     run_daily(trade_close, time="14:57")
-
-    # # 获取当前时间
-    # current_time = datetime.now()
-    # # 计算10秒后的时间
-    # start_time = current_time + timedelta(seconds=120)
-    # # 循环执行六次，每次增加10秒
-    # for i in range(20):
-    #     # 计算事件时间
-    #     event_time = (start_time + timedelta(seconds=i*10)).strftime('%H:%M:%S')
-    #     run_daily(test, time=event_time)
 
 
 # 动态调整策略参数
@@ -73,7 +68,9 @@ def should_sell(stock, context):
     if current_price==None:
         return False
     cost_price = context.portfolio.positions[stock].cost_basis
+    print(f"{stock}的当前价为{current_price}，均价为{cost_price}，止损价为{cost_price * g.stop_loss_threshold}，止盈价为{cost_price * g.stop_gain_threshold}")
     if current_price <= cost_price * g.stop_loss_threshold or current_price >= cost_price * g.stop_gain_threshold:
+        print('触发卖出条件')
         return True
     return False
 

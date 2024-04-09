@@ -4,8 +4,8 @@
     <meta charset="UTF-8">
     <title>Finhack回测概览</title>
     <script src="/static/js/jquery-3.5.1.js"></script>
-    <script src="/static/js/jquery.dataTables-1.10.21.min.js "></script>
-    <link rel="stylesheet" href="https://cdn.datatables.net/1.10.21/css/jquery.dataTables.min.css">
+    <script src="/static/js/jquery.dataTables-1.10.21.min.js"></script>
+    <link rel="stylesheet" href="/static/css/jquery.dataTables.min.css">
     <script>
         $(document).ready(function() {
             $('#instanceTable').DataTable({"pageLength": 100});
@@ -25,8 +25,8 @@
                 <th>模型id</th>
                 <th>策略名称</th>
                 <th>初始资金</th>
-                <th>alpha</th>
-                <th>夏普</th>
+                <th>夏普1</th>
+                <th>夏普2</th>
                 <!--<th>索提诺</th>-->
                 <th>年化</th>
                 <th>预览</th>
@@ -44,7 +44,8 @@
                 <td>{{item.model[:16]}}...</td>
                 <td>{{item.strategy}}</td>
                 <td>{{ item.init_cash  }}</td>
-                <td>{{ item.alpha  | round(2)}}</td>
+                <!-- <td>{{ item.alpha  | round(2)}}</td> -->
+                <td>{{ item.sharpe2 | round(2)}}</td>
                 <td>{{ item.sharpe | round(2)}}</td>
                 <!--<td>{{ item.sortino | round(2)}}</td>-->
                 <td>{{  (item.annual_return * 100)  | round(2) }}%</td>

@@ -39,7 +39,7 @@ CREATE TABLE `auto_train` (
   `score` double(10,10) DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `hash` (`hash`)
-) ENGINE=InnoDB AUTO_INCREMENT=14188 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=14227 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -93,7 +93,7 @@ CREATE TABLE `backtest` (
   `strategy_code` text,
   PRIMARY KEY (`id`),
   UNIQUE KEY `instence_id` (`instance_id`)
-) ENGINE=InnoDB AUTO_INCREMENT=437924 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=443191 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -170,6 +170,81 @@ CREATE TABLE `factors_mining` (
   UNIQUE KEY `hash` (`hash`(32)) USING BTREE
 ) ENGINE=InnoDB AUTO_INCREMENT=33145 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Table structure for table `rqalpha`
+--
+
+DROP TABLE IF EXISTS `rqalpha`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `rqalpha` (
+  `instance_id` varchar(64) NOT NULL,
+  `strategy_name` varchar(255) DEFAULT NULL,
+  `start_date` date DEFAULT NULL,
+  `end_date` date DEFAULT NULL,
+  `strategy_file` varchar(255) DEFAULT NULL,
+  `run_type` varchar(255) DEFAULT NULL,
+  `starting_cash` varchar(255) DEFAULT NULL,
+  `STOCK` float DEFAULT NULL,
+  `benchmark` varchar(255) DEFAULT NULL,
+  `benchmark_symbol` varchar(255) DEFAULT NULL,
+  `alpha` float DEFAULT NULL,
+  `beta` float DEFAULT NULL,
+  `sharpe` float DEFAULT NULL,
+  `excess_sharpe` float DEFAULT NULL,
+  `information_ratio` float DEFAULT NULL,
+  `downside_risk` float DEFAULT NULL,
+  `tracking_error` float DEFAULT NULL,
+  `sortino` float DEFAULT NULL,
+  `volatility` float DEFAULT NULL,
+  `excess_volatility` float DEFAULT NULL,
+  `max_drawdown` float DEFAULT NULL,
+  `excess_max_drawdown` float DEFAULT NULL,
+  `excess_returns` float DEFAULT NULL,
+  `excess_annual_returns` float DEFAULT NULL,
+  `var` float DEFAULT NULL,
+  `win_rate` float DEFAULT NULL,
+  `excess_win_rate` float DEFAULT NULL,
+  `excess_cum_returns` float DEFAULT NULL,
+  `profit_loss_rate` float DEFAULT NULL,
+  `total_value` float DEFAULT NULL,
+  `cash` float DEFAULT NULL,
+  `total_returns` float DEFAULT NULL,
+  `annualized_returns` float DEFAULT NULL,
+  `unit_net_value` float DEFAULT NULL,
+  `units` float DEFAULT NULL,
+  `benchmark_total_returns` float DEFAULT NULL,
+  `benchmark_annualized_returns` float DEFAULT NULL,
+  `max_drawdown_duration` text,
+  `max_drawdown_duration_start_date` date DEFAULT NULL,
+  `max_drawdown_duration_end_date` date DEFAULT NULL,
+  `max_drawdown_duration_days` int DEFAULT NULL,
+  `turnover` float DEFAULT NULL,
+  `excess_max_drawdown_duration` text,
+  `excess_max_drawdown_duration_start_date` date DEFAULT NULL,
+  `excess_max_drawdown_duration_end_date` date DEFAULT NULL,
+  `excess_max_drawdown_duration_days` int DEFAULT NULL,
+  `weekly_alpha` float DEFAULT NULL,
+  `weekly_beta` float DEFAULT NULL,
+  `weekly_sharpe` float DEFAULT NULL,
+  `weekly_sortino` float DEFAULT NULL,
+  `weekly_information_ratio` float DEFAULT NULL,
+  `weekly_tracking_error` float DEFAULT NULL,
+  `weekly_max_drawdown` float DEFAULT NULL,
+  `weekly_win_rate` float DEFAULT NULL,
+  `weekly_volatility` float DEFAULT NULL,
+  `weekly_ulcer_index` float DEFAULT NULL,
+  `weekly_ulcer_performance_index` float DEFAULT NULL,
+  `monthly_sharpe` float DEFAULT NULL,
+  `monthly_volatility` float DEFAULT NULL,
+  `monthly_excess_win_rate` float DEFAULT NULL,
+  `weekly_excess_ulcer_index` float DEFAULT NULL,
+  `weekly_excess_ulcer_performance_index` float DEFAULT NULL,
+  `avg_daily_turnover` float DEFAULT NULL,
+  PRIMARY KEY (`instance_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
 /*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;
 
 /*!40101 SET SQL_MODE=@OLD_SQL_MODE */;
@@ -180,4 +255,4 @@ CREATE TABLE `factors_mining` (
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
--- Dump completed on 2024-04-07 14:44:27
+-- Dump completed on 2024-04-09 14:04:21

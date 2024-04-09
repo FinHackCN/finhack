@@ -38,7 +38,7 @@ class DefaultServer:
         app.jinja_env.filters['to_json'] = to_json_filter
 
 
-        @app.route('btlog')
+        @app.route('/btlog')
         def btlog():
             id = request.args.get('id')
             
@@ -91,13 +91,19 @@ class DefaultServer:
         @app.route('/')
         def redirect_to_index():
             strategy = request.args.get('strategy')
-            where=' where 1=1 and created_at > (NOW() - INTERVAL 1 DAY)'
-            if strategy:
-                where=where+f" and strategy='{strategy}'"
-                bt_list=mydb.selectToList(f"SELECT id, instance_id, features_list, train, model, strategy, start_date, end_date, init_cash, params, total_value, alpha, beta, annual_return, cagr, annual_volatility, info_ratio, downside_risk, R2, sharpe, sortino, calmar, omega, max_down, SQN, created_at, filter, win, server, trade_num, runtime, starttime, endtime,  roto, simulate, benchmark, strategy_code FROM `finhack`.`backtest` {where} order by sharpe desc LIMIT 100",'finhack')
-            else:
-                bt_list=mydb.selectToList(f"SELECT id, instance_id, features_list, train, model, strategy, start_date, end_date, init_cash, params, total_value, alpha, beta, annual_return, cagr, annual_volatility, info_ratio, downside_risk, R2, sharpe, sortino, calmar, omega, max_down, SQN, created_at, filter, win, server, trade_num, runtime, starttime, endtime,  roto, simulate, benchmark, strategy_code FROM `finhack`.`backtest` {where} order by sharpe desc LIMIT 100",'finhack')   
+            # where=' where 1=1 and created_at > (NOW() - INTERVAL 1 DAY)'
+            # if strategy:
+            #     where=where+f" and strategy='{strategy}'"
+            #     bt_list=mydb.selectToList(f"SELECT id, instance_id, features_list, train, model, strategy, start_date, end_date, init_cash, params, total_value, alpha, beta, annual_return, cagr, annual_volatility, info_ratio, downside_risk, R2, sharpe, sortino, calmar, omega, max_down, SQN, created_at, filter, win, server, trade_num, runtime, starttime, endtime,  roto, simulate, benchmark, strategy_code FROM `finhack`.`backtest` {where} order by sharpe desc LIMIT 100",'finhack')
+            # else:
+            #     bt_list=mydb.selectToList(f"SELECT id, instance_id, features_list, train, model, strategy, start_date, end_date, init_cash, params, total_value, alpha, beta, annual_return, cagr, annual_volatility, info_ratio, downside_risk, R2, sharpe, sortino, calmar, omega, max_down, SQN, created_at, filter, win, server, trade_num, runtime, starttime, endtime,  roto, simulate, benchmark, strategy_code FROM `finhack`.`backtest` {where} order by sharpe desc LIMIT 100",'finhack')   
             
+            sql="""SELECT 
+            id, a.instance_id, features_list, train, model, strategy, a.start_date, a.end_date, init_cash, params, a.total_value, a.alpha, a.beta, annual_return, cagr, annual_volatility, info_ratio, a.downside_risk, R2, a.sharpe,b.sharpe as sharpe2, a.sortino, calmar, omega, max_down, SQN, created_at, filter, win, server, trade_num, runtime, starttime, endtime,  roto, simulate, a.benchmark, strategy_code 
+            FROM `finhack`.`backtest` a
+            RIGHT JOIN rqalpha b on a.instance_id =b.instance_id
+            ORDER BY b.sharpe desc limit 100"""
+            bt_list=mydb.selectToList(sql,'finhack')
             return render_template('index.html', data=bt_list)
 
         # 不再需要检查 __name__ == '__main__'，因为这个方法将被直接调用

@@ -27,15 +27,24 @@ def on_trade_handler(context,event):
     print(buy_str)
 
 
+def check_stock_code(code,rule_list):
+    code=replace_stock_code(code)
+
+    if "BJ" in code or 'T' in code:
+        return False
+    
+    if 'mainboard' in rule_list.split(','):
+        if not code.startswith(('600', '601', '603','000','002')):
+            return False
+
+    return code
+
+
 def replace_stock_code(code):
     if 'XSHG' not in code and 'XSHE' not in code:
         code=code.replace('SH','XSHG') 
         code=code.replace('SZ','XSHE')
-
-    if "BJ" in code or 'T' in code:
-        return False
     return code
-
 
 
 def get_position_keys():

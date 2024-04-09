@@ -10,8 +10,8 @@ from datetime import datetime
 import json
 from rqalpha import run_code
 import hashlib
-
-
+from finhack.library.mydb import mydb
+import numpy as np
 #finhack trader run --model_id=f7fd6531b6ec1ad6bc884ec5c6faeedb --strategy=ChatgptAIStrategy --vendor=qmt
 
 class RqalphaTrader:
@@ -98,7 +98,8 @@ class RqalphaTrader:
             variable_name = match.group(2)
             value = match.group(3)
             # 返回替换后的字符串
-            return f'order_{order_function}(replace_stock_code({variable_name}), {value}) if replace_stock_code({variable_name}) else False'
+
+            return f"order_{order_function}(check_stock_code({variable_name},'{self.myargs.trade.rule_list}'), {value}) if check_stock_code({variable_name},'{self.myargs.trade.rule_list}') else False"
 
         # 使用正则表达式的 sub 方法进行替换
         return pattern.sub(replacer, code_str)
@@ -180,6 +181,43 @@ class RqalphaTrader:
 
 
 
+    def insert_strategy_results(self,data, instance_id):
+        try:
+            data['excess_max_drawdown_duration']=''
+            data['max_drawdown_duration']=''
+
+            # 删除已存在的instance_id记录
+            delete_query = f"DELETE FROM rqalpha WHERE instance_id = '{instance_id}';"
+            mydb.exec(delete_query,'finhack')
+            # 准备插入数据的SQL语句
+            # 构建列名和占位符
+
+            # 转换None或NaN为NULL，并将字符串值用引号包围
+            def format_value(value):
+                if value is None or (isinstance(value, float) and np.isnan(value)):
+                    return 'NULL'
+                elif isinstance(value, str):
+                    value = value.replace("'", "''")  # 处理字符串中的单引号
+                    return f"'{value}'"
+                else:
+                    return str(value)
+
+            # 构建列名和值
+            columns = ', '.join(data.keys())
+            formatted_values = ', '.join(format_value(value) for value in data.values())
+
+            # 构建完整的SQL语句
+            insert_sql = f"INSERT INTO rqalpha (instance_id, {columns}) VALUES ('{instance_id}', {formatted_values});"
+
+            print(insert_sql)
+            mydb.exec(insert_sql,'finhack')
+            # 提交到数据库执行
+   
+        except Exception as e:
+            print("Error while connecting to MySQL", e)
+
+
+
     def run(self):
         self.prase_args()
         code=self.load_strategy(self.myargs['trade']['strategy'])
@@ -190,9 +228,9 @@ class RqalphaTrader:
             code=code.replace(f"{func_name}(context)",f"{func_name}(context,bar_dict)")
         code=self.append_code(code)
         code=self.replace_order_functions(code)
-        #print(code)
-        # print(self.myargs['params'])
-        #exit()
+        # print(code)
+        # #print(self.myargs['params'])
+        # exit()
 
         config = {
             "base": {
@@ -203,7 +241,7 @@ class RqalphaTrader:
                 }
             },
             "extra": {
-                "log_level": "verbose",#verbose | code:info | warning | error
+                "log_level": "error",#verbose | code:info | warning | error
             },
             "mod": {
                 "sys_progress": {
@@ -226,8 +264,13 @@ class RqalphaTrader:
             }
         }
 
-        run_code(code, config)
 
-        result_dict = pickle.load(open(f"{REPORTS_DIR}static/rqalpha/"+self.myargs['id']+".pkl", "rb"))   # 从输出pickle中读取数据
-
-        print(result_dict["summary"])
+        
+        if os.path.exists(f"{REPORTS_DIR}static/rqalpha/"+self.myargs['id']+".pkl") and self.args.__dict__['replace'].lower()[0:1]=='f':
+            pass
+        else:
+            #print(code)
+            run_code(code, config)
+            result_dict = pickle.load(open(f"{REPORTS_DIR}static/rqalpha/"+self.myargs['id']+".pkl", "rb"))   # 从输出pickle中读取数据
+            #print(result_dict["summary"])
+            self.insert_strategy_results(result_dict["summary"],self.myargs['id'])

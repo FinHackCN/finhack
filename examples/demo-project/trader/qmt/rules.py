@@ -37,10 +37,8 @@ class Rules():
             action='close'
         value=self.order.amount*self.order.price
         account=self.context.account
-        tax=value*account[action+"_tax"]
-        commission=value*account[action+"_commission"]
-        if commission<account['min_commission']:
-            commission=account['min_commission']
+        tax=value*0.001
+        commission=value*0.0003
         cost=tax+commission
         self.order.value=value
         self.order.slip_value=self.context.trade.slip*value
@@ -125,23 +123,23 @@ class Rules():
         # else:
         #     self.order.price=self.order.price*(1-self.context.trade.slip)
         
-        if self.order.is_buy==True:
-            action='open'
-            #这里其实应该用self.order.filled，但是怕后面有坑
-            value=self.order.amount*self.order.price
-            account=self.context.account
-            slip_value=self.context.trade.slip*value
-            tax=value*account[action+"_tax"]
-            commission=value*account[action+"_commission"]
-            if commission<account['min_commission']:
-                commission=account['min_commission']
-            cost=tax+commission
-            if self.context.portfolio.cash-value<(cost+slip_value):
-                if (context.portfolio.cash-cost-slip_value)<0:
-                    self.log(f"{self.order.code} 现金不足以支付手续费及滑点！",'warning') 
-                    return False
-                self.order.amount=(context.portfolio.cash-cost-slip_value)/self.order.price
-                self.order.filled=self.order.amount
+        # if self.order.is_buy==True:
+        #     action='open'
+        #     #这里其实应该用self.order.filled，但是怕后面有坑
+        #     value=self.order.amount*self.order.price
+        #     account=self.context.account
+        #     slip_value=self.context.trade.slip*value
+        #     tax=value*account[action+"_tax"]
+        #     commission=value*account[action+"_commission"]
+        #     if commission<account['min_commission']:
+        #         commission=account['min_commission']
+        #     cost=tax+commission
+        #     if self.context.portfolio.cash-value<(cost+slip_value):
+        #         if (context.portfolio.cash-cost-slip_value)<0:
+        #             self.log(f"{self.order.code} 现金不足以支付手续费及滑点！",'warning') 
+        #             return False
+        #         self.order.amount=(context.portfolio.cash-cost-slip_value)/self.order.price
+        #         self.order.filled=self.order.amount
         return True        
         
         
@@ -150,35 +148,35 @@ class Rules():
                 
     #量比           
     def rule_volume_ratio(self):
-        if self.order.amount>self.order.info.volume*self.context.trade.order_volume_ratio:
-            #self.order.amount=self.order.info.volume*context.trade.order_volume_ratio
-            self.order.filled=self.order.info.volume*self.context.trade.order_volume_ratio
-            self.order.amount=self.order.info.volume*self.context.trade.order_volume_ratio
-            self.log(f"{self.order.code}超过当日最大订单数量，已经自动调整。",'warning') 
-        else:
-            self.order.filled=self.order.amount
+        # if self.order.amount>self.order.info.volume*self.context.trade.order_volume_ratio:
+        #     #self.order.amount=self.order.info.volume*context.trade.order_volume_ratio
+        #     self.order.filled=self.order.info.volume*self.context.trade.order_volume_ratio
+        #     self.order.amount=self.order.info.volume*self.context.trade.order_volume_ratio
+        #     self.log(f"{self.order.code}超过当日最大订单数量，已经自动调整。",'warning') 
+        # else:
+        #     self.order.filled=self.order.amount
         return True
     
     
     #手续费+税费
     def rule_cost(self):
-        #应该是只有买入的时候才会有这个问题吧
-        if self.order.is_buy==True:
-            action='open'
-            #这里其实应该用self.order.filled，但是怕后面有坑
-            value=self.order.amount*self.order.price
-            account=self.context.account
-            tax=value*account[action+"_tax"]
-            commission=value*account[action+"_commission"]
-            if commission<account['min_commission']:
-                commission=account['min_commission']
-            cost=tax+commission
-            if self.context.portfolio.cash-value<cost:
-                if (context.portfolio.cash-cost)<0:
-                    self.log(f"{self.order.code} 现金不足以支付手续费！",'warning') 
-                    return False
-                self.order.amount=(context.portfolio.cash-cost)/self.order.price
-                self.order.filled=self.order.amount
+        # #应该是只有买入的时候才会有这个问题吧
+        # if self.order.is_buy==True:
+        #     action='open'
+        #     #这里其实应该用self.order.filled，但是怕后面有坑
+        #     value=self.order.amount*self.order.price
+        #     account=self.context.account
+        #     tax=value*account[action+"_tax"]
+        #     commission=value*account[action+"_commission"]
+        #     if commission<account['min_commission']:
+        #         commission=account['min_commission']
+        #     cost=tax+commission
+        #     if self.context.portfolio.cash-value<cost:
+        #         if (context.portfolio.cash-cost)<0:
+        #             self.log(f"{self.order.code} 现金不足以支付手续费！",'warning') 
+        #             return False
+        #         self.order.amount=(context.portfolio.cash-cost)/self.order.price
+        #         self.order.filled=self.order.amount
         return True
     
     
