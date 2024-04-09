@@ -73,7 +73,7 @@ class Event:
         # 获取今天的日期
         today = datetime.today().strftime('%Y%m%d')
         # 获取今天前三天的日期
-        thirty_days_ago = (datetime.today() - timedelta(days=3)).strftime('%Y%m%d')
+        thirty_days_ago = (datetime.today() - timedelta(days=15)).strftime('%Y%m%d')
         model_id=context.trade.model_id
         preds=load_preds_data(model_id=model_id,start_time=thirty_days_ago,end_time=today)
         context.g.preds=preds

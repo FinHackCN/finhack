@@ -117,8 +117,8 @@ def getStockDailyPrice(code_list=[],where="",startdate='',enddate='',fq='hfq',db
         md5=hashlib.md5(hashstr.encode(encoding='utf-8')).hexdigest()
         cache_path=PRICE_CACHE_DIR+md5
         if os.path.isfile(cache_path):
-            #print('read cache---'+cache_path)
-            #print(hashstr)
+            print('read cache---'+cache_path)
+            print(hashstr)
             t = time.time()-os.path.getmtime(cache_path)
             if t<60*60*12 and cache: #缓存时间为12小时
                 df=pd.read_pickle(cache_path)

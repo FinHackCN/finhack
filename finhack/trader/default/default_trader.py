@@ -38,6 +38,7 @@ class DefaultTrader:
             row = result.iloc[0]
 
             # 还原 trade 相关的字段
+            context.id=id
             context.trade.model_id = row['model']
             context.params= row['params']
             context.trade.strategy = row['strategy']

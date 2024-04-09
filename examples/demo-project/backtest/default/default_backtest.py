@@ -13,6 +13,8 @@ import time
 import glob
 import gc
 import sys
+import re
+from finhack.core.classes.dictobj import DictObj
 
 class DefaultBacktest():
     def __init__(self):
@@ -52,12 +54,40 @@ class DefaultBacktest():
                         os.remove(pred_data_path)
 
     def run_command_with_semaphore(self, cmd, semaphore):
-        DefaultBacktest.del_model_if_idle()
+        try:
+            DefaultBacktest.del_model_if_idle()
+        except Exception as e:
+            print(f'An error occurred: {e}')
+            
         with semaphore:
             try:
                 os.system(cmd)
             except Exception as e:
                 print(f'An error occurred: {e}')
+
+
+    def rqalpha(self):
+
+        if hasattr(sys, 'frozen'):  # 特别检查，如果是使用 PyInstaller 等工具打包的可执行文件
+            entry_file_path = os.path.realpath(sys.executable)
+        else:
+            entry_file_path = os.path.realpath(sys.argv[0])
+
+        bt_list=mydb.selectToList(f"SELECT id, instance_id, features_list, train, model, strategy, start_date, end_date, init_cash, params, total_value, alpha, beta, annual_return, cagr, annual_volatility, info_ratio, downside_risk, R2, sharpe, sortino, calmar, omega, max_down, SQN, created_at, filter, win, server, trade_num, runtime, starttime, endtime,  roto, simulate, benchmark, strategy_code FROM `finhack`.`backtest`  order by sharpe desc LIMIT 1000",'finhack')   
+        
+        def to_json(s):
+            dict_str = re.sub(r"DictObj\((.*?)\)", r"{\1}", s)
+            dict_str = re.sub(r"(\w+)=('[^']*'|\"[^\"]*\")", r'"\1": \2', dict_str)
+            dict_str = dict_str.replace("'", '"')
+            return dict_str
+        semaphore = multiprocessing.Semaphore(3) 
+        processes = []
+        for bt in bt_list:
+            cmd=f"{entry_file_path} trader run --strategy={bt['strategy']} --log_level=ERROR --id={bt['instance_id']} --model_id={bt['model']} --cash={int(bt['init_cash'])}   --project_path={BASE_DIR}  --params='{to_json(bt['params'])}' --replace=True --vendor=rqalpha"
+            p = multiprocessing.Process(target=self.run_command_with_semaphore, args=(cmd, semaphore))
+            processes.append(p)
+            p.start()
+           
 
     def run(self):
         # 获取入口文件的完整路径
