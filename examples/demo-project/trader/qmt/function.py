@@ -81,6 +81,7 @@ def init_context(args):
 
 
 
+
 def set_benchmark(code):
     context['trade']['benchmark']=code
     
@@ -250,6 +251,7 @@ def get_trades():
 #         self.total_value=amount*last_sale_price
 
 def order_buy(security,amount,price=None):  
+    log(f"调用order_buy买入{security}共{amount}股,价格为{str(None)}")  
     o=Order(code=security,amount=amount,is_buy=True,context=context)
     rules=Rules(order=o,context=context,log=log)
     o=rules.apply()
@@ -267,6 +269,7 @@ def order_buy(security,amount,price=None):
       
 
 def order_sell(security,amount,price=None):
+    log(f"调用order_sell卖出{security}共{amount}股,价格为{str(None)}")  
     o=Order(code=security,amount=amount,is_buy=False,context=context)
     rules=Rules(order=o,context=context,log=log)
     o=rules.apply()
