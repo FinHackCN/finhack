@@ -49,12 +49,12 @@ class Event:
                     func = getattr(Event, event_name)
                     new_event={
                         'event_name':event_name,
-                        'event_func':func,
+                        #'event_func':func,
                         'event_time':date+' '+event_time,
                         'event_type':'market_event'
                     }
                     context['data']['event_list'].append(new_event)
-                    context['data']['event_list'].sort(key=lambda x: x['event_time'])                
+        context['data']['event_list'].sort(key=lambda x: x['event_time'])                
                     
         return True
         
