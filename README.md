@@ -3,6 +3,12 @@
 - 如果更新的很频繁，那就是亏了很多钱
 - 啥时候不更新了，就是赚到钱了
 - 啥时候删库了，就是赚到大钱了
+
+--
+
+最近不更新了，理由是我发现日频回测太不靠谱了，目前正在思考分钟级回测以及多品种回测的解决方案（2024.04.19）
+
+
 ## 项目介绍
 <div>FinHack®, an easily extensible quantitative finance framework, integrates a complete workflow for quantitative investment research in its current version, including data collection, factor computation, factor mining, factor analysis, machine learning, strategy development, and quantitative backtesting. In later stages, it will expand to include more data sources, trading instruments, analytical tools, and practical plugins, aiming to create an open, customizable, and high-level quantitative finance framework to aid Quants and researchers in related fields with their financial research work.</div>
 <br/>
