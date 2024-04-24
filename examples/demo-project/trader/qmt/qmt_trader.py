@@ -64,6 +64,8 @@ class QmtTrader:
             context = loaded_context
         else:
             pass
+        
+
 
         start_time=context['trade']['start_time']
         end_time=context['trade']['end_time']
@@ -113,7 +115,14 @@ class QmtTrader:
                 # 如果 event_time 在当前时间的10秒钟以内
                 if 0 <= (current_time - event_time).total_seconds() < 10:
                     log(f"执行{event['event_name']}")
-                    event['event_func'](context)
+
+                    if event['event_type']=="market_event":
+                        event_func = getattr(Event, event['event_name'])
+                    elif event['event_type']=="user_event":
+                        event_func = getattr(strategy, event['event_name'])
+                    else:
+                        log(f"未知时间{event['event_name']}")
+                    event_func(context)
                 else:
                     continue  # 如果时间早于当前时间超过10秒，则跳过此事件
 
@@ -122,5 +131,6 @@ class QmtTrader:
                 pass
             elif context.current_dt.date() != event_time.date():
                 context.previous_date = context.current_dt.date()
-            context.current_dt = event_time
+            #context.current_dt = event_time
             self.save_context(context)
+        log("全部事件执行完毕")

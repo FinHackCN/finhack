@@ -115,12 +115,13 @@ def run_interval(func,time,interval='daily',date_list=[]):
     for date in date_list:
         new_event={
             'event_name':func.__name__,
-            'event_func':func,
+            #'event_func':func,
             'event_time':date+' '+time,
             'event_type':'user_event'
         }
         context['data']['event_list'].append(new_event)
         context['data']['event_list'].sort(key=lambda x: x['event_time'])
+        print(len(context['data']['event_list']))
     
 def run_daily(func,time,reference_security=None):
     return run_interval(func,time,'daily',date_list=context['data']['calendar'])

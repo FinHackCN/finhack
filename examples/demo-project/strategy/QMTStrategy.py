@@ -24,13 +24,13 @@ def initialize(context):
     # 设定滑点
     set_slippage(PriceRelatedSlippage(0.00246), type='stock')
     
-    model_id = context.trade.model_id
-    preds_cache=context.get('params', {}).get('preds_cache', 'False')
-    if preds_cache.lower()[0:1]=='t':
-        preds_data = load_preds_data(model_id,True)
-    else:
-        preds_data = load_preds_data(model_id)
-    g.preds=preds_data
+    # model_id = context.trade.model_id
+    # preds_cache=context.get('params', {}).get('preds_cache', 'False')
+    # if preds_cache.lower()[0:1]=='t':
+    #     preds_data = load_preds_data(model_id,True)
+    # else:
+    #     preds_data = load_preds_data(model_id)
+    # g.preds=preds_data
     # 全局变量初始化
     g.stock_num = int(context.get('params', {}).get('stocknum', 10))  # 持仓股票数量
     g.refresh_rate = int(context.get('params', {}).get('refresh_rate', 10))  # 调仓频率，动态调整
@@ -39,8 +39,34 @@ def initialize(context):
     g.days = 0  # 交易日计时器
     
     # 每日运行
-    run_daily(trade_open, time="09:25")
-    run_daily(trade_close, time="14:57")
+    run_daily(trade_open, time="09:20:10")
+    run_daily(trade_close, time="14:57:10")
+
+    # # 当前时间
+    # now = datetime.now()
+
+    
+
+    # # 10分钟后的时间
+    # ten_minutes_later = now + timedelta(minutes=60*24)
+
+    # # 当前时间加上10秒，用于第一次调度
+    # next_call_time = now + timedelta(seconds=10)
+
+
+
+    # # 循环，直到达到10分钟后的时间
+    # while next_call_time <= ten_minutes_later:
+    #     print(next_call_time.strftime("%H:%M:%S"))
+    #     # 计划函数调用
+    #     run_daily(test, next_call_time.strftime("%H:%M:%S"))
+        
+    #     # 更新下一次调用时间（增加10秒）
+    #     next_call_time += timedelta(seconds=10)
+    
+
+def days_inc(context):
+    g.days += 1
 
 
 # 动态调整策略参数
@@ -105,7 +131,6 @@ def trade_open(context):
                     successed=successed+1
                 if successed>=num_stocks_to_buy:
                     break
-    g.days += 1
     
 
 
@@ -119,3 +144,4 @@ def trade_close(context):
     for stock in list(context.portfolio.positions.keys()):
         if should_sell(stock, context):
             order_target_value(stock, 0)
+    g.days += 1

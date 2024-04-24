@@ -40,6 +40,8 @@ def initialize(context):
     
     # 每日运行
     run_daily(trade_open, time="09:30")
+    run_daily(trade_open, time="09:30")
+    run_daily(trade_open, time="09:30")
     run_daily(trade_close, time="15:00")
 
 
