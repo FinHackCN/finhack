@@ -38,6 +38,28 @@ class Event:
         event['astock'] = {**event['default'], **event['astock']}
         event['astock'] = sorted(event['astock'].items(), key=lambda x: x[1])    
         return event
+   
+   
+    def load_daily_event(context,date):
+        event_list=[]
+        daily_event_list=Event.get_event()
+        for event_interval in context['data']['event_interval_list']:
+            if event_interval['event_interval']=='daily':
+                event_interval['event_time']=date+" "+event_interval['time']
+            event_list.append(event_interval)
+
+        for event_name,event_time in daily_event_list['astock']:
+            if hasattr(Event, event_name):
+                func = getattr(Event, event_name)
+                new_event={
+                    'event_name':event_name,
+                    #'event_func':func,
+                    'event_time':date+' '+event_time,
+                    'event_type':'market_event'
+                }
+                event_list.append(new_event)
+        event_list.sort(key=lambda x: x['event_time'])            
+        return event_list 
         
     def load_event(context,start_time,end_time):
         event_list=[]
@@ -49,12 +71,12 @@ class Event:
                     func = getattr(Event, event_name)
                     new_event={
                         'event_name':event_name,
-                        'event_func':func,
+                        #'event_func':func,
                         'event_time':date+' '+event_time,
                         'event_type':'market_event'
                     }
                     context['data']['event_list'].append(new_event)
-                    context['data']['event_list'].sort(key=lambda x: x['event_time'])                
+        context['data']['event_list'].sort(key=lambda x: x['event_time'])            
                     
         return True
         

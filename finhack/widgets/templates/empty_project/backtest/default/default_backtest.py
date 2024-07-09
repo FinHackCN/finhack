@@ -72,8 +72,15 @@ class DefaultBacktest():
             entry_file_path = os.path.realpath(sys.executable)
         else:
             entry_file_path = os.path.realpath(sys.argv[0])
-
-        bt_list=mydb.selectToList(f"SELECT id, instance_id, features_list, train, model, strategy, start_date, end_date, init_cash, params, total_value, alpha, beta, annual_return, cagr, annual_volatility, info_ratio, downside_risk, R2, sharpe, sortino, calmar, omega, max_down, SQN, created_at, filter, win, server, trade_num, runtime, starttime, endtime,  roto, simulate, benchmark, strategy_code FROM `finhack`.`backtest`  order by sharpe desc LIMIT 1000",'finhack')   
+        
+        sql=""
+        path=f"{BASE_DIR}/data/config/sqllist/backtest/bt_list.sql"
+        if os.path.exists(path):
+            with open(path, 'r', encoding='utf-8') as file:
+                sql= file.read()
+        else:
+            sql="SELECT id, instance_id, features_list, train, model, strategy, start_date, end_date, init_cash, params, total_value, alpha, beta, annual_return, cagr, annual_volatility, info_ratio, downside_risk, R2, sharpe, sortino, calmar, omega, max_down, SQN, created_at, filter, win, server, trade_num, runtime, starttime, endtime,  roto, simulate, benchmark, strategy_code FROM `finhack`.`backtest`  order by sharpe desc LIMIT 1000"
+        bt_list=mydb.selectToList(sql,'finhack')   
         
         def to_json(s):
             dict_str = re.sub(r"DictObj\((.*?)\)", r"{\1}", s)
@@ -99,7 +106,7 @@ class DefaultBacktest():
         Data.init_data(cache=True)
         cash_list = self.args.cash.split(',')
         strategy_list = self.args.strategy.split(',')
-        model_list = mydb.selectToDf('select * from auto_train order by rand()', 'finhack')
+        model_list = mydb.selectToDf('select * from auto_train where id > 14226 order by rand()', 'finhack')
         
         semaphore = multiprocessing.Semaphore(int(self.args.process))  # 创建一个信号量，最大允许process个进程同时运行
         # print(model_list)

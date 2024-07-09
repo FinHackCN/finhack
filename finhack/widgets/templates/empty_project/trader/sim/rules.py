@@ -106,10 +106,6 @@ class Rules():
         return True
 
     def rule_100(self):
-        print('---')
-        print(self.order.amount)
-        print(int(self.order.amount/100)*100)
-        print('---')
         if self.order.amount!=int(self.order.amount/100)*100:
             self.order.amount=int(self.order.amount/100)*100
             self.log(f"{self.order.code}自动调整交易数量为{self.order.amount}！",'warning')  

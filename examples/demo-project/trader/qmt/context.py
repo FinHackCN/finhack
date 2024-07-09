@@ -62,6 +62,7 @@ context_attr= {
             
             'data':DictObj({
                 'calendar':[],
+                'event_interval_list':[],
                 'event_list':[],
                 'data_source':'file',
                 'daily_info':None,

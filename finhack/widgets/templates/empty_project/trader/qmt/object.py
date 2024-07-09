@@ -21,6 +21,7 @@ class Order():
         self.enable_amount=amount
         self.filled=0
         self.info=Data.get_daily_info(code=code,context=context)
+        print(self.info)
         self.price=Data.get_price(code=code,context=context)
         self.order_id = self.generate_order_id()
         self.is_buy=is_buy
