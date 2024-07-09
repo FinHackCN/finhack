@@ -40,6 +40,14 @@ class RqalphaTrader:
         return code
 
     def replace_init(self,code):
+        # replace_func_list=[
+        #     {
+                # "pattren":"",
+                # "func":replace_daily,
+        #     }
+        #     
+        # ]
+
         replace_list={
             "initialize(context):":"initialize(context):\n    params="+str(self.myargs['params'].to_json())+"\n",
             'inout_cash':'#inout_cash',
@@ -58,16 +66,20 @@ class RqalphaTrader:
             "context.context":"context",
             "context.current_dt":"context.now",
             'cost_basis':"avg_price"
+
         }
         for k,v in replace_list.items():
             code=code.replace(k,v)
+
+ 
+        
         return code
 
 
 
-    def replace_run_daily_and_collect_names(self,code_str):
+    def replace_run_daily_and_collect_names(self, code_str):
         # 编译一个正则表达式模式，用于匹配 run_daily 函数调用
-        pattern = re.compile(r'run_daily\((.*?), time="(\d{2}):(\d{2})"\)')
+        pattern = re.compile(r'run_daily\((.*?), time="(\d{2}):(\d{2})(?::(\d{2}))?"\)')
         function_names = []  # 用于收集函数名
 
         # 定义一个替换函数
@@ -82,6 +94,7 @@ class RqalphaTrader:
         # 使用正则表达式的 sub 方法进行替换
         new_code_str = pattern.sub(replacer, code_str)
         return new_code_str, function_names
+
 
 
 

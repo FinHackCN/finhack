@@ -24,13 +24,13 @@ def initialize(context):
     # 设定滑点
     set_slippage(PriceRelatedSlippage(0.00246), type='stock')
     
-    model_id = context.trade.model_id
-    preds_cache=context.get('params', {}).get('preds_cache', 'False')
-    if preds_cache.lower()[0:1]=='t':
-        preds_data = load_preds_data(model_id,True)
-    else:
-        preds_data = load_preds_data(model_id)
-    g.preds=preds_data
+    # model_id = context.trade.model_id
+    # preds_cache=context.get('params', {}).get('preds_cache', 'False')
+    # if preds_cache.lower()[0:1]=='t':
+    #     preds_data = load_preds_data(model_id,True)
+    # else:
+    #     preds_data = load_preds_data(model_id)
+    # g.preds=preds_data
     # 全局变量初始化
     g.stock_num = int(context.get('params', {}).get('stocknum', 10))  # 持仓股票数量
     g.refresh_rate = int(context.get('params', {}).get('refresh_rate', 10))  # 调仓频率，动态调整
@@ -39,11 +39,34 @@ def initialize(context):
     g.days = 0  # 交易日计时器
     
     # 每日运行
-    run_daily(trade_open, time="09:30")
-    run_daily(trade_open, time="09:30")
-    run_daily(trade_open, time="09:30")
-    run_daily(trade_close, time="15:00")
+    run_daily(trade_open, time="09:20:10")
+    run_daily(trade_close, time="14:57:10")
 
+    # # 当前时间
+    # now = datetime.now()
+
+    
+
+    # # 10分钟后的时间
+    # ten_minutes_later = now + timedelta(minutes=60*24)
+
+    # # 当前时间加上10秒，用于第一次调度
+    # next_call_time = now + timedelta(seconds=10)
+
+
+
+    # # 循环，直到达到10分钟后的时间
+    # while next_call_time <= ten_minutes_later:
+    #     print(next_call_time.strftime("%H:%M:%S"))
+    #     # 计划函数调用
+    #     run_daily(test, next_call_time.strftime("%H:%M:%S"))
+        
+    #     # 更新下一次调用时间（增加10秒）
+    #     next_call_time += timedelta(seconds=10)
+    
+
+def days_inc(context):
+    g.days += 1
 
 
 # 动态调整策略参数
@@ -55,11 +78,13 @@ def adjust_dynamic_parameters(context):
 def select_stocks(context):
     # 加载AI模型预测数据
     g=context.g
+    print(g)
     now_date = context.current_dt.strftime('%Y%m%d')
     preds_data=g.preds
     # 筛选今日预测数据，并排序
     pred_today = preds_data[preds_data['trade_date'] == now_date]
     pred_today_sorted = pred_today.sort_values(by='pred', ascending=False)
+    print(pred_today_sorted)
     # 返回股票列表
     return pred_today_sorted['ts_code'].tolist()
 
@@ -71,7 +96,9 @@ def should_sell(stock, context):
     if current_price==None:
         return False
     cost_price = context.portfolio.positions[stock].cost_basis
+    print(f"{stock}的当前价为{current_price}，均价为{cost_price}，止损价为{cost_price * g.stop_loss_threshold}，止盈价为{cost_price * g.stop_gain_threshold}")
     if current_price <= cost_price * g.stop_loss_threshold or current_price >= cost_price * g.stop_gain_threshold:
+        print('触发卖出条件')
         return True
     return False
 
@@ -106,13 +133,12 @@ def trade_open(context):
                     successed=successed+1
                 if successed>=num_stocks_to_buy:
                     break
-    g.days += 1
     
 
 
 # 盘尾逻辑
 def trade_close(context):
-    # sync(context)
+    sync(context)
     g=context.g
     adjust_dynamic_parameters(context)
     
@@ -120,3 +146,4 @@ def trade_close(context):
     for stock in list(context.portfolio.positions.keys()):
         if should_sell(stock, context):
             order_target_value(stock, 0)
+    g.days += 1

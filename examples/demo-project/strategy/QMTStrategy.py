@@ -136,7 +136,7 @@ def trade_open(context):
 
 # 盘尾逻辑
 def trade_close(context):
-    # sync(context)
+    sync(context)
     g=context.g
     adjust_dynamic_parameters(context)
     

@@ -153,7 +153,7 @@ class TushareCollector:
     def getAStockOther(self):
         self.mTread(tsAStockOther,'report_rc')
         self.mTread(tsAStockOther,'cyq_perf')
-        self.mTread(tsAStockOther,'cyq_chips')
+        #self.mTread(tsAStockOther,'cyq_chips')
         #broker_recommend
     
     def getFund(self):

@@ -2,7 +2,7 @@
 """Client and server classes corresponding to protobuf-defined services."""
 import grpc
 
-import trader.qmt.qmt_pb2 as qmt__pb2
+import trader.miniqmt.qmt_pb2 as qmt__pb2
 
 
 class QmtServiceStub(object):

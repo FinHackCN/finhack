@@ -112,16 +112,25 @@ def run_interval(func,time,interval='daily',date_list=[]):
         hours, minutes = time.split(":")
         time = f"{hours.zfill(2)}:{minutes.zfill(2)}:00"
      
-    for date in date_list:
-        new_event={
-            'event_name':func.__name__,
-            #'event_func':func,
-            'event_time':date+' '+time,
-            'event_type':'user_event'
-        }
-        context['data']['event_list'].append(new_event)
-        context['data']['event_list'].sort(key=lambda x: x['event_time'])
-        print(len(context['data']['event_list']))
+     
+    event_interval={
+        'event_name':func.__name__,
+        'event_interval':interval,
+        'time':time,
+        'event_type':'user_event'
+    }
+    context['data']['event_interval_list'].append(event_interval)
+     
+    # for date in date_list:
+    #     new_event={
+    #         'event_name':func.__name__,
+    #         #'event_func':func,
+    #         'event_time':date+' '+time,
+    #         'event_type':'user_event'
+    #     }
+    #     context['data']['event_list'].append(new_event)
+    # context['data']['event_list'].sort(key=lambda x: x['event_time'])
+       
     
 def run_daily(func,time,reference_security=None):
     return run_interval(func,time,'daily',date_list=context['data']['calendar'])

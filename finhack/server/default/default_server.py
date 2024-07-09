@@ -98,12 +98,22 @@ class DefaultServer:
             # else:
             #     bt_list=mydb.selectToList(f"SELECT id, instance_id, features_list, train, model, strategy, start_date, end_date, init_cash, params, total_value, alpha, beta, annual_return, cagr, annual_volatility, info_ratio, downside_risk, R2, sharpe, sortino, calmar, omega, max_down, SQN, created_at, filter, win, server, trade_num, runtime, starttime, endtime,  roto, simulate, benchmark, strategy_code FROM `finhack`.`backtest` {where} order by sharpe desc LIMIT 100",'finhack')   
             
-            sql="""SELECT 
+
+            sql=""
+            path=f"{BASE_DIR}/data/config/sqllist/server/bt_list.sql"
+            if os.path.exists(path):
+                with open(path, 'r', encoding='utf-8') as file:
+                    sql= file.read()
+            else:
+                sql="""SELECT 
             id, a.instance_id, features_list, train, model, strategy, a.start_date, a.end_date, init_cash, params, a.total_value, a.alpha, a.beta, annual_return, cagr, annual_volatility, info_ratio, a.downside_risk, R2, a.sharpe,b.sharpe as sharpe2, a.sortino, calmar, omega, max_down, SQN, created_at, filter, win, server, trade_num, runtime, starttime, endtime,  roto, simulate, a.benchmark, strategy_code 
             FROM `finhack`.`backtest` a
             RIGHT JOIN rqalpha b on a.instance_id =b.instance_id
             ORDER BY b.sharpe desc limit 100"""
+
+
             bt_list=mydb.selectToList(sql,'finhack')
+
             return render_template('index.html', data=bt_list)
 
         # 不再需要检查 __name__ == '__main__'，因为这个方法将被直接调用
