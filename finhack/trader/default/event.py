@@ -56,7 +56,7 @@ class Event:
         
         
     def start_interval(context):
-        #print("新的一天开始了")
+        log(f"新的一天开始了",'trace')
         if context.data.data_source=='file':
             now_date=context.current_dt.strftime('%Y%m%d')
             start_date=context.trade.start_time[0:10].replace('-','')
@@ -67,7 +67,7 @@ class Event:
             elif now_date>context.data.daily_info['end_date']:
                 data=Data.get_data_from_file(start_date=now_date,end_date=end_date,slice_type='m',now_date=now_date,filename='astock_daily_info',cache=True)
                 context.data.daily_info=data
-            
+            #print(context.data.daily_info)
         pass
         
         

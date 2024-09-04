@@ -25,6 +25,13 @@ class DefaultFactor:
         print(self.args)
         
         
+    def compute(self):
+        factor=self.args.factor
+        code=self.args.code
+        df=indicatorCompute.computeFactorByStock(code,factor)
+        print(df)
+
+
     def list(self):
         factor_list=factorManager.getFactorsList()
         print(factor_list)

@@ -20,7 +20,7 @@ class Event:
         
         event['astock']={
             'start_interval':'00:00:00',
-            'before_market':'09:10:00',
+            'before_market':'09:05:00',
             #'before_market':'07:52:00',
             'pre_opening_start':'09:15:00',
             'pre_opening_end':'09:20:00',

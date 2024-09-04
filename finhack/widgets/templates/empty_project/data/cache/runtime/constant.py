@@ -1,5 +1,5 @@
 FRAMEWORK_DIR="/root/anaconda3/envs/finhack/lib/python3.9/site-packages/finhack"
-BASE_DIR="/data/code/demo_project"
+BASE_DIR="/data/code/finhack/examples/demo-project"
 DATA_DIR=BASE_DIR+"/data/"
 CACHE_DIR=DATA_DIR+"cache/"
 REPORTS_DIR=DATA_DIR+"reports/"

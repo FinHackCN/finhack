@@ -1,37 +1,28 @@
-import grpc
-import trader.qmt.qmt_pb2 as qmt_pb2
-import trader.qmt.qmt_pb2_grpc as qmt_pb2_grpc
 import time
 import finhack.library.log as Log
 from trader.qmt.dictobj import DictObj
 
+import requests
+import json
+
 class qmtClient():
-    def __init__(self) -> None:
-        self.channel = grpc.insecure_channel('192.168.8.119:50051')
-        # 使用该通道创建一个存根
-        self.stub = qmt_pb2_grpc.QmtServiceStub(self.channel)
+    def __init__(self, base_url='http://192.168.8.37:8000'):
+        self.base_url = base_url
 
-    def protobuf_to_dict(self,obj):
-        # Base case for recursion termination
-        if not hasattr(obj, 'DESCRIPTOR'):
-            return obj
+    def send_request(self, endpoint, params=None):
+        """ Helper method to send HTTP GET requests """
+        try:
+            response = requests.get(f"{self.base_url}{endpoint}", params=params)
+            response.raise_for_status()  # Raises a HTTPError for bad responses
+            return response.json() # Returns JSON response
+        except requests.RequestException as e:
+            print(f"HTTP Request failed: {e}")
+            return None
 
-        result = {}
-        for field in obj.DESCRIPTOR.fields:
-            value = getattr(obj, field.name)
-            # Convert repeated message fields to list of dicts
-            if field.message_type and field.label == field.LABEL_REPEATED:
-                result[field.name] = [self.protobuf_to_dict(v) for v in value]
-            # Convert non-repeated message fields to dict
-            elif field.message_type:
-                result[field.name] = self.protobuf_to_dict(value)
-            # Convert repeated scalar fields to list
-            elif field.label == field.LABEL_REPEATED:
-                result[field.name] = list(value)
-            # Convert scalar fields directly
-            else:
-                result[field.name] = value
-        return result
+    def getAsset(self):
+        """ Get asset information """
+        return self.send_request('/get_asset')
+
 
     def assetSync(self,context):
         Log.logger.info("开始同步资产数据")
@@ -69,124 +60,44 @@ class qmtClient():
         self.assetSync(context)
         self.positionSync(context)
 
+    def getPrice(self, code):
+        """ Get price for a specific stock code """
+        params = {'code': code}
+        return self.send_request('/get_price', params=params)
 
-    def getPrice(self,code):
-        try:
-            response=self.stub.GetPrice(qmt_pb2.PriceRequest(code=code))
-            asset= self.protobuf_to_dict(response)
-            return asset['last_price']
-        except grpc._channel._InactiveRpcError as e:
-            Log.logger.error(f"RPC failed: {e.code()}")
-            Log.logger.error(f"Details: {e.details()}")
-            return None
-        except Exception as e:
-            Log.logger.error(f"An unexpected error occurred: {e}")
-            return None
+    def getInfo(self, code):
+        """ Get daily information for a specific stock code """
+        params = {'code': code}
+        info=self.send_request('/get_daily_info', params=params)
+        info['downLimit']=info['down_limit']
+        info['upLimit']=info['up_limit']
+        return DictObj(info)
 
-
-    def getInfo(self,code):
-        try:
-            response=self.stub.GetDailyInfo(qmt_pb2.DailyInfoRequest(code=code))
-            info=self.protobuf_to_dict(response)
-            info['downLimit']=info['down_limit']
-            info['upLimit']=info['up_limit']
-            return DictObj(info)
-        except grpc._channel._InactiveRpcError as e:
-            Log.logger.error(f"RPC failed: {e.code()}")
-            Log.logger.error(f"Details: {e.details()}")
-            return None
-        except Exception as e:
-            Log.logger.error(f"An unexpected error occurred: {e}")
-            return None
-        
-    def OrderBuy(self,code, amount, price=0, strategy='strategy', remark='remark'):
-        try:
-            Log.logger.info(f"向qmtServer下单买入{code}共{amount}股，单价{price}]")
-            response=self.stub.OrderBuy(qmt_pb2.OrderRequest(code=code, amount=amount, price=price, strategy=strategy, remark=remark))
-            seq=self.protobuf_to_dict(response)
-            return seq['seq']
-        except grpc._channel._InactiveRpcError as e:
-            Log.logger.error(f"RPC failed: {e.code()}")
-            Log.logger.error(f"Details: {e.details()}")
-            return None
-        except Exception as e:
-            Log.logger.error(f"An unexpected error occurred: {e}")
-            return None
-        
-    def OrderSell(self,code, amount, price=0, strategy='strategy', remark='remark'):
-        try:
-            Log.logger.info(f"向qmtServer下单卖出{code}共{amount}股，单价{price}")
-            response=self.stub.OrderSell(qmt_pb2.OrderRequest(code=code, amount=amount, price=price, strategy=strategy, remark=remark))
-            seq=self.protobuf_to_dict(response)
-            return seq
-        except grpc._channel._InactiveRpcError as e:
-            Log.logger.error(f"RPC failed: {e.code()}")
-            Log.logger.error(f"Details: {e.details()}")
-            return None
-        except Exception as e:
-            Log.logger.error(f"An unexpected error occurred: {e}")
-            return None
-        
-    def QueryOrders(self):
-        try:
-            Log.logger.info(f"向qmtServer查询订单")
-            response=self.stub.QueryOrders(qmt_pb2.QueryOrdersRequest())
-            orders=self.protobuf_to_dict(response)
-            return orders
-        except grpc._channel._InactiveRpcError as e:
-            Log.logger.error(f"RPC failed: {e.code()}")
-            Log.logger.error(f"Details: {e.details()}")
-            return None
-        except Exception as e:
-            Log.logger.error(f"An unexpected error occurred: {e}")
-            return None
-        
-    def CancelOrders(self):
-        try:
-            response=self.stub.CancelOrders(qmt_pb2.QueryOrdersRequest())
-            return True
-        except grpc._channel._InactiveRpcError as e:
-            Log.logger.error(f"RPC failed: {e.code()}")
-            Log.logger.error(f"Details: {e.details()}")
-            return None
-        except Exception as e:
-            Log.logger.error(f"An unexpected error occurred: {e}")
-            return None   
-    def RetryOrders(self):
-        try:
-            response=self.stub.RetryOrders(qmt_pb2.QueryOrdersRequest())
-            return True
-        except grpc._channel._InactiveRpcError as e:
-            Log.logger.error(f"RPC failed: {e.code()}")
-            Log.logger.error(f"Details: {e.details()}")
-            return None
-        except Exception as e:
-            Log.logger.error(f"An unexpected error occurred: {e}")
-            return None   
-
-    def getAsset(self):
-        try:
-            response=self.stub.GetAsset(qmt_pb2.AssetRequest())
-            asset=self.protobuf_to_dict(response)
-            return asset
-        except grpc._channel._InactiveRpcError as e:
-            Log.logger.error(f"RPC failed: {e.code()}")
-            Log.logger.error(f"Details: {e.details()}")
-            return None
-        except Exception as e:
-            Log.logger.error(f"An unexpected error occurred: {e}")
-            return None
-        
     def GetPositions(self):
-        try:
-            response=self.stub.GetPositions(qmt_pb2.AssetRequest())
-            positions=self.protobuf_to_dict(response)
-            return positions['positions']
-        except grpc._channel._InactiveRpcError as e:
-            Log.logger.error(f"RPC failed: {e.code()}")
-            Log.logger.error(f"Details: {e.details()}")
-            return None
-        except Exception as e:
-            Log.logger.error(f"An unexpected error occurred: {e}")
-            return None
+        """ Get positions """
+        return self.send_request('/get_positions')
+
+    def OrderBuy(self, code, amount, price=0, strategy='strategy', remark='remark'):
+        """ Send a buy order """
+        params = {'code': code, 'amount': amount, 'price': price, 'strategy': strategy, 'remark': remark}
+        return self.send_request('/order_buy', params=params)
+
+    def OrderSell(self, code, amount, price=0, strategy='strategy', remark='remark'):
+        """ Send a sell order """
+        params = {'code': code, 'amount': amount, 'price': price, 'strategy': strategy, 'remark': remark}
+        return self.send_request('/order_sell', params=params)
+
+    def QueryOrders(self):
+        """ Query all orders """
+        return self.send_request('/query_orders')
+
+    def CancelOrders(self):
+        """ Cancel all orders """
+        return self.send_request('/cancel_orders')
+
+    def RetryOrders(self):
+        """ Retry failed orders """
+        return self.send_request('/retry_orders')
+
+ 
 qclient=qmtClient()

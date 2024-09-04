@@ -234,6 +234,8 @@ def getStockDailyPriceByCode(code,where="",startdate='',enddate='',fq='hfq',db='
             
             if df_name.empty:
                 name=getTableDataByCode('astock_basic',code,'')
+                if not 'name' in name:
+                     print(code+" can't find name")
                 df_price['name']=name['name'].values[0]
             else:
                 df_name.rename(columns={'start_date':'trade_date'}, inplace = True)
@@ -407,12 +409,12 @@ def alignStockFactors(df,table,date,filed,conv=0,db='tushare'):
  
         
         if(filed=='*'):
-            df_factor=mydb.selectToDf("select * from "+table+" where ts_code='"+ts_code+"'",'tushare')
-            filed=mydb.selectToDf("select COLUMN_NAME from information_schema.COLUMNS where table_name = '"+table+"'",'tushare')
+            df_factor=mydb.selectToDf("select * from "+table+" where ts_code='"+ts_code+"'",db)
+            filed=mydb.selectToDf("select COLUMN_NAME from information_schema.COLUMNS where table_name = '"+table+"'",db)
             filed=filed['COLUMN_NAME'].tolist()
             filed=",".join(filed)
         else:
-            df_factor=mydb.selectToDf("select "+date+","+filed+" from "+table+" where ts_code='"+ts_code+"'",'tushare')
+            df_factor=mydb.selectToDf("select "+date+","+filed+" from "+table+" where ts_code='"+ts_code+"'",db)
         
         
         if isinstance(df_factor, bool) or df_factor.empty:
@@ -448,6 +450,9 @@ def alignStockFactors(df,table,date,filed,conv=0,db='tushare'):
         df_res=pd.merge(df, df_factor, how='left', on='trade_date',validate="one_to_many", copy=True, indicator=False)
         df_res.drop_duplicates('trade_date',inplace = True)
         
+        # print(df)
+        # print(df_res)
+
         if conv==2: #不填充
             pass
         else:

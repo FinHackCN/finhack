@@ -187,8 +187,8 @@ def order_value(security, value, style=None, side='long', pindex=0, close_today=
     price=Data.get_price(code=security,context=context)
     #print(price)
     if price==None:
-        #print(f"can not get price of {security}")
-        return False
+        log(f"can not get price of {security}",'trace')
+        return  False
     if value>0:
         amount=int(value/price)
         return order_buy(security,amount)
@@ -208,8 +208,9 @@ def order_value(security, value, style=None, side='long', pindex=0, close_today=
 #目标价值下单
 def order_target_value(security, value, style=None, side='long', pindex=0, close_today=False):
     price=Data.get_price(code=security,context=context)
+    #print(price)
     if price==None:
-        #print(f"can not get price of {security}")
+        log(f"can not get price of {security}",'trace')
         return  False
     target_amount=int(value/price)
     now_amount=context.portfolio.positions[security].amount
@@ -272,13 +273,13 @@ def order_buy(security,amount):
     rules=Rules(order=o,context=context,log=log)
     
     o=rules.apply()
-    #print(o)
+    # log(json.dumps(o),'trace')
     
     
     if o.status!=1:
         return False
     if o.amount==0:
-        #log(f"{o.code}--{o.amount}，买单数为0，自动取消订单")  
+        log(f"{o.code}--{o.amount}，买单数为0，自动取消订单",'trace')
         return False
     is_new=False
     #没有持仓

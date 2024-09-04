@@ -298,12 +298,19 @@ class Data:
     
     
     def get_daily_info(code,context,date=None):
+        print(2222222222)
         if date==None:
             date=context.current_dt.strftime('%Y%m%d')
-            
+        
+        
+        print(context.data.data_source)
         if context.data.data_source=='file':
             info_key='astock_daily_info_'+date+'_'+code
             #DictObj(ts_code='300067.SZ', open=4.34, high=4.45, low=4.29, close=4.45, volume=302997.06, amount=132608.013, name='安诺其', vwap=4.37654440024783, stop=0, upLimit=4.73, downLimit=3.87)
+            
+            print(info_key)
+            print(context.data.daily_info.keys())
+            
             if info_key in context.data.daily_info:
                 info=context.data.daily_info[info_key]
             else:
@@ -337,6 +344,7 @@ class Data:
 
     #根据当前时间获取价格
     def get_price(code,context=None):
+        print(1111111111)
         if True:
             #时间是9点半以前，取昨天数据
             if context.current_dt.strftime('%H:%M:%S')<'09:30:00':
