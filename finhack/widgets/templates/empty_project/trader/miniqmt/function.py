@@ -1,7 +1,8 @@
-from .context import context
-from .data import Data
-from .object import Order,Position
-from .rules import Rules
+from trader.miniqmt.context import context
+from trader.miniqmt.data import Data
+from trader.miniqmt.object import Order,Position
+from trader.miniqmt.rules import Rules
+from trader.miniqmt.qmtClient import qclient
 import re
 from finhack.library.config import Config
 import bisect
@@ -14,6 +15,7 @@ import os
 import pandas as pd
 from finhack.trainer.trainer import Trainer
 import shutil
+from datetime import datetime, timedelta
 from finhack.trainer.lightgbm.lightgbm_trainer import LightgbmTrainer
 
 def init_context(args):
@@ -74,10 +76,11 @@ def init_context(args):
         context.id=args['id']
     else:
         context.id=hash_value
+    qclient.assetSync(context)
+    qclient.positionSync(context)
 
-    # print(context_json)
-    # print(hash_value)
-    # exit()
+
+
 
 def set_benchmark(code):
     context['trade']['benchmark']=code
@@ -92,16 +95,10 @@ def set_option(key,value):
     pass
 
 def set_order_cost(cost,type=None):
-    context['account']['open_tax']=cost.open_tax
-    context['account']['close_tax']=cost.close_tax
-    context['account']['open_commission']=cost.open_commission
-    context['account']['close_commission']=cost.close_commission
-    context['account']['close_today_commission']=cost.close_today_commission
-    context['account']['min_commission']=cost.min_commission
+    pass
 
 def set_slippage(obj,type=None):
-    context['trade']['slip']=obj.value
-    context['trade']['sliptype']=obj.type
+    pass
     
 def insert_sorted_list(sorted_list, new_element):
     bisect.insort(sorted_list, new_element, key=lambda x: x['event_time'])
@@ -115,15 +112,25 @@ def run_interval(func,time,interval='daily',date_list=[]):
         hours, minutes = time.split(":")
         time = f"{hours.zfill(2)}:{minutes.zfill(2)}:00"
      
-    for date in date_list:
-        new_event={
-            'event_name':func.__name__,
-            'event_func':func,
-            'event_time':date+' '+time,
-            'event_type':'user_event'
-        }
-        context['data']['event_list'].append(new_event)
-        context['data']['event_list'].sort(key=lambda x: x['event_time'])
+     
+    event_interval={
+        'event_name':func.__name__,
+        'event_interval':interval,
+        'time':time,
+        'event_type':'user_event'
+    }
+    context['data']['event_interval_list'].append(event_interval)
+     
+    # for date in date_list:
+    #     new_event={
+    #         'event_name':func.__name__,
+    #         #'event_func':func,
+    #         'event_time':date+' '+time,
+    #         'event_type':'user_event'
+    #     }
+    #     context['data']['event_list'].append(new_event)
+    # context['data']['event_list'].sort(key=lambda x: x['event_time'])
+       
     
 def run_daily(func,time,reference_security=None):
     return run_interval(func,time,'daily',date_list=context['data']['calendar'])
@@ -154,30 +161,14 @@ def order_target(security, amount, style=None, side='long', pindex=0, close_toda
     cash=context['portfolio']['available_cash']
     context['portfolio']['cash']=context['portfolio']['cash']+cash
     context['portfolio']['available_cash']=context['portfolio']['available_cash']+cash
-    #todo
-    
-    
-
-#这里粗算一下，不算那么细了，没必要
-def compute_cost(value,action='open'):
-    #绝对值
-    if value<0:
-        value=-value
-    account=context.account
-    tax=value*account[action+"_tax"]
-    commission=value*account[action+"_commission"]
-    if commission<account['min_commission']:
-        commission=account['min_commission']
-    cost=tax+commission
-    return tax,commission,cost
     
 
 #按股数下单
 def order(security, amount, style=None, side='long', pindex=0, close_today=False):
     if amount>0:
-        return order_buy(security,amount)
+        return order_buy(security,amount,9999)
     else:
-        return order_sell(security,-amount)
+        return order_sell(security,-amount,-1)
 
 
 
@@ -185,16 +176,18 @@ def order(security, amount, style=None, side='long', pindex=0, close_today=False
 #按价值下单
 def order_value(security, value, style=None, side='long', pindex=0, close_today=False):
     price=Data.get_price(code=security,context=context)
+    if price==0:
+        return False
     #print(price)
     if price==None:
-        log(f"can not get price of {security}",'trace')
+        #print(f"can not get price of {security}")
         return  False
     if value>0:
         amount=int(value/price)
-        return order_buy(security,amount)
+        return order_buy(security,amount,9999)
     elif value<0:
         amount=-int(value/price)
-        return order_sell(security,amount)
+        return order_sell(security,amount,-1)
         
 
 # #目标股数下单
@@ -208,9 +201,8 @@ def order_value(security, value, style=None, side='long', pindex=0, close_today=
 #目标价值下单
 def order_target_value(security, value, style=None, side='long', pindex=0, close_today=False):
     price=Data.get_price(code=security,context=context)
-    #print(price)
     if price==None:
-        log(f"can not get price of {security}",'trace')
+        #print(f"can not get price of {security}")
         return  False
     target_amount=int(value/price)
     now_amount=context.portfolio.positions[security].amount
@@ -268,63 +260,26 @@ def get_trades():
 #         self.cost_basis=last_sale_price
 #         self.total_value=amount*last_sale_price
 
-def order_buy(security,amount):
+def order_buy(security,amount,price=None):  
+    log(f"调用order_buy买入{security}共{amount}股,价格为{str(None)}")  
     o=Order(code=security,amount=amount,is_buy=True,context=context)
     rules=Rules(order=o,context=context,log=log)
-    
     o=rules.apply()
-    # log(json.dumps(o),'trace')
-    
-    
+
     if o.status!=1:
         return False
     if o.amount==0:
-        log(f"{o.code}--{o.amount}，买单数为0，自动取消订单",'trace')
+        #log(f"{o.code}--{o.amount}，买单数为0，自动取消订单")  
         return False
-    is_new=False
-    #没有持仓
-    if security not in context.portfolio.positions:
-        is_new=True
-        pos=Position(code=security,amount=o.amount,enable_amount=o.enable_amount,last_sale_price=o.last_sale_price)
-        pos.total_cost=pos.total_cost+o.cost
-        context.portfolio.positions[security]=pos
-        context.portfolio.cash=context.portfolio.cash-o.value-o.cost-o.slip_value
-        context.portfolio.positions_value=context.portfolio.positions_value+o.value
-        context.portfolio.total_value=context.portfolio.cash+context.portfolio.positions_value
-        
-    else:
-        pos=context.portfolio.positions[security]
-        #last_value=pos.total_value
-        
-        pos.amount=pos.amount+o.amount
-        pos.enable_amount=pos.enable_amount
-        pos.last_sale_price=o.last_sale_price
-        pos.total_cost=pos.total_cost+o.cost+o.amount*o.price
-        pos.cost_basis=pos.total_cost/pos.amount
-        pos.total_value=pos.amount*pos.last_sale_price
-        
-        context.portfolio.cash=context.portfolio.cash-o.value-o.cost-o.slip_value
-        context.portfolio.positions_value=context.portfolio.positions_value+o.value
-        context.portfolio.total_value=context.portfolio.cash+context.portfolio.positions_value
-        
-    now_date=context.current_dt.strftime('%Y%m%d')
-    buy_value = context.logs.history.get(now_date, {}).get('buy_value', 0)
-    if buy_value != 0:
-        # 如果存在 buy_value 键，则执行对应的操作
-        context.logs.history[now_date]['buy_value']=buy_value+o.value
-    else:
-        # 如果不存在 buy_value 键，则执行其他操作
-        context.logs.history[now_date]={}
-        context.logs.history[now_date]['buy_value']=o.value 
-        
-    log(f"买入{o.code}共计{o.amount}股，单价为{round(pos.last_sale_price,2)}，价值为{round(o.value,2)}")   
-    log(f"-------------------{is_new}-------------",'trace')
-    log(f"当前现金："+str(context.portfolio.cash),'trace')
-    log(f"当前持仓："+str(context.portfolio.positions_value),'trace')
-    log(f"当前市值："+str(context.portfolio.total_value),'trace')    
-    return True    
+    if price!=None:
+        o.price=price
+    qclient.OrderBuy(o.code,o.amount,o.price)
+    log(f"下单买入{o.code}共计{o.amount}股，单价{o.price}")   
+    return True
+      
 
-def order_sell(security,amount):
+def order_sell(security,amount,price=None):
+    log(f"调用order_sell卖出{security}共{amount}股,价格为{str(None)}")  
     o=Order(code=security,amount=amount,is_buy=False,context=context)
     rules=Rules(order=o,context=context,log=log)
     o=rules.apply()
@@ -333,124 +288,13 @@ def order_sell(security,amount):
     if o.amount==0:
         log(f"{o.code}--{o.amount}，卖单数为0，自动取消订单")  
         return False
+    if price!=None:
+        o.price=price
+    qclient.OrderSell(o.code,o.amount,o.price)
+    log(f"下单卖出{o.code}共计{o.amount}股，单价{o.price}")   
+    return True
     
-    if security in context.portfolio.positions:
-        context.portfolio.cash=context.portfolio.cash+o.value-o.cost-o.slip_value
-        pos=context.portfolio.positions[security]
-        if pos.amount-o.amount==0:
-            del context.portfolio.positions[security]
-        else:
-            pos=context.portfolio.positions[security]
-            pos.amount=pos.amount-o.amount
-            pos.enable_amount=pos.enable_amount-o.amount
-            pos.last_sale_price=o.last_sale_price
-            pos.total_cost=pos.total_cost+o.cost-o.value
-            pos.total_value=pos.amount*pos.last_sale_price
-            pos.cost_basis=pos.total_cost/pos.amount
 
-        context.portfolio.positions_value=context.portfolio.positions_value-o.value
-        context.portfolio.total_value=context.portfolio.cash+context.portfolio.positions_value
-    
-    
-    #卖价>均价
-    if (o.value-o.cost-o.slip_value)/o.amount>pos.cost_basis:
-        context.performance.win=context.performance.win+1
-    context.performance.trade_num=context.performance.trade_num+1
-    
-    now_date=context.current_dt.strftime('%Y%m%d')
-    sell_value = context.logs.history.get(now_date, {}).get('sell_value', 0)
-    if sell_value !=0:
-        # 如果存在 buy_value 键，则执行对应的操作
-        context.logs.history[now_date]['sell_value']=sell_value+o.value
-    else:
-        # 如果不存在 buy_value 键，则执行其他操作
-        context.logs.history[now_date]={}
-        context.logs.history[now_date]['sell_value']=o.value 
-    
-    trade_return=(o.value-o.cost)/o.amount/pos.cost_basis-1
-    context.logs.trade_returns.append(trade_return)
-    
-    log(f"卖出{o.code}共计{o.amount}股，单价为{round(pos.last_sale_price,2)}，价值为{round(o.value,2)}，收益{round(trade_return*100,2)}%({round(trade_return*o.value,2)})")   
-    log('---------------------------------','trace')
-    log(f"当前现金："+str(context.portfolio.cash),'trace')
-    log(f"当前持仓："+str(context.portfolio.positions_value),'trace')
-    log(f"当前市值："+str(context.portfolio.total_value),'trace')    
-
-    return True    
-    
-    # print(security)
-    # print(value)
-    # tax,commission,cost=compute_cost(value,'open')
-    
-    # info=Data.get_daily_info(code=security,context=context)
-    # price=Data.get_price(code=security,context=context)
-    
-    # order=preOrder(code,amount)
-    # order=Rules.apply()
-    
-    
-    # print(info)
-    # print(price)
-    
-    # exit()    
-    
-    
-    
-def test():
-    if 1:
-        
-        #按该票上次收盘价估算市值，兼容rqalpha
-        if ts_code in instance['positions']:
-            try:
-                last_value=instance['positions'][ts_code]['last_close']*amount
-            except Exception as e:
-                print(ts_code)
-                print(now_date)
-                print(instance['positions'][ts_code])
-        else:
-            last_value=price*amount
-        
-        #再检测一下，排除买了1手手续费不够的情况
-        if amount>0:
-            value=amount*price
-            fees=5
-            if value*instance['setting']['fees']>5:
-                fees=value*instance['setting']['fees']
-                
-            instance['cash']=instance['cash']-value-fees
-            
-            #理论上total_value是不应该变化的，但是rqalpha似乎是这样做的
-            instance['total_value']=instance['total_value']-fees-value+last_value
-            
-            if ts_code not in instance['positions']:
-                instance['positions'][ts_code]={
-                    "amount":amount,
-                    "avg_price":(value+fees)/amount,
-                    "total_value":value+fees,
-                    "last_close":price
-                }
-            else:
-                instance['positions'][ts_code]['total_value']=instance['positions'][ts_code]['total_value']
-                instance['positions'][ts_code]['amount']=instance['positions'][ts_code]['amount']+amount
-                instance['positions'][ts_code]['avg_price']=(instance['positions'][ts_code]['total_value']+price+fees)/instance['positions'][ts_code]['amount']
-                instance['positions'][ts_code]['last_close']=price
-            instance['position_value']=instance['position_value']+value
-        else:
-            #bt.log(instance=instance,ts_code=ts_code,msg="钱不够，无法买入！",type='warn')
-            return False     
-
-        bt.log(instance=instance,ts_code=ts_code,msg="买入"+str(amount)+"股，当前价格"+str(round(price,2)),type='trade')
-        buy_value = instance['history'].get(now_date, {}).get('buy_value', 0)
-        if buy_value != 0:
-            # 如果存在 buy_value 键，则执行对应的操作
-            instance['history'][now_date]['buy_value']=buy_value+amount*price
-        else:
-            # 如果不存在 buy_value 键，则执行其他操作
-            instance['history'][now_date]={}
-            instance['history'][now_date]['buy_value']=amount*price
-
-        return True    
-    
     
     
     
@@ -488,7 +332,7 @@ def load_preds_data(model_id,cache=False,trainer='lightgbm',start_time="",end_ti
     preds_df=Trainer.getPredData(model_id,start_date,end_date)
     clsLgbTrainer=LightgbmTrainer()
     preds=clsLgbTrainer.pred(preds_df,md5=model_id,save=False)
-    del preds_df
+
     if cache==True:
         preds.to_pickle(pred_data_path)
     return preds
@@ -498,9 +342,8 @@ def delete_preds_data(model_id):
     if os.path.exists(pred_data_path):
         os.remove(pred_data_path)
     
-def sync(context):
-    return True
 
+ 
 def bind_action(strategy):
     strategy.set_benchmark=set_benchmark
     strategy.set_option=set_option
@@ -518,7 +361,7 @@ def bind_action(strategy):
     strategy.log=log
     strategy.load_preds_data=load_preds_data
     strategy.get_price=Data.get_price
-    strategy.sync=sync
+    strategy.sync=qclient.sync
 
 
 

@@ -106,7 +106,7 @@ class DefaultBacktest():
         Data.init_data(cache=True)
         cash_list = self.args.cash.split(',')
         strategy_list = self.args.strategy.split(',')
-        model_list = mydb.selectToDf('select * from auto_train where id > 14226 order by rand()', 'finhack')
+        model_list = mydb.selectToDf('select * from auto_train order by rand()', 'finhack')
         
         semaphore = multiprocessing.Semaphore(int(self.args.process))  # 创建一个信号量，最大允许process个进程同时运行
         # print(model_list)

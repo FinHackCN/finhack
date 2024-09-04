@@ -405,7 +405,7 @@ class indicatorCompute():
             if df.empty:
                 return False
         except Exception as e:
-            # print(e)
+            Log.logger.error("err exception is %s" % traceback.format_exc())
             # print('22222222222')
             return False
 

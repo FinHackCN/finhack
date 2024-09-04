@@ -1,6 +1,6 @@
-from trader.qmt.data import Data
+from trader.miniqmt.data import Data
 import finhack.library.log as Log
-from trader.qmt.function import *
+from trader.miniqmt.function import *
 import pandas as pd
 from datetime import datetime, timedelta
 from finhack.trainer.trainer import Trainer
@@ -20,8 +20,8 @@ class Event:
         
         event['astock']={
             'start_interval':'00:00:00',
-            'before_market':'09:05:00',
-            #'before_market':'07:52:00',
+            'before_market':'09:10:00',
+            #'before_market':'02:40:00',
             'pre_opening_start':'09:15:00',
             'pre_opening_end':'09:20:00',
             'matching_start':'09:25:00',

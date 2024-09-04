@@ -26,6 +26,7 @@ finhack factor analys --factor=pe_0         #对目标因子进行分析
 finhack trainer auto --vendor=lightgbm      #自动进行lightgbm训练
 finhack factor mining --method=gplearn   因子挖掘
 finhack factor mining --method=chatgpt --prompt=autoalpha --model=gpt-4-1106-preview   因子挖掘
+finhack factor compute --code=002624.sz --factor=rimv_0    单个股票单个因子计算
 finhack -h
 -------------------------------"""
         if args:

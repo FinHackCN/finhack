@@ -37,17 +37,19 @@ def xx123(df,p):
         df['xx3']=df['open']
         return df
 
-    # def rim(df,p):
-    #     df_rim=AStock.alignStockFactors(df,'stock_finhack_rim','date',filed='name,industry,value,value_end,value_max,vp,vep,vmp,rcount',conv=1,db='finhack')
-    #     if df_rim.empty:
-    #         return df
-    #     df['rimn']=df_rim['name'].astype("string")
-    #     df['rimi']=df_rim['industry'].astype("string")
-    #     df['rimv']=df_rim['value']
-    #     df['rimve']=df_rim['value_end']
-    #     df['rimvm']=df_rim['value_max']
-    #     df['rimvp']=df_rim['vp']
-    #     df['rimvep']=df_rim['vep']
-    #     df['rimvmp']=df_rim['vmp']
-    #     df['rimrc']=df_rim['rcount']
-    #     return df
+def rim(df,p):
+        df_rim=AStock.alignStockFactors(df,'stock_finhack_rim','date',filed='industry,value,value_end,value_max,vp,vep,vmp,rcount',conv=1,db='finhackcn')
+        if df_rim.empty:
+            return df
+        df['rimn']=df_rim['name'].astype("string")
+        df['rimi']=df_rim['industry'].astype("string")
+        df['rimv']=df_rim['value']
+        df['rimve']=df_rim['value_end']
+        df['rimvm']=df_rim['value_max']
+        df['rimvp']=df_rim['vp']
+        df['rimvep']=df_rim['vep']
+        df['rimvmp']=df_rim['vmp']
+        df['rimrc']=df_rim['rcount']
+        return df
+
+

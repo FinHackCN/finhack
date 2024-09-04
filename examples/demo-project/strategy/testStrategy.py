@@ -24,13 +24,14 @@ def initialize(context):
     # 设定滑点
     set_slippage(PriceRelatedSlippage(0.00246), type='stock')
     
-    # model_id = context.trade.model_id
-    # preds_cache=context.get('params', {}).get('preds_cache', 'False')
-    # if preds_cache.lower()[0:1]=='t':
-    #     preds_data = load_preds_data(model_id,True)
-    # else:
-    #     preds_data = load_preds_data(model_id)
-    # g.preds=preds_data
+    model_id = context.trade.model_id
+    preds_cache=context.get('params', {}).get('preds_cache', 'False')
+    if preds_cache.lower()[0:1]=='t':
+        preds_data = load_preds_data(model_id,True)
+    else:
+        preds_data = load_preds_data(model_id)
+    g.preds=preds_data
+    print(preds_data)
     # 全局变量初始化
     g.stock_num = int(context.get('params', {}).get('stocknum', 10))  # 持仓股票数量
     g.refresh_rate = int(context.get('params', {}).get('refresh_rate', 10))  # 调仓频率，动态调整
@@ -78,13 +79,11 @@ def adjust_dynamic_parameters(context):
 def select_stocks(context):
     # 加载AI模型预测数据
     g=context.g
-    print(g)
     now_date = context.current_dt.strftime('%Y%m%d')
     preds_data=g.preds
     # 筛选今日预测数据，并排序
     pred_today = preds_data[preds_data['trade_date'] == now_date]
     pred_today_sorted = pred_today.sort_values(by='pred', ascending=False)
-    print(pred_today_sorted)
     # 返回股票列表
     return pred_today_sorted['ts_code'].tolist()
 
@@ -112,6 +111,7 @@ def trade_open(context):
     g=context.g
     adjust_dynamic_parameters(context)
     
+    
     # 卖出逻辑
     for stock in list(context.portfolio.positions.keys()):
         if should_sell(stock, context):
@@ -120,7 +120,9 @@ def trade_open(context):
     # 买入逻辑
     if  g.days % g.refresh_rate == 0:
         stock_list = select_stocks(context)
+        
         num_stocks_to_buy = min(len(stock_list), g.stock_num - len(context.portfolio.positions))
+        
         if num_stocks_to_buy==0:
             g.days += 1
             return 
@@ -129,6 +131,7 @@ def trade_open(context):
         for stock in stock_list:
             if should_buy(stock, context):
                 status=order_value(stock, cash_per_stock)
+                #print(status)
                 if status:
                     successed=successed+1
                 if successed>=num_stocks_to_buy:
