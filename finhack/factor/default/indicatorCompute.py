@@ -145,7 +145,7 @@ class indicatorCompute():
                 #如果是check，则全量交易日计算
                 diff_date=len(td_list_p)
 
-
+            # diff_date=10
             # print(code_factors_path)
             # print(diff_date)
             # print(df_price)
@@ -174,6 +174,7 @@ class indicatorCompute():
 
             #日期没有变化
             if diff_date==0:
+                Log.logger.info(ts_code+"  diff_date=0")
                 for row in factor_list:
                     factor_name=row
                     if(isinstance(row,(dict))):
@@ -190,11 +191,13 @@ class indicatorCompute():
                     #需要检查单因子是否需要重写
                     for factor_name in df_factor.columns.tolist():
                         single_factors_path=SINGLE_FACTORS_DIR+factor_name+'.csv'
+                        #有这个因子的csv文件
                         if os.path.isfile(single_factors_path):
                             t = os.path.getmtime(code_factors_path)-os.path.getmtime(single_factors_path)
                             if t<60*60: #修改时间和code_factor不超过1小时，即这个因子刚计算过
                                 return True 
                         if not check and save:
+                            #当日期和列都没变化的时候，把因子数据写到single_factors_path2
                             single_factors_path1=CACHE_DIR+"/single_factors_tmp1/"+factor_name+'.csv'
                             single_factors_path2=CACHE_DIR+"/single_factors_tmp2/"+factor_name+'.csv'
                             if factor_name not in ['ts_code','trade_date'] and not os.path.exists(single_factors_path2):
@@ -227,8 +230,14 @@ class indicatorCompute():
                 
                 
                 
-                if (not factor_name in df_factor.columns or diff_date>100) and (not factor_name in c_list):
-                    if not factor_name in df_all.columns:
+                has_csv=False
+                single_factors_path=SINGLE_FACTORS_DIR+factor_name+'.csv'
+                if os.path.isfile(single_factors_path):
+                    has_csv=True
+                #df_factor没有此列，diff_date>100，且代码未发生变化，且存在csv
+                if (not factor_name in df_factor.columns or diff_date>100 or has_csv==False) and (not factor_name in c_list):
+                    # if not factor_name in df_all.columns:
+                    if True:
                         df_all_tmp=indicatorCompute.computeFactorByStock(ts_code,factor_name,df_all.copy(),where=where,db='factors')
                         if type(df_all_tmp) == bool or (df_all_tmp.empty) :
                             df_all[factor_name]=np.nan
@@ -248,7 +257,13 @@ class indicatorCompute():
             if(first_time):
                 df_factor=df_all
             else:
+                #这里有一个坑，就是如果存在2个list，那么他们的时间可能会不一致
+                #因此建议合并到一个list中
+                #或者新增list时，不要有新的行情数据出现，否则新list和旧list的数据不一致
                 df_factor=pd.concat([df_factor,df_250.tail(diff_date)],ignore_index=True)
+                # print(df_factor)
+                # print(df_250)
+                # exit()
                 for f in df_all.columns:
                     df_factor[f]=df_all[f]
 
@@ -300,6 +315,7 @@ class indicatorCompute():
                         df=pd.DataFrame(df_factor,columns=['ts_code','trade_date',factor_name])
                         
                         #print('------')
+                        #print(df_factor)
                         df.to_csv(single_factors_path1,mode='a',encoding='utf-8',header=False,index=False)
                         
                         df_date=df[df.trade_date==lastdate]
@@ -358,8 +374,9 @@ class indicatorCompute():
         factor=factor_name.split('_')
         #module = getattr(import_module('finhack.factor.default.indicators.'+indicators), indicators)
         
-        
-        
+        df_price=df_price.copy()
+        if 'level_0' in df_price.columns:
+            df_price = df_price.drop(columns=['level_0'])        
         # 定义文件路径
         file_path = INDICATORS_DIR+indicators+".py"
         

@@ -118,7 +118,7 @@ def getStockDailyPrice(code_list=[],where="",startdate='',enddate='',fq='hfq',db
         cache_path=PRICE_CACHE_DIR+md5
         if os.path.isfile(cache_path):
             print('read cache---'+cache_path)
-            print(hashstr)
+            #print(hashstr)
             t = time.time()-os.path.getmtime(cache_path)
             if t<60*60*12 and cache: #缓存时间为12小时
                 df=pd.read_pickle(cache_path)
@@ -213,18 +213,20 @@ def getStockDailyPriceByCode(code,where="",startdate='',enddate='',fq='hfq',db='
                        
           
           
-            
-            first_adj=float(df_adj.iloc[0].adj_factor)
-            last_adj=float(df_adj.iloc[-1].adj_factor)
-            
-            df_adj = pd.merge(calendar,df_adj, on='trade_date',how='left')
-            
-            
-            
+            if not df_adj.empty:
+                first_adj=float(df_adj.iloc[0].adj_factor)
+                last_adj=float(df_adj.iloc[-1].adj_factor)
+                
+                df_adj = pd.merge(calendar,df_adj, on='trade_date',how='left')
+                
+                
+                
 
-            df_adj = df_adj.ffill()
-            df_adj=df_adj.drop('ts_code',axis=1)
-
+                df_adj = df_adj.ffill()
+                df_adj=df_adj.drop('ts_code',axis=1)
+            else:
+                 first_adj=1
+                 last_adj=1
             # print(df_adj)
             
             
@@ -235,8 +237,10 @@ def getStockDailyPriceByCode(code,where="",startdate='',enddate='',fq='hfq',db='
             if df_name.empty:
                 name=getTableDataByCode('astock_basic',code,'')
                 if not 'name' in name:
-                     print(code+" can't find name")
-                df_price['name']=name['name'].values[0]
+                    print(code+" can't find name")
+                    df_price['name']=code
+                else:
+                    df_price['name']=name['name'].values[0]
             else:
                 df_name.rename(columns={'start_date':'trade_date'}, inplace = True)
                 df_name=df_name[['trade_date','name']]
@@ -393,6 +397,8 @@ def getStockDailyPriceByCode(code,where="",startdate='',enddate='',fq='hfq',db='
         except Exception as e:
             print("error")
             print("err exception is %s" % traceback.format_exc())
+            print(df_price)
+            print(df_adj)
             traceback.print_exc()
             return pd.DataFrame()
         
@@ -400,9 +406,9 @@ def getStockDailyPriceByCode(code,where="",startdate='',enddate='',fq='hfq',db='
        
         
 def alignStockFactors(df,table,date,filed,conv=0,db='tushare'):
-    
-    
         df=df.copy()
+        if 'level_0' in df.columns:
+            df = df.drop(columns=['level_0'])
         df=df.reset_index()
         ts_code=df['ts_code'].tolist()[0]
         df.drop_duplicates('trade_date',inplace = True)
@@ -446,7 +452,12 @@ def alignStockFactors(df,table,date,filed,conv=0,db='tushare'):
         if conv==1:
             df_factor[date]=df_factor[date].astype(str)
             df_factor['trade_date']=df_factor[date].map(lambda x: x.replace('-',''))
-            
+
+        # 找出两个 DataFrame 中重复的列名，除了用于合并的 'trade_date' 列
+        overlap_cols = [col for col in df.columns if col in df_factor.columns and col != 'trade_date']
+        # 从 df 中删除这些重复的列
+        df = df.drop(columns=overlap_cols)          
+
         df_res=pd.merge(df, df_factor, how='left', on='trade_date',validate="one_to_many", copy=True, indicator=False)
         df_res.drop_duplicates('trade_date',inplace = True)
         
