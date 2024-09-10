@@ -234,7 +234,7 @@ class indicatorCompute():
                 single_factors_path=SINGLE_FACTORS_DIR+factor_name+'.csv'
                 if os.path.isfile(single_factors_path):
                     has_csv=True
-                #df_factor没有此列，diff_date>100，且代码未发生变化，且存在csv
+                #df_factor没有此列，diff_date>100，且代码未发生变化，或不存在csv
                 if (not factor_name in df_factor.columns or diff_date>100 or has_csv==False) and (not factor_name in c_list):
                     # if not factor_name in df_all.columns:
                     if True:
@@ -243,7 +243,11 @@ class indicatorCompute():
                             df_all[factor_name]=np.nan
                         else:
                             df_all=df_all_tmp
-                            
+                    # print(factor_name)
+                    # print(df_all)
+
+
+
                 #否则计算250日数据
                 else:
                     if df_250 is None or isinstance(df_250, bool):
@@ -253,6 +257,9 @@ class indicatorCompute():
                             df_250=indicatorCompute.computeFactorByStock(ts_code,factor_name,df_250,where=where,db='factors')
                             
         
+
+            # print(df_all)
+            # exit()
 
             if(first_time):
                 df_factor=df_all
@@ -346,12 +353,16 @@ class indicatorCompute():
 
     #计算单个股票单个因子
     def computeFactorByStock(ts_code,factor_name,df_price=pd.DataFrame(),where='',db='tushare'):
+        
+        
         if(df_price.empty):
             df_price=AStock.getStockDailyPriceByCode(code=ts_code,where=where,db='tushare')
             #df_result=df_price.copy()
         if(df_price.empty):
             return pd.DataFrame()
         
+        if factor_name in df_price.columns:
+            return df_price
 
         indicators,func_name,code,return_fileds=indicatorCompute.getFactorInfo(factor_name)
 
@@ -455,6 +466,8 @@ class indicatorCompute():
         #print(suffix)
         #exit()
     
+
+
         #如果返回多列，则需要同样进行shift计算
         if True:
             for f in rlist:
@@ -472,9 +485,10 @@ class indicatorCompute():
                     #print("f=%s,fs=%s" %(f,factor_name))
         #print(len(df.columns))
         
+        # print("hint")
         # print(factor_name)
         # print(df)
-        
+        #exit()
         del df_price
         del func
         return df
