@@ -27,19 +27,13 @@ class taskRunner:
         if True:
             for factor_list_name in task_list:
                 #factor列表
-            
                 if os.path.exists(CONFIG_DIR+"/factorlist/indicatorlist/"+factor_list_name):
                     
                     with open(CONFIG_DIR+"/factorlist/indicatorlist/"+factor_list_name, 'r', encoding='utf-8') as f:
                         factor_list=[_.rstrip('\n') for _ in f.readlines()]
-                    #print(factor_list)
                     indicatorCompute.computeList(list_name=factor_list_name,factor_list=factor_list,c_list=c_list)
             
-         
-         
-            #continue
             #alpha列表
-            
             for factor_list_name in task_list:
                 if os.path.exists(CONFIG_DIR+"/factorlist/alphalist/"+factor_list_name):
                     with open(CONFIG_DIR+"/factorlist/alphalist/"+factor_list_name, 'r', encoding='utf-8') as f:
@@ -51,9 +45,8 @@ class taskRunner:
                                 i=i+1
                                 alpha_name=factor_list_name+'_'+str(i).zfill(3)
                                 mytask=pool.submit(alphaEngine.calc,factor,pd.DataFrame(),alpha_name,False,True)
-                                
+        
                                 #alphaEngine.calc(factor,pd.DataFrame(),alpha_name)
-                                #exit()
         os.system('mv '+CACHE_DIR+'/single_factors_tmp2/* '+SINGLE_FACTORS_DIR)
         factorPkl.save()
         
