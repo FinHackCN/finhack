@@ -61,7 +61,7 @@ class TushareCollector:
         for t in self.thread_list:
             t.join()
     
-        cfgTS=config.get_config('ts')
+        cfgTS=Config.get_config('ts')
         db=cfgTS['db']
         
         tables_list=mydb.selectToList('show tables',db)

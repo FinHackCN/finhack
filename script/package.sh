@@ -77,4 +77,4 @@ for FILE in "$DIST_PATH"/*.tar.gz; do
 done
 
 
-ls /root/anaconda3/envs/finhack/lib/python3.9/site-packages
+ls /root/anaconda3/envs/finhack/lib/python3.13/site-packages
