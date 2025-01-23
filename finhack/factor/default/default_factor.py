@@ -32,6 +32,10 @@ class DefaultFactor:
         print(df)
 
 
+    def todb(self):
+        factor=self.args.factor
+
+
     def list(self):
         factor_list=factorManager.getFactorsList()
         print(factor_list)

@@ -7,6 +7,28 @@ import runtime.global_var as global_var
 import finhack.library.log as Log
 from finhack.library.class_loader import ClassLoader
 import sys
+import importlib
+class ClassLoader:
+    @staticmethod
+    def get_module(module_path, user_module_path):
+        print(f"Attempting to load module: {module_path}")
+        try:
+            module = importlib.import_module(module_path)
+            print(f"Successfully loaded module: {module_path}")
+            return module
+        except ImportError as e:
+            print(f"Failed to load module {module_path}: {e}")
+            if os.path.exists(user_module_path):
+                print(f"Attempting to load user module: {user_module_path}")
+                spec = importlib.util.spec_from_file_location(module_path, user_module_path)
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                print(f"Successfully loaded user module: {user_module_path}")
+                return module
+            else:
+                print(f"User module path does not exist: {user_module_path}")
+                raise
+
 class BaseLoader():
     def __init__(self,args):
         if args.background:
@@ -38,6 +60,9 @@ class BaseLoader():
                 else:
                     class_name=self.vendor.capitalize()+self.module_name.capitalize()
                     Log.logger.error(str(e))
+                    Log.logger.error("self.module_path:"+self.module_path+"不存在")
+                    Log.logger.error("self.user_module_path:"+self.user_module_path+"不存在")
+
                     Log.logger.error(f"请检查是否存在{class_name}相关文件，是否在包名错误、包未使用pip安装、包中有错误语法或引用等问题")
                     Log.logger.error(f"提示：可重点关注{self.user_module_path}，以及对应类名{class_name}")
                     print("Traceback:", file=sys.stderr)
