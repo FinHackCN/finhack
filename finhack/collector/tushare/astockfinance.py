@@ -143,7 +143,8 @@ class tsAStockFinance:
                             df=f(ts_code=ts_code,start_date=end_list[0],end_date=datetime.datetime.now().strftime('%Y%m%d'),fileds=fileds)
                         else:
                             df=f(ts_code=ts_code,period=end_list[-1],fileds=fileds)
-                    df.to_sql(table, engine, index=False, if_exists='append', chunksize=5000)
+                    #df.to_sql(table, engine, index=False, if_exists='append', chunksize=5000)
+                    mydb.safe_to_sql(df, table, engine, index=False, if_exists='append', chunksize=5000)
                     break
                 except Exception as e:
                     if "每天最多访问" in str(e) or "每小时最多访问" in str(e):
@@ -177,6 +178,7 @@ class tsAStockFinance:
     
     @tsMonitor
     def disclosure_date(pro,db):
+        table="astock_finance_disclosure_date"
         end_date_list=['0331','0630','0930','1231']
         engine=mydb.getDBEngine(db)
         lastdate=tsSHelper.getLastDateAndDelete(table='astock_finance_disclosure_date',filed='end_date',ts_code="",db=db)
@@ -206,7 +208,8 @@ class tsAStockFinance:
                 while True:
                     try:
                         df = pro.disclosure_date(end_date=end_date,limit=1000,offset=1000*i)
-                        df.to_sql('astock_finance_disclosure_date', engine, index=False, if_exists='append', chunksize=5000)
+                        #df.to_sql('astock_finance_disclosure_date', engine, index=False, if_exists='append', chunksize=5000)
+                        mydb.safe_to_sql(df, table, engine, index=False, if_exists='append', chunksize=5000)
                         break
                     except Exception as e:
                         if "每天最多访问" in str(e) or "每小时最多访问" in str(e):
@@ -270,7 +273,8 @@ class tsAStockFinance:
             while True:
                 try:
                     df = pro.dividend(ts_code=ts_code)
-                    df.to_sql('astock_finance_dividend_tmp', engine, index=False, if_exists='append', chunksize=5000)
+                    #df.to_sql('astock_finance_dividend_tmp', engine, index=False, if_exists='append', chunksize=5000)
+                    mydb.safe_to_sql(df, table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
                     break
                 except Exception as e:
                     if "每天最多访问" in str(e) or "每小时最多访问" in str(e):

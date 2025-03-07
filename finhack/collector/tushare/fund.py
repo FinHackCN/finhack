@@ -18,17 +18,23 @@ class tsFund:
         mydb.exec("drop table if exists "+table+"_tmp",db)
         engine=mydb.getDBEngine(db)
         data=pro.fund_basic(market='E',status='D')
-        data.to_sql(table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
+        #data.to_sql(table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
+        mydb.safe_to_sql(data, table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
         data=pro.fund_basic(market='E',status='I')
-        data.to_sql(table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
+        #data.to_sql(table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
+        mydb.safe_to_sql(data, table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
         data=pro.fund_basic(market='E',status='L')
-        data.to_sql(table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
+        #data.to_sql(table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
+        mydb.safe_to_sql(data, table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
         data=pro.fund_basic(market='O',status='D')
-        data.to_sql(table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
+        #data.to_sql(table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
+        mydb.safe_to_sql(data, table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
         data=pro.fund_basic(market='O',status='I')
-        data.to_sql(table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
+        #data.to_sql(table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
+        mydb.safe_to_sql(data, table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
         data=pro.fund_basic(market='O',status='L')
-        data.to_sql(table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
+        #data.to_sql(table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
+        mydb.safe_to_sql(data, table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
         mydb.exec('rename table '+table+' to '+table+'_old;',db);
         mydb.exec('rename table '+table+'_tmp to '+table+';',db);
         mydb.exec("drop table if exists "+table+'_old',db)
@@ -52,7 +58,8 @@ class tsFund:
             while True:
                 try:
                     df = pro.fund_manager(ts_code=','.join(code_list))
-                    df.to_sql('fund_manager_tmp', engine, index=False, if_exists='append', chunksize=5000)
+                    #df.to_sql('fund_manager_tmp', engine, index=False, if_exists='append', chunksize=5000)
+                    mydb.safe_to_sql(df, table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
                     break
                 except Exception as e:
                     if "每天最多访问" in str(e) or "每小时最多访问" in str(e):
@@ -92,7 +99,8 @@ class tsFund:
                 while True:
                     try:
                         df = pro.fund_share(ts_code=','.join(code_list))
-                        df.to_sql('fund_share_tmp', engine, index=False, if_exists='append', chunksize=5000)
+                        #df.to_sql('fund_share_tmp', engine, index=False, if_exists='append', chunksize=5000)
+                        mydb.safe_to_sql(df, table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
                         break
                     except Exception as e:
                         if "每天最多访问" in str(e) or "每小时最多访问" in str(e):

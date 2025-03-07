@@ -51,7 +51,8 @@ class tsCB:
             while True:
                 try:
                     df = pro.cb_price_chg(ts_code=ts_code)
-                    df.to_sql(table+'_tmp', engine, index=False, if_exists='append', chunksize=5000)
+                    #df.to_sql(table+'_tmp', engine, index=False, if_exists='append', chunksize=5000)
+                    mydb.safe_to_sql(df, table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
                     break
                 except Exception as e:
                     if "每天最多访问" in str(e) or "每小时最多访问" in str(e):
@@ -93,7 +94,8 @@ class tsCB:
             while True:
                 try:
                     df = pro.cb_share(ts_code=ts_code)
-                    df.to_sql(table+'_tmp', engine, index=False, if_exists='append', chunksize=5000)
+                    #df.to_sql(table+'_tmp', engine, index=False, if_exists='append', chunksize=5000)
+                    mydb.safe_to_sql(df, table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
                     break
                 except Exception as e:
                     if "每天最多访问" in str(e) or "每小时最多访问" in str(e):

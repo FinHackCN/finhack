@@ -16,9 +16,11 @@ class tsAStockBasic:
         engine=mydb.getDBEngine(db)
         data=pro.stock_basic(list_status='L', fields='ts_code,symbol,name,area,industry,fullname,enname,cnspell,market,exchange,curr_type,list_status,list_date,delist_date,is_hs')
         # tsSHelper.getDataAndReplace(pro,'stock_basic','astock_basic',db)
-        data.to_sql('astock_basic_tmp', engine, index=False, if_exists='append', chunksize=5000)
+        #data.to_sql('astock_basic_tmp', engine, index=False, if_exists='append', chunksize=5000)
+        mydb.safe_to_sql(data, table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
         data=pro.stock_basic(list_status='D', fields='ts_code,symbol,name,area,industry,fullname,enname,cnspell,market,exchange,curr_type,list_status,list_date,delist_date,is_hs')
-        data.to_sql('astock_basic_tmp', engine, index=False, if_exists='append', chunksize=5000)
+        #data.to_sql('astock_basic_tmp', engine, index=False, if_exists='append', chunksize=5000)
+        mydb.safe_to_sql(data, table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
         mydb.exec('rename table '+table+' to '+table+'_old;',db);
         mydb.exec('rename table '+table+'_tmp to '+table+';',db);
         mydb.exec("drop table if exists "+table+'_old',db)
@@ -40,9 +42,11 @@ class tsAStockBasic:
         mydb.exec("drop table if exists "+table+"_tmp",db)
         engine=mydb.getDBEngine(db)
         data = pro.hs_const(hs_type='SH')
-        data.to_sql('astock_hs_const_tmp', engine, index=False, if_exists='append', chunksize=5000)
+        #data.to_sql('astock_hs_const_tmp', engine, index=False, if_exists='append', chunksize=5000)
+        mydb.safe_to_sql(data, table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
         data = pro.hs_const(hs_type='SZ')
-        data.to_sql('astock_hs_const_tmp', engine, index=False, if_exists='append', chunksize=5000)
+        mydb.safe_to_sql(data, table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
+        #data.to_sql('astock_hs_const_tmp', engine, index=False, if_exists='append', chunksize=5000)
         mydb.exec('rename table '+table+' to '+table+'_old;',db);
         mydb.exec('rename table '+table+'_tmp to '+table+';',db);
         mydb.exec("drop table if exists "+table+'_old',db)
@@ -54,9 +58,11 @@ class tsAStockBasic:
         mydb.exec("drop table if exists "+table+"_tmp",db)
         engine=mydb.getDBEngine(db)
         data = pro.stock_company(exchange='SZSE', fields='ts_code,exchange,chairman,manager,secretary,reg_capital,setup_date,province,city,introduction,website,email,office,employees,main_business,business_scope')
-        data.to_sql('astock_stock_company_tmp', engine, index=False, if_exists='append', chunksize=5000)
+        #data.to_sql('astock_stock_company_tmp', engine, index=False, if_exists='append', chunksize=5000)
+        mydb.safe_to_sql(data, table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
         data = pro.stock_company(exchange='SSE', fields='ts_code,exchange,chairman,manager,secretary,reg_capital,setup_date,province,city,introduction,website,email,office,employees,main_business,business_scope')
-        data.to_sql('astock_stock_company_tmp', engine, index=False, if_exists='append', chunksize=5000)
+        #data.to_sql('astock_stock_company_tmp', engine, index=False, if_exists='append', chunksize=5000)
+        mydb.safe_to_sql(data, table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
         mydb.exec('rename table '+table+' to '+table+'_old;',db);
         mydb.exec('rename table '+table+'_tmp to '+table+';',db);
         mydb.exec("drop table if exists "+table+'_old',db)
@@ -82,7 +88,8 @@ class tsAStockBasic:
             while True:
                 try:
                     df = pro.stk_rewards(ts_code=','.join(code_list))
-                    df.to_sql('astock_stk_rewards_tmp', engine, index=False, if_exists='append', chunksize=5000)
+                    #df.to_sql('astock_stk_rewards_tmp', engine, index=False, if_exists='append', chunksize=5000)
+                    mydb.safe_to_sql(df, table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
                     break
                 except Exception as e:
                     if "每天最多访问" in str(e) or "每小时最多访问" in str(e):
