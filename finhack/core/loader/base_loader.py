@@ -80,40 +80,177 @@ class BaseLoader():
         klass.args=self.args
         klass.run()
 
-    
+
     def stop(self):
         if global_var.args.vendor!=None:
-            pids_path=BASE_DIR+"/data/cache/runtime/"+global_var.module_name+"_"+global_var.args.vendor+".pids"
+            pids_path=os.path.join(BASE_DIR, "data/cache/runtime", f"{global_var.module_name}_{global_var.args.vendor}.pids")
+            process_name_pattern = f"{global_var.module_name}_{global_var.args.vendor}"
         else:
-            pids_path=BASE_DIR+"/data/cache/runtime/"+global_var.module_name+".pids"
-        fall_list=""
-        with open(pids_path, "r") as f:
-            # 逐行读取文件内容
-            line = f.readline()
-            while line:
-                # 处理每一行的内容
-                pid=int(line.strip())
-                if psutil.pid_exists(pid):
-                    try:
-                        parent = psutil.Process(pid)
-                        children = parent.children(recursive=True)
-                        for child in children:
-                            child.terminate()  # 终止子进程
-                        parent.terminate()  # 终止父进程
-                    except psutil.NoSuchProcess:
-                        pass
-                time.sleep(1)
-                if psutil.pid_exists(pid):
-                    fall_list=fall_list+str(pid)+"\n"
-                # 读取下一行内容
-                line = f.readline()
-        with open(pids_path, "w") as f:
-            f.write(fall_list)   
+            pids_path=os.path.join(BASE_DIR, "data/cache/runtime", f"{global_var.module_name}.pids")
+            process_name_pattern = f"{global_var.module_name}"
+        
+        # 通过PID文件终止进程
+        fall_list = ""
+        pid_terminated = False
+        
+        try:
+            if os.path.exists(pids_path):
+                with open(pids_path, "r") as f:
+                    # 逐行读取文件内容
+                    line = f.readline()
+                    while line:
+                        # 处理每一行的内容
+                        try:
+                            pid = int(line.strip())
+                            if psutil.pid_exists(pid):
+                                try:
+                                    parent = psutil.Process(pid)
+                                    children = parent.children(recursive=True)
+                                    for child in children:
+                                        try:
+                                            child.terminate()  # 终止子进程
+                                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                                            pass
+                                    parent.terminate()  # 终止父进程
+                                    pid_terminated = True
+                                except psutil.NoSuchProcess:
+                                    pass
+                                except psutil.AccessDenied:
+                                    Log.logger.warning(f"无权限终止进程 PID: {pid}")
+                                    fall_list = fall_list + str(pid) + "\n"
+                                    
+                                # 等待进程终止
+                                time.sleep(1)
+                                if psutil.pid_exists(pid):
+                                    try:
+                                        # 如果进程仍然存在，尝试强制终止
+                                        parent = psutil.Process(pid)
+                                        parent.kill()
+                                        time.sleep(0.5)
+                                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                                        pass
+                                    
+                                    # 再次检查进程是否存在
+                                    if psutil.pid_exists(pid):
+                                        fall_list = fall_list + str(pid) + "\n"
+                        except ValueError:
+                            Log.logger.warning(f"PID文件中包含无效数据: {line.strip()}")
+                        # 读取下一行内容
+                        line = f.readline()
+                
+                with open(pids_path, "w") as f:
+                    f.write(fall_list)
+        except Exception as e:
+            Log.logger.error(f"通过PID终止进程时出错: {str(e)}")
+            traceback.print_exc()
+        
+        # 通过进程名兜底终止进程 - 优化匹配逻辑
+        try:
+            terminated_by_name = False
+            module_pattern = global_var.module_name
+            vendor_pattern = global_var.args.vendor if global_var.args.vendor else ""
             
-        if fall_list=="":
+            Log.logger.info(f"尝试通过进程名查找进程，模块名: {module_pattern}, 供应商: {vendor_pattern}")
+            
+            for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+                try:
+                    # 检查进程名或命令行参数是否包含模块名和vendor
+                    proc_info = proc.info
+                    cmdline = proc_info.get('cmdline', [])
+                    cmdline_str = " ".join(cmdline) if cmdline else ""
+                    proc_name = proc_info.get('name', "")
+                    
+                    # 更精确的匹配逻辑
+                    is_python = "python" in proc_name.lower() or "python" in cmdline_str.lower()
+                    has_module = module_pattern in cmdline_str
+                    has_vendor = vendor_pattern == "" or vendor_pattern in cmdline_str
+                    has_finhack = "finhack" in cmdline_str
+                    
+                    # 调试信息
+                    if is_python and has_finhack:
+                        Log.logger.debug(f"发现Python进程: PID={proc.pid}, 命令行={cmdline_str}")
+                    
+                    if is_python and has_module and has_vendor and has_finhack:
+                        Log.logger.info(f"找到匹配的进程: PID={proc.pid}, 命令行={cmdline_str}")
+                        try:
+                            # 终止子进程
+                            children = proc.children(recursive=True)
+                            for child in children:
+                                try:
+                                    child.terminate()
+                                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                                    pass
+                            
+                            # 终止主进程
+                            proc.terminate()
+                            terminated_by_name = True
+                            Log.logger.info(f"通过进程名终止进程: {proc.pid} ({proc_name})")
+                            
+                            # 等待进程终止
+                            time.sleep(1)
+                            if proc.is_running():
+                                try:
+                                    proc.kill()
+                                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                                    pass
+                        except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
+                            Log.logger.warning(f"尝试通过进程名终止进程 {proc.pid} 时出错: {str(e)}")
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+                except Exception as e:
+                    Log.logger.warning(f"处理进程 {proc.pid} 时出错: {str(e)}")
+                    continue
+                    
+            if not terminated_by_name:
+                Log.logger.info("未通过进程名找到匹配的进程")
+        except Exception as e:
+            Log.logger.error(f"通过进程名兜底终止进程时出错: {str(e)}")
+            traceback.print_exc()
+        
+        # 输出结果
+        if fall_list == "" and (pid_terminated or terminated_by_name):
             Log.logger.info("停止任务成功！")
-        else:
-            Log.logger.warning("停止任务失败！pid列表："+fall_list)
+        elif fall_list != "":
+            Log.logger.warning(f"部分进程停止失败！pid列表：{fall_list}")
+        elif not pid_terminated and not terminated_by_name:
+            Log.logger.info("未找到需要停止的进程")
+            # 提供更多调试信息
+            Log.logger.info(f"请确认是否有运行中的 finhack {module_pattern} 进程")
+            Log.logger.info("可以尝试使用系统命令查看进程: ps aux | grep finhack")
+    
+    # def stop_bak(self):
+    #     if global_var.args.vendor!=None:
+    #         pids_path=BASE_DIR+"/data/cache/runtime/"+global_var.module_name+"_"+global_var.args.vendor+".pids"
+    #     else:
+    #         pids_path=BASE_DIR+"/data/cache/runtime/"+global_var.module_name+".pids"
+    #     fall_list=""
+    #     with open(pids_path, "r") as f:
+    #         # 逐行读取文件内容
+    #         line = f.readline()
+    #         while line:
+    #             # 处理每一行的内容
+    #             pid=int(line.strip())
+    #             if psutil.pid_exists(pid):
+    #                 try:
+    #                     parent = psutil.Process(pid)
+    #                     children = parent.children(recursive=True)
+    #                     for child in children:
+    #                         child.terminate()  # 终止子进程
+    #                     parent.terminate()  # 终止父进程
+    #                 except psutil.NoSuchProcess:
+    #                     pass
+    #             time.sleep(1)
+    #             if psutil.pid_exists(pid):
+    #                 fall_list=fall_list+str(pid)+"\n"
+    #             # 读取下一行内容
+    #             line = f.readline()
+    #     with open(pids_path, "w") as f:
+    #         f.write(fall_list)   
+            
+    #     if fall_list=="":
+    #         Log.logger.info("停止任务成功！")
+    #     else:
+    #         Log.logger.warning("停止任务失败！pid列表："+fall_list)
             
             
             
