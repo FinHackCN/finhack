@@ -33,6 +33,7 @@ class tsMonitor:
                         if try_times<10:
                             try_times=try_times+1;
                             Log.logger.error(self.func.__name__+":未知异常，等待重试。\n"+str(e))
+                            alert.send(self.func.__name__,'未知异常，等待重试。\n',str(e))
                             time.sleep(15)
                             continue
                         else:

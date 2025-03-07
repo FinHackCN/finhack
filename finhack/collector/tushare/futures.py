@@ -20,7 +20,8 @@ class tsFuntures:
         exchange_list=['CFFEX','DCE','CZCE','SHFE','NE']
         for e in exchange_list:
             data=pro.fut_basic(exchange=e)
-            data.to_sql(table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
+            #data.to_sql(table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
+            mydb.safe_to_sql(data, table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
         mydb.exec('rename table '+table+' to '+table+'_old;',db);
         mydb.exec('rename table '+table+'_tmp to '+table+';',db);
         mydb.exec("drop table if exists "+table+'_old',db)
@@ -35,7 +36,8 @@ class tsFuntures:
         exchange_list=['CFFEX','DCE','CZCE','SHFE','NE']
         for e in exchange_list:
             data=pro.trade_cal(exchange=e)
-            data.to_sql(table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
+            #data.to_sql(table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
+            mydb.safe_to_sql(data, table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
         mydb.exec('rename table '+table+' to '+table+'_old;',db);
         mydb.exec('rename table '+table+'_tmp to '+table+';',db);
         mydb.exec("drop table if exists "+table+'_old',db)

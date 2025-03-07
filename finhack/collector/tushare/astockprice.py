@@ -46,7 +46,8 @@ class tsAStockPrice:
                             Log.logger.error(info)
                             break
             #print(table+'-'+str(len(df))+'-'+day)
-            res = df.to_sql(table, engine, index=False, if_exists='append', chunksize=5000)
+            #res = df.to_sql(table, engine, index=False, if_exists='append', chunksize=5000)
+            mydb.safe_to_sql(df, table, engine, index=False, if_exists='append', chunksize=5000)
             i=i+1
      
     

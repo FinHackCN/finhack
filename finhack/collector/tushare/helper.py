@@ -52,7 +52,8 @@ class tsSHelper:
         engine=mydb.getDBEngine(db)
         f = getattr(pro, api)
         data = f()
-        data.to_sql(table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
+        #data.to_sql(table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
+        mydb.safe_to_sql(data, table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
         mydb.exec('rename table '+table+' to '+table+'_old;',db);
         mydb.exec('rename table '+table+'_tmp to '+table+';',db);
         mydb.exec("drop table if exists "+table+'_old',db)
@@ -108,7 +109,8 @@ class tsSHelper:
                         
                         
                     if(not df.empty):
-                        res = df.to_sql(table, engine, index=False, if_exists='append', chunksize=5000)
+                        mydb.safe_to_sql(df, table, engine, index=False, if_exists='append', chunksize=5000)
+                        #res = df.to_sql(table, engine, index=False, if_exists='append', chunksize=5000)
                     break
                 except Exception as e:
                     if "每分钟最多访问" in str(e):
@@ -154,7 +156,8 @@ class tsSHelper:
             while True:
                 try:
                     df =f(ts_code=code)
-                    df.to_sql(table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
+                    #df.to_sql(table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
+                    mydb.safe_to_sql(df, table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
                     break
                 except Exception as e:
                     if "每分钟最多访问" in str(e):

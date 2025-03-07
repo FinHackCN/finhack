@@ -22,6 +22,7 @@ class tsAStockOther:
     
     @tsMonitor
     def report_rc(pro,db):
+        table="astock_other_report_rc"
         engine=mydb.getDBEngine(db)
         if True:
             try_times=0
@@ -31,7 +32,8 @@ class tsAStockOther:
                     today=today.strftime("%Y%m%d")
                     lastdate=tsSHelper.getLastDateAndDelete('astock_other_report_rc','report_date',ts_code='',db=db)
                     df =pro.report_rc(start_date=lastdate, end_date=today)
-                    df.to_sql('astock_other_report_rc', engine, index=False, if_exists='append', chunksize=5000)
+                    #df.to_sql('astock_other_report_rc', engine, index=False, if_exists='append', chunksize=5000)
+                    mydb.safe_to_sql(df, table, engine, index=False, if_exists='append', chunksize=5000)
                     break
                 except Exception as e:
                     if "每天最多访问" in str(e) or "每小时最多访问" in str(e):
@@ -104,7 +106,8 @@ class tsAStockOther:
             while True:
                 try:
                     df = pro.cyq_chips(ts_code=ts_code)
-                    df.to_sql('astock_other_cyq_chips_tmp', engine, index=False, if_exists='append', chunksize=5000)
+                    #df.to_sql('astock_other_cyq_chips_tmp', engine, index=False, if_exists='append', chunksize=5000)
+                    mydb.safe_to_sql(df, table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
                     break
                 except Exception as e:
                     if "每天最多访问" in str(e) or "每小时最多访问" in str(e):
