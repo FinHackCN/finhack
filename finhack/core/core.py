@@ -14,21 +14,8 @@ import sys
 class Core:
     def __init__(self,project_path='',args=True):
         self.project_path=project_path
-        self.usage="""
-        
-finhack {module}  {action} --vendor={vendor} --background --project_path={project_path} --config={config_path}
-finhack project create --project_path={project_path}    #创建新项目
-finhack collector run --vendor=tushare      #采集tushare数据
-finhack factor run                          #开启因子计算
-finhack factor list                         #查看可用因子列表
-finhack factor show --factor=pe_0           #查看某个因子的信息
-finhack factor analys --factor=pe_0         #对目标因子进行分析
-finhack trainer auto --vendor=lightgbm      #自动进行lightgbm训练
-finhack factor mining --method=gplearn   因子挖掘
-finhack factor mining --method=chatgpt --prompt=autoalpha --model=gpt-4-1106-preview   因子挖掘
-finhack factor compute --code=002624.sz --factor=rimv_0    单个股票单个因子计算
-finhack -h
--------------------------------"""
+        print(project_path)
+        self.usage=self.load_help_text()
         if args:
             self.generate_args()
             self.check_project()
@@ -42,6 +29,28 @@ finhack -h
             sys.path.append(self.project_path)
             sys.path.append(self.project_path+'/data/cache/')
 
+
+    def load_help_text(self):
+        """从配置文件加载帮助文本"""
+        # 首先尝试从项目路径读取
+        help_file_path = os.path.join(self.project_path, 'data', 'config', 'help.conf')
+        
+        # 如果项目路径下不存在help.conf，尝试从模板目录读取
+        if not self.project_path or not os.path.exists(help_file_path):
+            template_path = Utils.get_template_path()
+            help_file_path = os.path.join(template_path, 'data', 'config', 'help.conf')
+            
+            # 如果模板目录下也不存在help.conf，返回空字符串
+            if not os.path.exists(help_file_path):
+                return ""
+        
+        try:
+            with open(help_file_path, 'r', encoding='utf-8') as f:
+                return f.read()
+        except Exception as e:
+            print(f"读取帮助文件失败: {e}")
+            # 读取失败时返回空字符串
+            return ""
 
     def init_logger(self):
         from runtime.constant import LOGS_DIR

@@ -11,7 +11,8 @@ def child_process_action(core):
     # 子进程完成任务后退出
     os._exit(0)
 
-if __name__ == '__main__':
+
+def main():
     core = Core()
     core.load_module()
 
@@ -34,3 +35,6 @@ if __name__ == '__main__':
         # 注册父进程退出时的清理函数
         #atexit.register(Utils.auto_exit)
         core.do_action()
+
+if __name__ == '__main__':
+    main()
