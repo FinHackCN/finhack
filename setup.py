@@ -14,7 +14,7 @@ with open('./finhack/__init__.py', 'w') as file:
     file.write(f"__version__ = '{version}'\n")
 
 
-with open('./finhack/requirements.txt') as f:
+with open('./requirements.txt') as f:
     requirements = f.read().splitlines()
 
 setup(
