@@ -1,5 +1,5 @@
 import sys
-
+import time
 from finhack.library.mydb import mydb
 from finhack.library.config import Config
 from finhack.library.thread import collectThread
@@ -31,6 +31,7 @@ class TushareCollector:
         self.db=cfgTS['db']
         self.engine=mydb.getDBEngine(cfgTS['db'])
         self.thread_list = []
+        self.max_thread_runtime = 12 * 60 * 60  # 12小时，单位为秒
         
         
     def run(self):
@@ -226,7 +227,8 @@ class TushareCollector:
     
     def mTread(self,className,functionName):
         thread = collectThread(className,functionName,self.pro,self.db)
-        Log.logger.info(functionName)
+        thread.set_max_runtime(self.max_thread_runtime)  # 设置最大运行时间
+        Log.logger.info(f"启动线程: {functionName}，最大运行时间: {self.max_thread_runtime/3600}小时")
         self.thread_list.append(thread)
 
 

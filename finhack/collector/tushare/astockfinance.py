@@ -26,7 +26,8 @@ class tsAStockFinance:
         end_year=time.strftime("%Y", time.localtime())
         for i in range(1999,int(end_year)+1):
             for d in end_date_list:
-                p=end_year+str(d)
+                #p=end_year+str(d)
+                p=str(i)+d  #这里是被Claude修改的
                 if p<lastdate:
                     plist.append(p)
         return plist
@@ -49,9 +50,9 @@ class tsAStockFinance:
         
         #若无计划披露数据，跑个全量
         if(type(table_df) == bool or table_df.empty):
-            disclosure_df=tsAStockFinance.getPeriodList(db)
+            disclosure_list=tsAStockFinance.getPeriodList(db)
         elif(type(disclosure_df) == bool or disclosure_df.empty):
-            disclosure_df=tsAStockFinance.getPeriodList(db)
+            disclosure_list=tsAStockFinance.getPeriodList(db)
             
         diff_list = set(disclosure_list)-set(table_list)
         diff_list=list(diff_list)
@@ -157,7 +158,7 @@ class tsAStockFinance:
                     elif "未知错误" in str(e):
                         info = traceback.format_exc()
                         Log.logger.error(ts_code)
-                        Log.logger.error(period)
+                        #Log.logger.error(period)
                         Log.logger.error(fileds)
                         Log.logger.error(report_type)
                         alert.send(api,'未知错误',str(info))
@@ -229,7 +230,8 @@ class tsAStockFinance:
                                 info = traceback.format_exc()
                                 alert.send(api,'函数异常',str(info))
                                 Log.logger.error(info)
-                if df.empty:
+                                break
+                if df is None or df.empty:
                     break
         
     
