@@ -218,41 +218,6 @@ class BaseLoader():
             Log.logger.info(f"请确认是否有运行中的 finhack {module_pattern} 进程")
             Log.logger.info("可以尝试使用系统命令查看进程: ps aux | grep finhack")
     
-    # def stop_bak(self):
-    #     if global_var.args.vendor!=None:
-    #         pids_path=BASE_DIR+"/data/cache/runtime/"+global_var.module_name+"_"+global_var.args.vendor+".pids"
-    #     else:
-    #         pids_path=BASE_DIR+"/data/cache/runtime/"+global_var.module_name+".pids"
-    #     fall_list=""
-    #     with open(pids_path, "r") as f:
-    #         # 逐行读取文件内容
-    #         line = f.readline()
-    #         while line:
-    #             # 处理每一行的内容
-    #             pid=int(line.strip())
-    #             if psutil.pid_exists(pid):
-    #                 try:
-    #                     parent = psutil.Process(pid)
-    #                     children = parent.children(recursive=True)
-    #                     for child in children:
-    #                         child.terminate()  # 终止子进程
-    #                     parent.terminate()  # 终止父进程
-    #                 except psutil.NoSuchProcess:
-    #                     pass
-    #             time.sleep(1)
-    #             if psutil.pid_exists(pid):
-    #                 fall_list=fall_list+str(pid)+"\n"
-    #             # 读取下一行内容
-    #             line = f.readline()
-    #     with open(pids_path, "w") as f:
-    #         f.write(fall_list)   
-            
-    #     if fall_list=="":
-    #         Log.logger.info("停止任务成功！")
-    #     else:
-    #         Log.logger.warning("停止任务失败！pid列表："+fall_list)
-            
-            
             
             
             
