@@ -27,7 +27,13 @@ setup(
         'finhack': ['*.*', '**/*.*']
     }, 
     include_package_data=True,
-    scripts=['finhack/core/command/finhack'],
+    # 使用entry_points替代scripts，避免pkg_resources弃用警告
+    entry_points={
+        'console_scripts': [
+            'finhack=finhack.core.command.finhack:main',
+        ],
+    },
+    python_requires='>=3.6',
     install_requires=requirements, 
     )
 
