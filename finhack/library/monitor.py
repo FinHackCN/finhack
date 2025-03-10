@@ -65,7 +65,7 @@ class dbMonitor:
                         
                     if "connect" in str(e)  and try_times<10:
                         try_times=try_times+1;
-                        Log.logger.warning(self.func.__name__+":mysql连接异常，等待重试。\n"+str(e))
+                        Log.logger.warning(self.func.__name__+":数据库连接异常，等待重试。\n"+str(e))
                         Log.logger.warning(*args)
                         Log.logger.warning(**kwargs)
                         time.sleep(1)
@@ -73,8 +73,8 @@ class dbMonitor:
                     else:
                         info = traceback.format_exc()
                         Log.logger.error(args)
-                        Log.logger.error(self.func.__name__+":mysql异常，"+str(info))
-                        alert.send(self.func.__name__,'mysql异常',str(info))
+                        Log.logger.error(self.func.__name__+":数据库异常，"+str(info))
+                        alert.send(self.func.__name__,'数据库异常',str(info))
                         break
             return res
         return wrapper
