@@ -70,6 +70,9 @@ then
     echo "正在创建数据库 $MYSQL_DATABASE1..."
     docker exec -i $MYSQL_CONTAINER_NAME mysql -uroot -p$MYSQL_ROOT_PASSWORD -e "CREATE DATABASE IF NOT EXISTS $MYSQL_DATABASE1;"
 
+    echo "正在创建数据库 $MYSQL_DATABASE2..."
+    docker exec -i $MYSQL_CONTAINER_NAME mysql -uroot -p$MYSQL_ROOT_PASSWORD -e "CREATE DATABASE IF NOT EXISTS $MYSQL_DATABASE2;"
+
     # 导入 SQL 文件
     echo "正在导入数据库 $MYSQL_DATABASE2..."
     docker exec -i $MYSQL_CONTAINER_NAME mysql -uroot -p$MYSQL_ROOT_PASSWORD $MYSQL_DATABASE2 < "$FINHACK_STRUCTURE_SQL"
