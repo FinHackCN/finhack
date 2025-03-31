@@ -39,14 +39,17 @@ class mydb:
         
         
         
-    def getDBEngine(connection='default'):
+    def getDBEngine(connection='default',read_only=False):
         dbcfg=Config.get_config('db',connection)
         db_type = dbcfg.get('type', 'mysql')
         
         if db_type.lower() == 'duckdb':
             # 对于DuckDB，返回连接对象
             db_path = dbcfg.get('path', ':memory:')
-            return duckdb.connect(db_path)
+            if read_only:
+                return duckdb.connect(db_path, read_only=True)
+            else:
+                return duckdb.connect(db_path)
         else:
             # MySQL引擎
             engine=create_engine('mysql+pymysql://'+dbcfg['user']+':'+dbcfg['password']+'@'+dbcfg['host']+':'+dbcfg['port']+'/'+dbcfg['db']+'?charset='+dbcfg['charset'],echo=False)  
@@ -382,6 +385,9 @@ class mydb:
                         df[col] = df[col].fillna('').astype(str)
                 
                 # 将DataFrame注册为临时视图，然后插入数据
+                if df.empty:
+                    Log.logger.warning(f"DataFrame {table_name} 为空，跳过写入")
+                    return 0
                 engine.register("temp_df", df)
                 engine.execute(f"INSERT INTO {table_name} SELECT * FROM temp_df")
                 return len(df)

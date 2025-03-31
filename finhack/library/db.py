@@ -13,11 +13,12 @@ class DB:
     """
     
     @staticmethod
-    def get_db_engine(connection='default'):
+    def get_db_engine(connection='default',read_only=False):
+        ""
         """
         获取数据库引擎
         """
-        return mydb.getDBEngine(connection)
+        return mydb.getDBEngine(connection,read_only)
     
     @staticmethod
     def get_adapter(connection='default'):
