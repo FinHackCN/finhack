@@ -25,16 +25,19 @@ import tushare as ts
 
 class TushareCollector:
     def __init__(self):
-        cfgTS=Config.get_config('ts')
-        ts.set_token(cfgTS['token'])
-        self.pro = ts.pro_api()
-        self.db=cfgTS['db']
-        self.engine=mydb.getDBEngine(cfgTS['db'])
         self.thread_list = []
         self.max_thread_runtime = 12 * 60 * 60  # 12小时，单位为秒
         
         
     def run(self):
+
+        cfgTS=Config.get_config('ts')
+        ts.set_token(cfgTS['token'])
+        self.pro = ts.pro_api()
+        self.db=cfgTS['db']
+        self.engine=mydb.getDBEngine(cfgTS['db'])
+
+
         #tsCB.cb_share(pro=self.pro,db=self.db)
         #tsAStockIndex.index_daily(pro=self.pro,db=self.db)
         self.getAStockBasic()
@@ -71,7 +74,10 @@ class TushareCollector:
             tsSHelper.setIndex(table,db)    
     
     
-    def save():
+    def save(self):
+        cfgTS=Config.get_config('ts')
+        self.db=cfgTS['db']
+        self.engine=mydb.getDBEngine(cfgTS['db'],read_only=True)
         pass
         
 
@@ -213,7 +219,7 @@ class TushareCollector:
         self.mTread(tsCB,'cb_issue')
         self.mTread(tsCB,'cb_call')
         self.mTread(tsCB,'cb_daily')
-        self.mTread(tsCB,'cb_price_chg')
+        #self.mTread(tsCB,'cb_price_chg')
         pass    
     
     def getFX(self):

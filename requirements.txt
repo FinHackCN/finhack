@@ -302,3 +302,4 @@ yfinance==0.2.53
 
 # The following packages are considered to be unsafe in a requirements file:
 # setuptools
+duckdb
