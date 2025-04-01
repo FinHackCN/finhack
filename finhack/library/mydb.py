@@ -39,21 +39,29 @@ class mydb:
         
         
         
-    def getDBEngine(connection='default',read_only=False):
-        dbcfg=Config.get_config('db',connection)
-        db_type = dbcfg.get('type', 'mysql')
-        
-        if db_type.lower() == 'duckdb':
-            # 对于DuckDB，返回连接对象
+    def getDBEngine(connection='default', read_only=False):
+        dbcfg = Config.get_config('db', connection)
+        db_type = dbcfg.get('type', 'mysql').lower()
+        if db_type == 'duckdb':
             db_path = dbcfg.get('path', ':memory:')
-            if read_only:
-                return duckdb.connect(db_path, read_only=True)
-            else:
-                return duckdb.connect(db_path)
+            
+            # 非内存数据库需要检测路径
+            if db_path not in (':memory:', ''):
+                abs_path = os.path.abspath(db_path)
+                parent_dir = os.path.dirname(abs_path)
+                
+                # 递归创建父目录（如果不存在）
+                if parent_dir:  # 避免空路径（如当前目录）
+                    os.makedirs(parent_dir, exist_ok=True)
+
+            # 创建数据库连接
+            return duckdb.connect(db_path, read_only=read_only)
+        
         else:
-            # MySQL引擎
-            engine=create_engine('mysql+pymysql://'+dbcfg['user']+':'+dbcfg['password']+'@'+dbcfg['host']+':'+dbcfg['port']+'/'+dbcfg['db']+'?charset='+dbcfg['charset'],echo=False)  
-            return engine
+            # 保持原有MySQL连接逻辑
+            conn_str = f"mysql+pymysql://{dbcfg['user']}:{dbcfg['password']}@" \
+                    f"{dbcfg['host']}:{dbcfg['port']}/{dbcfg['db']}?charset={dbcfg['charset']}"
+            return create_engine(conn_str, echo=False)
     
     def toSql(df,table,connection='default'):
         dbcfg=Config.get_config('db',connection)
@@ -386,7 +394,7 @@ class mydb:
                 
                 # 将DataFrame注册为临时视图，然后插入数据
                 if df.empty:
-                    Log.logger.warning(f"DataFrame {table_name} 为空，跳过写入")
+                    #Log.logger.warning(f"DataFrame {table_name} 为空，跳过写入")
                     return 0
                 engine.register("temp_df", df)
                 engine.execute(f"INSERT INTO {table_name} SELECT * FROM temp_df")
