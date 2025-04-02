@@ -21,7 +21,9 @@ from finhack.collector.tushare.helper import tsSHelper
 import finhack.library.log as Log
 from datetime import datetime, timedelta
 import tushare as ts
-
+import traceback
+import pandas as pd
+import os
 
 class TushareCollector:
     def __init__(self):
@@ -158,206 +160,25 @@ class TushareCollector:
             table=list(v.values())[0]
             tsSHelper.setIndex(table,db)    
     
-    
     def save(self):
         """将数据库中的数据导出到CSV文件"""
-        import os
-        import pandas as pd
-        from datetime import datetime
-        
-        Log.logger.info("开始导出数据到CSV文件...")
-        
-        # 初始化配置
-        cfgTS = Config.get_config('ts')
-        self.db = cfgTS['db']
-        # self.engine = mydb.getDBEngine(cfgTS['db'])
-        
-        # 定义数据表与dataname的映射关系
-        table_dataname_map = {
-            'astock_price_daily': 'cn_stock',
-            'astock_index_daily': 'cn_index',
-            'cb_daily': 'cn_cb',
-            'fund_daily': 'cn_fund',
-            'fx_daily': 'global_fx',
-            'hk_daily': 'hk_stock'
-        }
-        
-        # 基础目录
-        base_dir = "/Users/woldy/Code/demo_project/data"
-        
-        # 遍历所有需要导出的表
-        for table_name, dataname in table_dataname_map.items():
-            try:
-                Log.logger.info(f"开始处理表 {table_name}...")
-                
-                # 检查表是否存在
-                check_sql = f"SELECT 1 FROM {table_name} LIMIT 1"
-                try:
-                    mydb.selectToList(check_sql, self.db)
-                except Exception as e:
-                    Log.logger.warning(f"表 {table_name} 不存在或无法访问: {str(e)}")
-                    continue
-                
-                # 获取最近30天的数据进行增量更新
-                try:
-                    # 获取表中最新的交易日期
-                    latest_date_sql = f"SELECT MAX(trade_date) as max_date FROM {table_name}"
-                    latest_date_result = mydb.selectToList(latest_date_sql, self.db)
-                    
-                    if not latest_date_result or 'max_date' not in latest_date_result[0] or not latest_date_result[0]['max_date']:
-                        Log.logger.warning(f"表 {table_name} 中没有交易日期数据")
-                        continue
-                        
-                    max_date_str = latest_date_result[0]['max_date']
-                    max_date = datetime.strptime(max_date_str, '%Y%m%d')
-                    start_date = max_date - timedelta(days=30)
-                    start_date_str = start_date.strftime('%Y%m%d')
-                    
-                    data_sql = f"SELECT * FROM {table_name} WHERE trade_date >= '{start_date_str}'"
-                except Exception as e:
-                    Log.logger.error(f"计算日期范围失败: {str(e)}")
-                    continue
-                # 这里假设trade_date格式为YYYYMMDD
-                data_sql = f"SELECT * FROM {table_name} WHERE trade_date >= '{start_date_str}'"
-                df = mydb.selectToDf(data_sql, self.db)
-                
-                if df.empty:
-                    Log.logger.warning(f"表 {table_name} 没有最近数据")
-                    continue
-                
-                # 处理数据格式
-                # 将trade_date转换为datetime格式
-                df['trade_date'] = pd.to_datetime(df['trade_date'], format='%Y%m%d')
-                
-                # 添加time列，设置为当天的收盘时间（假设为15:00:00）
-                df['time'] = df['trade_date'].dt.strftime('%Y-%m-%d') + ' 15:00:00+08:00'
-                
-                # 重命名列以匹配目标格式
-                column_mapping = {
-                    'ts_code': 'code',
-                    'open': 'open',
-                    'high': 'high',
-                    'low': 'low',
-                    'close': 'close',
-                    'vol': 'volume',
-                    'amount': 'amount'
-                }
-                
-                # 创建新的DataFrame，只包含需要的列
-                new_df = pd.DataFrame()
-                new_df['time'] = df['time']
-                new_df['code'] = df['ts_code']
-                
-                # 处理不同表的列名差异
-                for target_col, source_col in column_mapping.items():
-                    if target_col in df.columns:
-                        if target_col == 'open' or target_col == 'high' or target_col == 'low' or target_col == 'close':
-                            new_df[source_col] = pd.to_numeric(df[target_col], errors='coerce')
-                        elif target_col == 'vol':
-                            new_df['volume'] = pd.to_numeric(df[target_col], errors='coerce')
-                        elif target_col == 'amount':
-                            new_df['amount'] = pd.to_numeric(df[target_col], errors='coerce')
-                
-                # 按日期分组处理数据
-                grouped = df.groupby(df['trade_date'].dt.date)
-                
-                # 处理timebased数据
-                freq = '1d'  # 日频数据
-                
-                for date, group in grouped:
-                    # 提取年、月、日
-                    year = date.year
-                    month = f"{date.month:02d}"
-                    day = f"{date.day:02d}"
-                    
-                    # 构建目录路径
-                    timebased_dir = os.path.join(base_dir, 'market', 'kline', 'timebased', dataname, freq, str(year), month, day)
-                    os.makedirs(timebased_dir, exist_ok=True)
-                    
-                    # 构建文件路径
-                    timebased_file = os.path.join(timebased_dir, f"{dataname}_kline_tushare.csv")
-                    merged_file = os.path.join(timebased_dir, f"{dataname}_kline_merged.csv")
-                    
-                    # 获取当天的数据
-                    day_df = new_df[new_df['time'].str.startswith(f"{year}-{month}-{day}")]
-                    
-                    if not day_df.empty:
-                        # 检查文件是否已存在
-                        if os.path.exists(timebased_file):
-                            # 读取现有文件
-                            existing_df = pd.read_csv(timebased_file, header=None, names=['time', 'code', 'open', 'high', 'low', 'close', 'volume', 'amount'])
-                            
-                            # 合并数据，去除重复项
-                            combined_df = pd.concat([existing_df, day_df])
-                            combined_df = combined_df.drop_duplicates(subset=['time', 'code'])
-                            
-                            # 保存合并后的数据
-                            combined_df.to_csv(timebased_file, index=False, header=False)
-                            Log.logger.info(f"更新文件: {timebased_file}")
-                        else:
-                            # 创建新文件
-                            day_df.to_csv(timebased_file, index=False, header=False)
-                            Log.logger.info(f"创建文件: {timebased_file}")
-                        
-                        # 处理merged文件
-                        if os.path.exists(merged_file):
-                            # 读取现有merged文件
-                            merged_df = pd.read_csv(merged_file, header=None, names=['time', 'code', 'open', 'high', 'low', 'close', 'volume', 'amount'])
-                            
-                            # 合并数据，去除重复项
-                            combined_merged = pd.concat([merged_df, day_df])
-                            combined_merged = combined_merged.drop_duplicates(subset=['time', 'code'])
-                            
-                            # 保存合并后的数据
-                            combined_merged.to_csv(merged_file, index=False, header=False)
-                            Log.logger.info(f"更新merged文件: {merged_file}")
-                        else:
-                            # 创建新merged文件
-                            day_df.to_csv(merged_file, index=False, header=False)
-                            Log.logger.info(f"创建merged文件: {merged_file}")
-                
-                # 处理codebased数据
-                codebased_dir = os.path.join(base_dir, 'market', 'kline', 'codebased', dataname, freq, str(year))
-                os.makedirs(codebased_dir, exist_ok=True)
-                
-                # 按代码分组
-                code_grouped = new_df.groupby('code')
-                
-                for code, code_group in code_grouped:
-                    # 构建文件路径
-                    code_file = os.path.join(codebased_dir, f"{code}.csv")
-                    
-                    # 排序数据
-                    code_group = code_group.sort_values('time')
-                    
-                    # 检查文件是否已存在
-                    if os.path.exists(code_file):
-                        # 读取现有文件
-                        existing_code_df = pd.read_csv(code_file, header=None, names=['time', 'code', 'open', 'high', 'low', 'close', 'volume', 'amount'])
-                        
-                        # 合并数据，去除重复项
-                        combined_code_df = pd.concat([existing_code_df, code_group])
-                        combined_code_df = combined_code_df.drop_duplicates(subset=['time'])
-                        combined_code_df = combined_code_df.sort_values('time')
-                        
-                        # 保存合并后的数据
-                        combined_code_df.to_csv(code_file, index=False, header=False)
-                        Log.logger.info(f"更新代码文件: {code_file}")
-                    else:
-                        # 创建新文件
-                        code_group.to_csv(code_file, index=False, header=False)
-                        Log.logger.info(f"创建代码文件: {code_file}")
-                
-                Log.logger.info(f"表 {table_name} 处理完成")
-                
-            except Exception as e:
-                Log.logger.error(f"处理表 {table_name} 时发生错误: {str(e)}")
-                Log.logger.error(f"错误详情: {traceback.format_exc()}")
-        
-        Log.logger.info("数据导出完成")
-        return True
-        
+        try:
+            from finhack.collector.tushare.save import TushareSaver
+            saver = TushareSaver()
+            return saver.save_data_to_csv()
+        except Exception as e:
+            Log.logger.error(f"导出数据时发生错误: {str(e)}")
+            Log.logger.error(traceback.format_exc())
+            return False
 
+        cfgTS=Config.get_config('ts')
+        db=cfgTS['db']
+        
+        tables_list=mydb.selectToList('show tables',db)
+        for v in tables_list:
+            table=list(v.values())[0]
+            tsSHelper.setIndex(table,db)    
+    
     def getAStockBasic(self):
         """获取A股基本信息，这是最基础的数据，其他大多数数据都依赖于此"""
         try:
@@ -643,7 +464,7 @@ class TushareCollector:
             
             # 获取大盘指数每日指标
             Log.logger.info("获取大盘指数每日指标...")
-            self.mTread(tsAStockIndex, 'index_dailybasic', 'astock_index_basic')
+            self.mTTread(tsAStockIndex, 'index_dailybasic', 'astock_index_basic')
             
             # 获取申万行业成分股
             Log.logger.info("获取申万行业成分股...")
@@ -913,9 +734,9 @@ class TushareCollector:
         self.thread_list.append(thread)
 
 
-    
 
-       
+
+
 
 
 

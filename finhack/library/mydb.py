@@ -443,6 +443,40 @@ class mydb:
                 else:
                     # 如果不是列缺失错误，则抛出原始异常
                     raise
+
+    @staticmethod
+    def tableExists(table_name, connection='default'):
+        """
+        检查数据表是否存在
+        
+        Args:
+            table_name (str): 要检查的表名
+            connection (str): 数据库连接配置名称
+            
+        Returns:
+            bool: 表是否存在
+        """
+        try:
+            dbcfg = Config.get_config('db', connection)
+            db_type = dbcfg.get('type', 'mysql').lower()
+            
+            if db_type == 'duckdb':
+                # DuckDB 的处理方式
+                db = mydb.getDBEngine(connection)
+                query = f"SELECT table_name FROM information_schema.tables WHERE table_name='{table_name}'"
+                result = db.execute(query).fetchone()
+                return result is not None
+            else:
+                # MySQL 的处理方式
+                engine = mydb.getDBEngine(connection)
+                with engine.connect() as connection:
+                    query = f"SELECT 1 FROM information_schema.tables WHERE table_name = '{table_name}'"
+                    result = connection.execute(text(query)).fetchone()
+                    return result is not None
+        except Exception as e:
+            Log.logger.error(f"检查表 {table_name} 是否存在时发生错误: {str(e)}")
+            return False
+
     def setIndex(table,db='default'):
         dbcfg=Config.get_config('db',db)
         db_type = dbcfg.get('type', 'mysql')
