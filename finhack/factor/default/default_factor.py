@@ -1,8 +1,8 @@
 import random
 from runtime.constant import *
 from finhack.library.config import Config
-from finhack.factor.default.preCheck import preCheck
-from finhack.factor.default.indicatorCompute import indicatorCompute
+# from finhack.factor.default.preCheck import preCheck
+# from finhack.factor.default.indicatorEngine import indicatorCompute
 from finhack.factor.default.alphaEngine import alphaEngine
 from finhack.market.astock.astock import AStock
 from finhack.factor.default.taskRunner import taskRunner
@@ -19,7 +19,7 @@ class DefaultFactor:
         pass
 
     def run(self):
-        taskRunner.runTask(self.args.task_list)
+        taskRunner.runTask(self.args)
         
     def test(self):
         print(self.args)
