@@ -42,11 +42,8 @@ class taskRunner:
         print("running task...")
         indicator_list = indicatorEngine.getIndicatorList(args.market,args.freq,args.task_list)
         alpha_list = taskRunner.get_alpha_list(args.market,args.freq,args.task_list)
-        print("indicator_list:", indicator_list)
-        print("alpha_list:", alpha_list)
-
-        indicatorInfo=indicatorEngine.getIndicatorInfo(indicator_list[0],args.market,args.freq)
-        print("indicatorInfo:", indicatorInfo)
+        indicator_relation = indicatorEngine.getAllIndicatorRelation(indicator_list, args.market, args.freq)
+        print("parallel_groups:", indicator_relation['parallel_groups'])
 
 
 

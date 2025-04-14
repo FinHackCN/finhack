@@ -6,3 +6,4 @@ finhack.egg-info/
 dist/
 build/
 *.out
+.DS_Store
