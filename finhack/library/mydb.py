@@ -368,29 +368,29 @@ class mydb:
                                 if "already exists" not in str(add_col_error):
                                     raise
                 
-                # 最后一次检查所有列，确保类型正确
-                for col in df.columns:
-                    # 对于股票代码和日期相关列，确保是字符串类型
-                    if col in ['ts_code', 'symbol', 'code', 'ann_date', 'end_date', 'trade_date', 'pre_date', 'actual_date'] or \
-                       'code' in col.lower() or 'symbol' in col.lower() or 'date' in col.lower():
-                        df[col] = df[col].fillna('').astype(str)
-                        df[col] = df[col].replace('None', '')
-                    # 对于特定的金融数值字段和数值类型列，确保正确处理
-                    elif col in ['min_amount', 'exp_return', 'fund_size', 'amount', 'value'] or \
-                         'float' in str(df[col].dtype) or 'int' in str(df[col].dtype):
-                        # 先将列转换为字符串类型，以便正确处理所有值
-                        df[col] = df[col].astype(str)
-                        # 将'None'、空字符串和各种NaN表示替换为None
-                        df[col] = df[col].replace(['None', 'nan', 'NaN', 'NAN', '', 'null', 'NULL'], None)
-                        # 使用coerce模式处理无法转换的值，将它们转为NaN
-                        df[col] = pd.to_numeric(df[col], errors='coerce')
-                        # 检查是否有NaN值，如果有则填充为0
-                        if df[col].isna().any():
-                            Log.logger.warning(f"列 {col} 中存在无法转换为数值的值，已替换为0")
-                            df[col] = df[col].fillna(0)
-                    # 对于其他object类型列，确保是字符串类型
-                    elif df[col].dtype == 'object':
-                        df[col] = df[col].fillna('').astype(str)
+                # # 最后一次检查所有列，确保类型正确
+                # for col in df.columns:
+                #     # 对于股票代码和日期相关列，确保是字符串类型
+                #     if col in ['ts_code', 'symbol', 'code', 'ann_date', 'end_date', 'trade_date', 'pre_date', 'actual_date'] or \
+                #        'code' in col.lower() or 'symbol' in col.lower() or 'date' in col.lower():
+                #         df[col] = df[col].fillna('').astype(str)
+                #         df[col] = df[col].replace('None', '')
+                #     # 对于特定的金融数值字段和数值类型列，确保正确处理
+                #     elif col in ['min_amount', 'exp_return', 'fund_size', 'amount', 'value'] or \
+                #          'float' in str(df[col].dtype) or 'int' in str(df[col].dtype):
+                #         # 先将列转换为字符串类型，以便正确处理所有值
+                #         df[col] = df[col].astype(str)
+                #         # 将'None'、空字符串和各种NaN表示替换为None
+                #         df[col] = df[col].replace(['None', 'nan', 'NaN', 'NAN', '', 'null', 'NULL'], None)
+                #         # 使用coerce模式处理无法转换的值，将它们转为NaN
+                #         df[col] = pd.to_numeric(df[col], errors='coerce')
+                #         # 检查是否有NaN值，如果有则填充为0
+                #         if df[col].isna().any():
+                #             Log.logger.warning(f"列 {col} 中存在无法转换为数值的值，已替换为0")
+                #             df[col] = df[col].fillna(0)
+                #     # 对于其他object类型列，确保是字符串类型
+                #     elif df[col].dtype == 'object':
+                #         df[col] = df[col].fillna('').astype(str)
                 
                 # 将DataFrame注册为临时视图，然后插入数据
                 if df.empty:

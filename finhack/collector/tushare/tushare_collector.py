@@ -165,7 +165,7 @@ class TushareCollector:
         try:
             from finhack.collector.tushare.save import TushareSaver
             saver = TushareSaver()
-            return saver.save_data_to_csv()
+            return saver.save_kline_to_csv()
         except Exception as e:
             Log.logger.error(f"导出数据时发生错误: {str(e)}")
             Log.logger.error(traceback.format_exc())
