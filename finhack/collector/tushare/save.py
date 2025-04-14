@@ -39,7 +39,7 @@ class TushareSaver:
         self.start_year = 1998  # 历史数据开始年份
         self.current_year = datetime.now().year
         
-    def save_data_to_csv(self):
+    def save_kline_to_csv(self):
         """将数据库中的数据导出到CSV文件，优化版本"""
         try:
             Log.logger.info("开始导出数据到CSV文件...")
@@ -234,7 +234,7 @@ class TushareSaver:
                 day_df = group.drop(columns=['date'], errors='ignore')
                 
                 # 保存数据
-                self._save_csv(day_df, source_file)
+                #self._save_csv(day_df, source_file)
                 self._save_csv(day_df, merged_file)
                 
                 Log.logger.info(f"已保存 {date} 的timebased数据到 {source_file}")
