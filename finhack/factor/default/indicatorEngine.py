@@ -25,7 +25,32 @@ import finhack.library.log as Log
 
 class indicatorEngine():
     @lru_cache(None)
-    def getIndicatorInfo(indicator_name,market, freq):
+    def getIndicatorList(market,freq,task_list):
+        """
+        获取所有的指标列表
+        """
+        indicator_list = []
+        for root, dirs, files in os.walk(CONFIG_DIR + f"/factorlist/indicatorlist/{market}/{freq}/"):
+            for file in files:
+                if file in task_list.split(','):
+                    with open(os.path.join(root, file), 'r', encoding='utf-8') as f:
+                        lines = [line.strip() for line in f.readlines()]
+                        indicator_list.extend(lines)
+        for root, dirs, files in os.walk(CONFIG_DIR + f"/factorlist/indicatorlist/{market}/x{freq}/"):
+            for file in files:
+                if file in task_list.split(','):
+                    with open(os.path.join(root, file), 'r', encoding='utf-8') as f:
+                        lines = [line.strip() for line in f.readlines()]
+                        indicator_list.extend(lines)
+        return indicator_list
+
+
+    def getAllIndicatorRelation(indicatorlist,market,freq):
+        pass
+
+
+    @lru_cache(None)
+    def getIndicatorInfo(indicator_name,market,freq):
         indicator=indicator_name.split('_')
         indicator_filed=indicator[0]
         path = INDICATORS_DIR+f"/{market}/x{freq}/"

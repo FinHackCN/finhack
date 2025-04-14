@@ -13,24 +13,7 @@ from finhack.factor.default.factorPkl import factorPkl
 import finhack.library.log as Log
 
 class taskRunner:
-    def get_indicator_list(market,freq,task_list):
-        """
-        获取所有的指标列表
-        """
-        indicator_list = []
-        for root, dirs, files in os.walk(CONFIG_DIR + f"/factorlist/indicatorlist/{market}/{freq}/"):
-            for file in files:
-                if file in task_list.split(','):
-                    with open(os.path.join(root, file), 'r', encoding='utf-8') as f:
-                        lines = [line.strip() for line in f.readlines()]
-                        indicator_list.extend(lines)
-        for root, dirs, files in os.walk(CONFIG_DIR + f"/factorlist/indicatorlist/{market}/x{freq}/"):
-            for file in files:
-                if file in task_list.split(','):
-                    with open(os.path.join(root, file), 'r', encoding='utf-8') as f:
-                        lines = [line.strip() for line in f.readlines()]
-                        indicator_list.extend(lines)
-        return indicator_list
+
 
     def get_alpha_list(market,freq,task_list):
         """
@@ -57,7 +40,7 @@ class taskRunner:
     def runTask(args):
         print(args)
         print("running task...")
-        indicator_list = taskRunner.get_indicator_list(args.market,args.freq,args.task_list)
+        indicator_list = indicatorEngine.getIndicatorList(args.market,args.freq,args.task_list)
         alpha_list = taskRunner.get_alpha_list(args.market,args.freq,args.task_list)
         print("indicator_list:", indicator_list)
         print("alpha_list:", alpha_list)
