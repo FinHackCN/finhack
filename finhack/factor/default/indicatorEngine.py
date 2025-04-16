@@ -45,12 +45,12 @@ class indicatorEngine():
         return indicator_list
 
 
-    def getAllIndicatorRelation(indicatorlist, market, freq):
+    def getAllIndicatorRelation(indicator_list, market, freq):
         """
         分析指标之间的依赖关系，构建计算顺序和并行组
         
         参数:
-            indicatorlist: 所有需要计算的指标列表
+            indicator_list: 所有需要计算的指标列表
             market: 市场类型
             freq: 频率
             
@@ -70,7 +70,7 @@ class indicatorEngine():
         execution_groups = {}
         
         # 第一步：获取每个指标的信息和依赖关系
-        for indicator in indicatorlist:
+        for indicator in indicator_list:
             indicator_field = indicator.split('_')[0]
             
             module_name, func_name, code, return_fields, referenced_fields = indicatorEngine.getIndicatorInfo(indicator, market, freq)
@@ -250,11 +250,11 @@ class indicatorEngine():
             parallel_groups.append(level_parallel_groups)
         
         # 打印调试信息
-        print("\n基础字段:", base_fields)
-        print("\nWILLR和close的生产者:", {k: v for k, v in field_producers.items() if k in ['WILLR', 'close']})
-        print("\n计算层级:")
-        for i, level in enumerate(calculation_levels):
-            print(f"层级 {i}:", level[:5], "..." if len(level) > 5 else "")
+        # print("\n基础字段:", base_fields)
+        # print("\nWILLR和close的生产者:", {k: v for k, v in field_producers.items() if k in ['WILLR', 'close']})
+        # print("\n计算层级:")
+        # for i, level in enumerate(calculation_levels):
+        #     print(f"层级 {i}:", level[:5], "..." if len(level) > 5 else "")
         
         return {
             'dependency_graph': dependency_graph,
@@ -275,7 +275,7 @@ class indicatorEngine():
                 indicators=subfile.split('.py')
                 indicators=indicators[0]
                 function_name=''
-                code=''
+                indicator_code=''
                 return_fileds=[]
                 find=False
                 with open(path+subfile) as filecontent:
@@ -287,9 +287,9 @@ class indicatorEngine():
                             function_name=function_name.split('(')
                             function_name=function_name[0]
                             function_name=function_name.strip()
-                            code=line
+                            indicator_code=line
                         else:
-                            code=code+"\n"+line
+                            indicator_code=indicator_code+"\n"+line
                         left=line.split('=')
                         left=left[0]
                         
@@ -304,17 +304,135 @@ class indicatorEngine():
                             if find:
                                 # 收集代码中所有出现的字段
                                 all_fields_pattern = re.compile(r"df\[\'([A-Za-z0-9_\-]*?)\'\]")
-                                all_fields = all_fields_pattern.findall(code)
+                                all_fields = all_fields_pattern.findall(indicator_code)
                                 all_fields = list(set(all_fields))  # 去重
                                 
                                 # 计算引用的字段（所有字段减去返回的字段）
                                 referenced_fields = list(set(all_fields) - set(return_fileds))
                                 
-                                return indicators, function_name, code, return_fileds, referenced_fields
+                                return indicators, function_name, indicator_code, return_fileds, referenced_fields
                             else:
-                                code=''
+                                indicator_code=''
                                 return_fileds=[]
                          
 
         print('wrong indicator_name:'+indicator_name)       
         return False, False, False, [], []
+
+
+    def computeIndicatorBatch(market,freq,indicator_list,process_num="auto",start_date="",end_date="",code_list=None):
+        indicator_relation = indicatorEngine.getAllIndicatorRelation(indicator_list, market, freq)
+        parallel_groups=indicator_relation['parallel_groups']
+        for parallel_group in parallel_groups:
+            indicatorEngine.computeIndicatorByLevelGroup(market, freq,parallel_group,process_num, start_date, end_date, code_list)
+
+    
+    #根据批量计算当前层级组下的指标
+    def computeIndicatorByLevelGroup(market, freq , parallel_group, process_num="auto", start_date="",end_date="",code_list=None):
+        print('计算指标组:', parallel_group)
+        
+        # 确定进程数量
+        if process_num == "auto":
+            # 获取CPU核心数并减1，至少为1
+            cpu_cores = cpu_count()
+            process_num = max(1, cpu_cores - 1)
+        else:
+            # 如果指定了进程数，确保它是整数
+            process_num = int(process_num)
+        
+        print(f"使用进程数: {process_num}")
+        
+        # 使用进程池执行指标计算
+        with ProcessPoolExecutor(max_workers=process_num) as executor:
+            futures = []
+            
+            # 为每个指标组提交计算任务
+            for indicator_group in parallel_group:
+                future = executor.submit(
+                    indicatorEngine.computeIndicator,
+                    market,
+                    freq,
+                    indicator_group,
+                    1,  # 在子进程中只用单进程执行
+                    start_date,
+                    end_date,
+                    code_list
+                )
+                futures.append(future)
+            
+            # 等待所有任务完成
+            wait(futures, return_when=ALL_COMPLETED)
+            
+            # 检查任务是否有异常
+            for future in futures:
+                try:
+                    future.result()  # 获取结果，如果有异常会引发
+                except Exception as e:
+                    print(f"指标计算出错: {str(e)}")
+                    traceback.print_exc()
+        
+        print(f"指标组计算完成")
+
+    #这里的list是同代码返回的字段，只需要计算一次
+    def computeIndicator(market, freq, indicator_list, process_num="auto", start_date="", end_date="", code_list=None):
+        if not indicator_list:
+            return
+            
+        try:
+            print(f"计算指标: {indicator_list}")
+            
+            # 1. 获取指标的计算函数和依赖关系
+            indicator = indicator_list[0]  # 取第一个指标作为代表
+            module_name, func_name, _, _, _ = indicatorEngine.getIndicatorInfo(indicator, market, freq)
+            
+            if not module_name or not func_name:
+                print(f"无法获取指标信息: {indicator}")
+                return
+                
+            # 2. 从数据库加载数据或其他数据来源
+            # df_price = ... (数据加载逻辑)
+            
+            # 如果有DataFrame处理需要
+            # if df_price is not None and 'level_0' in df_price.columns:
+            #     df_price = df_price.drop(columns=['level_0'])
+            
+            # 3. 构建模块文件路径并加载
+            try:
+                # 定义文件路径
+                file_path = f"{INDICATORS_DIR}/{market}/x{freq}/{module_name}.py"
+                
+                # 使用importlib.util更精确地加载模块
+                import importlib.util
+                spec = importlib.util.spec_from_file_location(module_name, file_path)
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                
+                # 获取计算函数
+                func = getattr(module, func_name, None)
+                
+                if func is None:
+                    print(f"无法找到指标函数: {func_name}")
+                    return
+                
+                # 4. 调用函数计算指标
+                # result = func(df_price, indicator_list)
+                
+                # 5. 保存计算结果到数据库或其他存储
+                # ... (结果保存逻辑)
+                
+                print(f"指标 {indicator_list} 计算完成")
+            except ImportError as e:
+                print(f"无法导入指标模块 {module_name}: {str(e)}")
+                traceback.print_exc()
+            except AttributeError as e:
+                print(f"无法找到指标函数 {func_name}: {str(e)}")
+                traceback.print_exc()
+            except Exception as e:
+                print(f"指标计算过程出错: {str(e)}")
+                traceback.print_exc()
+        except Exception as e:
+            print(f"指标计算过程出现未预期异常: {str(e)}")
+            traceback.print_exc()
+
+    def computeIndicatorByCode():
+        pass
