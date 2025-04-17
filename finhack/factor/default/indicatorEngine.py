@@ -16,7 +16,7 @@ import importlib
 from runtime.constant import *
 from finhack.library.mydb import mydb
 from finhack.library.config import Config
-
+from finhack.factor.default.factorManager import factorManager
 from concurrent.futures import ThreadPoolExecutor,ProcessPoolExecutor, wait, ALL_COMPLETED
 warnings.simplefilter(action='ignore', category=pd.errors.PerformanceWarning)
 import finhack.library.log as Log
@@ -404,15 +404,11 @@ class indicatorEngine():
                 return
                 
             print("依赖字段:", referenced_fields)
+            print(module_name, func_name,  indicator_code, return_fileds, referenced_fields)
+            exit()
+            df_ref=factorManager.loadFactors(matrix_list=referenced_fields,vector_list=[],code_list=[],market=market,freq=freq,start_date=start_date,end_date=end_date,cache=False)
 
-            # 2. 从数据库加载数据或其他数据来源
-            # df_price = ... (数据加载逻辑)
-            
-            # 如果有DataFrame处理需要
-            # if df_price is not None and 'level_0' in df_price.columns:
-            #     df_price = df_price.drop(columns=['level_0'])
-            
-            # 3. 构建模块文件路径并加载
+
             try:
                 # 定义文件路径
                 file_path = f"{INDICATORS_DIR}/{market}/x{freq}/{module_name}.py"
