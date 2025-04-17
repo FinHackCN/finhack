@@ -164,6 +164,146 @@ class factorManager:
     #     return df_factor
 
 
+    def inspectFactor(factor_name, factor_type="matrix", market='cn_stock', freq='1m'):
+        """
+        检查因子的基本信息，包括开始日期、结束日期、文件大小和代码数量
+        
+        参数:
+            factor_name: 因子名称
+            factor_type: 因子类型，"matrix"或"vector"
+            market: 市场类型，如cn_stock
+            freq: 频率，如1m, 5m, 1d等
+            
+        返回:
+            包含因子信息的字典，如不存在则返回None
+        """
+        try:
+            result = {
+                "factor_name": factor_name,
+                "factor_type": factor_type,
+                "market": market,
+                "freq": freq,
+                "start_date": None,
+                "end_date": None,
+                "total_size_mb": 0,
+                "code_count": 0,
+                "exists": False
+            }
+            
+            if factor_type == "matrix":
+                # 矩阵型因子的检查逻辑
+                base_path = f"{FACTORS_DIR}/matrix/{market}/{freq}"
+                
+                # 获取所有可能的时间目录
+                time_dirs = []
+                
+                if os.path.exists(base_path):
+                    if 'w' in freq or 'd' in freq:
+                        # 按年存储
+                        time_dirs = [f"{year}" for year in os.listdir(base_path) 
+                                     if os.path.isdir(os.path.join(base_path, str(year)))]
+                    elif 'h' in freq or 'm' in freq:
+                        # 按年/月存储
+                        for year in os.listdir(base_path):
+                            year_path = os.path.join(base_path, year)
+                            if os.path.isdir(year_path):
+                                for month in os.listdir(year_path):
+                                    month_path = os.path.join(year_path, month)
+                                    if os.path.isdir(month_path):
+                                        time_dirs.append(f"{year}/{month}")
+                    elif 's' in freq:
+                        # 按年/月/日存储
+                        for year in os.listdir(base_path):
+                            year_path = os.path.join(base_path, year)
+                            if os.path.isdir(year_path):
+                                for month in os.listdir(year_path):
+                                    month_path = os.path.join(year_path, month)
+                                    if os.path.isdir(month_path):
+                                        for day in os.listdir(month_path):
+                                            day_path = os.path.join(month_path, day)
+                                            if os.path.isdir(day_path):
+                                                time_dirs.append(f"{year}/{month}/{day}")
+                
+                if not time_dirs:
+                    return result
+                
+                # 排序时间目录以确定开始和结束日期
+                time_dirs.sort()
+                
+                all_dates = []
+                all_codes = set()
+                total_size = 0
+                factor_exists = False
+                
+                # 遍历每个时间目录
+                for time_dir in time_dirs:
+                    dir_path = f"{base_path}/{time_dir}"
+                    
+                    # 获取该时间目录下的所有代码
+                    codes = [d for d in os.listdir(dir_path) if os.path.isdir(os.path.join(dir_path, d))]
+                    
+                    for code in codes:
+                        factor_path = f"{dir_path}/{code}/{factor_name}.pkl"
+                        index_path = f"{dir_path}/{code}/index.pkl"
+                        
+                        # 检查因子文件是否存在
+                        if os.path.exists(factor_path):
+                            factor_exists = True
+                            all_codes.add(code)
+                            total_size += os.path.getsize(factor_path)
+                            
+                            # 从索引文件中获取日期信息
+                            if os.path.exists(index_path):
+                                try:
+                                    index_df = pd.read_pickle(index_path)
+                                    if 'trade_date' in index_df.columns:
+                                        dates = index_df['trade_date'].astype(str).tolist()
+                                        all_dates.extend(dates)
+                                except Exception as e:
+                                    Log.error(f"Error reading index file {index_path}: {str(e)}")
+                
+                if factor_exists:
+                    result["exists"] = True
+                    result["code_count"] = len(all_codes)
+                    result["total_size_mb"] = round(total_size / (1024 * 1024), 2)  # 转换为MB
+                    
+                    if all_dates:
+                        all_dates = sorted(all_dates)
+                        result["start_date"] = all_dates[0]
+                        result["end_date"] = all_dates[-1]
+                
+            elif factor_type == "vector":
+                # 向量型因子的检查逻辑
+                factor_path = f"{FACTORS_DIR}/vector/{market}/{freq}/{factor_name}.pkl"
+                
+                if os.path.exists(factor_path):
+                    result["exists"] = True
+                    result["total_size_mb"] = round(os.path.getsize(factor_path) / (1024 * 1024), 2)  # 转换为MB
+                    
+                    try:
+                        # 读取向量因子数据
+                        vector_df = pd.read_pickle(factor_path)
+                        
+                        if not vector_df.empty:
+                            # 获取代码数量
+
+                            result["code_count"] = 0
+                            
+                            # 获取日期范围
+                            if 'trade_date' in vector_df.columns:
+                                vector_df['trade_date'] = vector_df['trade_date'].astype(str)
+                                result["start_date"] = vector_df['trade_date'].min()
+                                result["end_date"] = vector_df['trade_date'].max()
+                    except Exception as e:
+                        Log.error(f"Error reading vector factor {factor_path}: {str(e)}")
+            
+            return result
+        
+        except Exception as e:
+            Log.error(f"Error inspecting factor {factor_name}: {str(e)}")
+            traceback.print_exc()
+            return None
+
 
     def loadFactors(matrix_list=[],vector_list=[],code_list=[],market='cn_stock',freq='1m',start_date="20200101",end_date="20201231",cache=False):
         """

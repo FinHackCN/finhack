@@ -374,7 +374,7 @@ class indicatorEngine():
         print(f"指标组计算完成")
 
     #这里的list是同代码返回的字段，本意是希望只需要计算一次，但后来发现还有不同参数的情况
-    def computeIndicator(market, freq, indicator_list, process_num="auto", start_date="", end_date="", code_list=None):
+    def computeIndicator(market, freq, indicator_list, process_num="auto", start_date="", end_date="", code_list=None,save=True):
         #理论上不应该出现空的指标列表，但为了安全起见，还是加上
         if not indicator_list:
             return
@@ -405,9 +405,6 @@ class indicatorEngine():
                 
             print("依赖字段:", referenced_fields)
             print(module_name, func_name,  indicator_code, return_fileds, referenced_fields)
-            exit()
-            df_ref=factorManager.loadFactors(matrix_list=referenced_fields,vector_list=[],code_list=[],market=market,freq=freq,start_date=start_date,end_date=end_date,cache=False)
-
 
             try:
                 # 定义文件路径
@@ -425,14 +422,6 @@ class indicatorEngine():
                 if func is None:
                     print(f"无法找到指标函数: {func_name}")
                     return
-                
-                # 4. 调用函数计算指标
-                # result = func(df_price, indicator_list)
-                
-                # 5. 保存计算结果到数据库或其他存储
-                # ... (结果保存逻辑)
-                
-                print(f"指标 {indicator_list} 计算完成")
             except ImportError as e:
                 print(f"无法导入指标模块 {module_name}: {str(e)}")
                 traceback.print_exc()
@@ -440,8 +429,31 @@ class indicatorEngine():
                 print(f"无法找到指标函数 {func_name}: {str(e)}")
                 traceback.print_exc()
             except Exception as e:
-                print(f"指标计算过程出错: {str(e)}")
+                print(f"Error: {str(e)}")
                 traceback.print_exc()
+
+            module_type = module_name.split('_')[0]
+            df_ref=factorManager.loadFactors(matrix_list=referenced_fields,vector_list=[],code_list=[],market=market,freq=freq,start_date=start_date,end_date=end_date,cache=False)
+
+            #混合因子
+            if module_type=="mix":
+                print("混合因子")
+                df_factors = func(df_ref, indicator_list)
+                print(df_factors)
+                pass
+            #时间序列因子
+            elif module_type=="ts":
+                pass
+            #横截面因子
+            elif module_type=="cs":
+                pass
+
+
+            print("模块类型:", module_type)
+            exit()
+
+
+
         except Exception as e:
             print(f"指标计算过程出现未预期异常: {str(e)}")
             traceback.print_exc()
