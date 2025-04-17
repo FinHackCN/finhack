@@ -328,7 +328,7 @@ class indicatorEngine():
 
     
     #根据批量计算当前层级组下的指标
-    def computeIndicatorByLevelGroup(market, freq , parallel_group, process_num="auto", start_date="",end_date="",code_list=None):
+    def computeIndicatorByLevelGroup(market, freq , parallel_group, process_num="auto", start_date="20200101",end_date="20201231",code_list=None):
         print('计算指标组:', parallel_group)
         
         # 确定进程数量
@@ -373,22 +373,38 @@ class indicatorEngine():
         
         print(f"指标组计算完成")
 
-    #这里的list是同代码返回的字段，只需要计算一次
+    #这里的list是同代码返回的字段，本意是希望只需要计算一次，但后来发现还有不同参数的情况
     def computeIndicator(market, freq, indicator_list, process_num="auto", start_date="", end_date="", code_list=None):
+        #理论上不应该出现空的指标列表，但为了安全起见，还是加上
         if not indicator_list:
             return
             
         try:
             print(f"计算指标: {indicator_list}")
             
+
+            # #日线或周线，按年计算
+            # time_list = []
+            # if 'w' in freq or 'd' in freq:
+            #     pass
+            # elif 'h' in freq or 'm' in freq:
+            #     pass
+            # elif 's' in freq:
+            #     pass
+            # else:  
+            #     raise ValueError(f"不支持的频率: {freq}")
+
+
             # 1. 获取指标的计算函数和依赖关系
             indicator = indicator_list[0]  # 取第一个指标作为代表
-            module_name, func_name, _, _, _ = indicatorEngine.getIndicatorInfo(indicator, market, freq)
-            
+            module_name, func_name,  indicator_code, return_fileds, referenced_fields = indicatorEngine.getIndicatorInfo(indicator, market, freq)
+
             if not module_name or not func_name:
                 print(f"无法获取指标信息: {indicator}")
                 return
                 
+            print("依赖字段:", referenced_fields)
+
             # 2. 从数据库加载数据或其他数据来源
             # df_price = ... (数据加载逻辑)
             
