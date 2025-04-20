@@ -165,19 +165,33 @@ class TushareCollector:
         try:
             from finhack.collector.tushare.save import TushareSaver
             saver = TushareSaver()
-            return saver.save_kline_to_csv()
+            
+            # 保存K线数据
+            result_kline = saver.save_kline_to_csv()
+            
+            # 保存代码列表数据
+            result_lists = saver.save_lists_to_csv()
+            
+            # 保存复权因子数据
+            result_adj = saver.save_adj_factors_to_csv()
+            
+            # 保存交易日历数据
+            result_calendar = saver.save_calendars_to_csv()
+            
+            # 所有步骤都成功才返回True
+            return all([result_kline, result_lists, result_adj, result_calendar])
         except Exception as e:
             Log.logger.error(f"导出数据时发生错误: {str(e)}")
             Log.logger.error(traceback.format_exc())
             return False
 
-        cfgTS=Config.get_config('ts')
-        db=cfgTS['db']
+        # cfgTS=Config.get_config('ts')
+        # db=cfgTS['db']
         
-        tables_list=mydb.selectToList('show tables',db)
-        for v in tables_list:
-            table=list(v.values())[0]
-            tsSHelper.setIndex(table,db)    
+        # tables_list=mydb.selectToList('show tables',db)
+        # for v in tables_list:
+        #     table=list(v.values())[0]
+        #     tsSHelper.setIndex(table,db)    
     
     def getAStockBasic(self):
         """获取A股基本信息，这是最基础的数据，其他大多数数据都依赖于此"""

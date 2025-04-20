@@ -167,10 +167,79 @@ def loadKline(market='cn_stock', freq='1m', start_date="20200101", end_date="202
     freq: 频率，如 1m, 5m, 15m, 60m, 1d 等
     start_date: 开始日期，格式为YYYYMMDD
     end_date: 结束日期，格式为YYYYMMDD
-    code_list: 代码列表
+    code_list: 代码列表，如果为空则加载所有可用代码
     cache: 是否使用缓存
     max_workers: 最大工作线程/进程数
     """
+    # 定义K线目录
+    KLINE_DIR = f"{DATA_DIR}/market/kline"
+    
+    # 转换日期格式为没有时区的datetime对象
+    start_dt = datetime.strptime(start_date, "%Y%m%d")
+    end_dt = datetime.strptime(end_date, "%Y%m%d")
+    
+    # 如果code_list为空，获取所有可用的code
+    if not code_list:
+        logging.info("Code list is empty, loading all available codes...")
+        all_codes = set()
+        
+        # 检查codebased目录获取可用代码
+        codebased_path = f"{KLINE_DIR}/codebased/{market}/{freq}"
+        if os.path.exists(codebased_path):
+            # 遍历年份目录
+            for year in range(start_dt.year, end_dt.year + 1):
+                year_path = os.path.join(codebased_path, str(year))
+                if os.path.isdir(year_path):
+                    # 遍历代码文件
+                    for code_file in os.listdir(year_path):
+                        if code_file.endswith('.csv'):
+                            code = code_file.replace('.csv', '')
+                            all_codes.add(code)
+        
+        # 如果codebased找不到代码，检查timebased目录
+        if not all_codes:
+            timebased_path = f"{KLINE_DIR}/timebased/{market}/{freq}"
+            if os.path.exists(timebased_path):
+                current_dt = start_dt
+                
+                # 从一部分文件中获取代码（最多采样5天数据）
+                sample_files = []
+                while current_dt <= end_dt and len(sample_files) < 5:
+                    year = current_dt.strftime("%Y")
+                    month = current_dt.strftime("%m")
+                    day = current_dt.strftime("%d")
+                    
+                    # 首先尝试获取merged文件
+                    merged_file = f"{timebased_path}/{year}/{month}/{day}/{market}_kline_merged.csv"
+                    if os.path.exists(merged_file):
+                        sample_files.append(merged_file)
+                    else:
+                        # 否则获取任意一个源文件
+                        file_pattern = f"{timebased_path}/{year}/{month}/{day}/{market}_kline_*.csv"
+                        files = glob.glob(file_pattern)
+                        if files:
+                            sample_files.append(files[0])
+                    
+                    current_dt += timedelta(days=1)
+                
+                # 从样本文件中提取代码
+                for file_path in sample_files:
+                    try:
+                        df_sample = pd.read_csv(file_path, header=None, nrows=1000,
+                                         names=['time', 'code', 'open', 'high', 'low', 'close', 'volume', 'amount'])
+                        if not df_sample.empty:
+                            codes = df_sample['code'].unique()
+                            all_codes.update(codes)
+                    except Exception as e:
+                        logging.warning(f"Error extracting codes from {file_path}: {str(e)}")
+        
+        code_list = list(all_codes)
+        if code_list:
+            logging.info(f"Found {len(code_list)} available codes")
+        else:
+            logging.warning(f"No codes found for {market}/{freq} between {start_date} and {end_date}")
+            return pd.DataFrame(columns=['time', 'code', 'open', 'high', 'low', 'close', 'volume', 'amount'])
+    
     # 处理缓存逻辑
     if cache:
         # 创建参数的哈希值
@@ -189,19 +258,11 @@ def loadKline(market='cn_stock', freq='1m', start_date="20200101", end_date="202
                 return pd.read_pickle(cache_file)
             except Exception as e:
                 logging.error(f"Error loading cache file: {str(e)}")
-                # 如果读取缓存失败，继续执行原流程
-    
-    # 转换日期格式
-    start_dt = datetime.strptime(start_date, "%Y%m%d")
-    end_dt = datetime.strptime(end_date, "%Y%m%d")
     
     # 判断使用哪种加载方式
     use_codebased = len(code_list) <= 100 or (end_dt - start_dt).days > 30
     
     kline_data = None
-    
-    # 定义K线目录
-    KLINE_DIR = f"{DATA_DIR}/market/kline"
     
     # 使用 codebased 方式加载 - 使用线程池加速
     if use_codebased:
@@ -217,8 +278,20 @@ def loadKline(market='cn_stock', freq='1m', start_date="20200101", end_date="202
                         df = pd.read_csv(file_path, header=None, 
                                          names=['time', 'code', 'open', 'high', 'low', 'close', 'volume', 'amount'])
                         
+                        # 转换时间并处理时区
                         df['time'] = pd.to_datetime(df['time'])
-                        mask = (df['time'] >= start_dt) & (df['time'] <= end_dt + timedelta(days=1))
+                        
+                        # 确保start_dt和end_dt没有时区信息
+                        local_start_dt = start_dt
+                        local_end_dt = end_dt + timedelta(days=1) - timedelta(seconds=1)  # 设置为当天结束时间
+                        
+                        # 处理时区问题 - 移除时区信息以便进行比较
+                        if hasattr(df['time'].dt, 'tz') and df['time'].dt.tz is not None:
+                            # 将带时区的时间转换为不带时区的本地时间
+                            df['time'] = df['time'].dt.tz_localize(None)
+                        
+                        # 过滤日期范围
+                        mask = (df['time'] >= local_start_dt) & (df['time'] <= local_end_dt)
                         df = df[mask]
                         
                         if not df.empty:
@@ -262,9 +335,11 @@ def loadKline(market='cn_stock', freq='1m', start_date="20200101", end_date="202
             month = current_dt.strftime("%m")
             day = current_dt.strftime("%d")
             
+            # 首先尝试加载merged文件
             file_path = f"{KLINE_DIR}/timebased/{market}/{freq}/{year}/{month}/{day}/{market}_kline_merged.csv"
             
             if not os.path.exists(file_path):
+                # 如果没有merged文件，尝试找到任意一个源文件
                 pattern = f"{KLINE_DIR}/timebased/{market}/{freq}/{year}/{month}/{day}/{market}_kline_*.csv"
                 files = glob.glob(pattern)
                 if files:
@@ -275,11 +350,15 @@ def loadKline(market='cn_stock', freq='1m', start_date="20200101", end_date="202
                     df = pd.read_csv(file_path, header=None, 
                                      names=['time', 'code', 'open', 'high', 'low', 'close', 'volume', 'amount'])
                     
+                    # 过滤代码
                     if code_list:
                         df = df[df['code'].isin(code_list)]
                     
                     if not df.empty:
+                        # 处理时间和时区
                         df['time'] = pd.to_datetime(df['time'])
+                        if hasattr(df['time'].dt, 'tz') and df['time'].dt.tz is not None:
+                            df['time'] = df['time'].dt.tz_localize(None)
                         return df
                 except Exception as e:
                     logging.error(f"Error loading {file_path}: {str(e)}")
@@ -322,9 +401,22 @@ def loadKline(market='cn_stock', freq='1m', start_date="20200101", end_date="202
     else:
         # 排序数据
         kline_data = kline_data.sort_values(['code', 'time']).reset_index(drop=True)
+        
+        # 为时间添加中国标准时间时区信息 (+08:00)
+        if 'time' in kline_data.columns and not kline_data.empty:
+            if pd.api.types.is_datetime64_dtype(kline_data['time']):
+                # 确保移除任何现有时区，然后添加中国标准时间时区
+                kline_data['time'] = kline_data['time'].dt.tz_localize(None)
+                kline_data['time'] = kline_data['time'].dt.tz_localize('Asia/Shanghai')
+                
+                # 将时间格式化为带时区的字符串格式
+                # 这会产生如 '2025-01-02 09:40:00+08:00' 的格式
+                kline_data['time'] = kline_data['time'].dt.strftime('%Y-%m-%d %H:%M:%S%z')
+                # 插入冒号使格式成为 +08:00 而不是 +0800
+                kline_data['time'] = kline_data['time'].str.replace(r'(\+\d{2})(\d{2})$', r'\1:\2', regex=True)
     
     # 保存到缓存
-    if cache and kline_data is not None:
+    if cache and kline_data is not None and not kline_data.empty:
         try:
             kline_data.to_pickle(cache_file)
             logging.info(f"Saved kline data to cache: {cache_file}")
