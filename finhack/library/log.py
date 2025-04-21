@@ -22,3 +22,19 @@ class tLog():
             logger.add(sys.stderr, level=level, format=fmt, filter=lambda record: record["extra"].get("name") == "trader")
         self.logger=logger.bind(name="trader")       
 
+
+def info(msg):
+    logger.info(msg)
+
+def error(msg):
+    logger.error(msg)
+
+def debug(msg):
+    logger.debug(msg)
+
+def warning(msg):
+    logger.warning(msg)
+
+def critical(msg):
+    logger.critical(msg)
+    
