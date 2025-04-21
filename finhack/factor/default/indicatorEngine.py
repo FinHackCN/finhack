@@ -533,7 +533,7 @@ class indicatorEngine():
             print(f"指标计算过程出现未预期异常: {str(e)}")
             traceback.print_exc()
     
-    def saveFactors(df_factors, indicator_list, market, freq, max_workers=8):
+    def saveFactors(df_factors, indicator_list, market, freq, max_workers=100):
         """
         保存因子数据到指定目录结构 (多线程版本)
         
