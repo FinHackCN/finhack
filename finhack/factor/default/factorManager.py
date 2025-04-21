@@ -17,154 +17,7 @@ from concurrent.futures import ThreadPoolExecutor,ProcessPoolExecutor, wait, ALL
 import finhack.library.log as Log
 
 class factorManager:
-    # #获取
-    # def getAnalysedIndicatorsList(valid=True):
-    #     flist1=mydb.selectToDf('select * from factors_analysis where factor_name not like "alpha%"','finhack')
-    #     flist1=flist1['factor_name'].tolist()
-    #     result=[]
-    #     if valid==True:
-    #         flist2=mydb.selectToDf('select * from factors_list where check_type=11','finhack')   
-    #         flist2=flist2['factor_name'].values
-            
-    #         for factor in flist1:
-    #             factor_name=factor.split('_')[0]
-    #             if factor_name in flist2:
-    #                 result.append(factor)
-            
-    #     else:
-    #         result=flist1
-    #     return result
-        
-    # def getTopAnalysedFactorsList(top=200,valid=True):
-    #     flist1=mydb.selectToDf('select * from factors_analysis order by score desc limit '+str(top),'finhack')
-    #     flist1=flist1['factor_name'].tolist()
-    #     result=[]
-    
-        
-    #     if valid==True:
-    #         flist2=mydb.selectToDf('select * from factors_list where check_type=11','finhack')   
-    #         flist2=flist2['factor_name'].values
-            
-    #         for factor in flist1:
-    #             if 'alpha' in factor:
-    #                 factor_name=factor
-    #             else:
-    #                 factor_name=factor.split('_')[0]
-                
-
-
-    #             if factor_name in flist2:
-    #                 result.append(factor)
-            
-    #     else:
-    #         result=flist1
-    #     return result
-    
-    
-    # #获取因子列表，含indicators和alphas
-    # def getFactorsList(valid=True,ignore=True):
-    #     flist1=[]
-    #     result=[]
-    #     ignore_list=[]
-    #     if ignore:
-    #         ignore_list=['close','vol','volume','open','low','high','pct_chg','amount','pre_close','vwap','stop','lh']
-    #     for subfile in os.listdir(SINGLE_FACTORS_DIR):
-    #         if not '__' in subfile and not subfile.replace('.csv','') in ignore_list:
-    #             flist1.append(subfile.replace('.csv',''))
-
-    #     result=[]
-    #     if valid==True:
-    #         flist2=mydb.selectToDf('select * from factors_list where check_type=11','finhack')   
-    #         flist2=flist2['factor_name'].values
-            
-    #         for factor in flist1:
-    #             if "alpha" not in factor:
-    #                 factor_name=factor.split('_')[0]
-    #             else:
-    #                 factor_name=factor
-    #             if factor_name in flist2:
-    #                 result.append(factor)
-            
-    #     else:
-    #         result=flist1
-    #     result.sort()
-    #     return result
- 
- 
-    # def getFactors()
-
-
-    #  # 获取因子数据
-    # def getFactors(factor_list, stock_list=[], start_date='', end_date='', cache=False):
-    #     df_factor = pd.DataFrame()
-    #     df_tmp= pd.DataFrame()
-    #     single_factors_pkl_dir = SINGLE_FACTORS_PKL_DIR
-    
-    #     # 加载索引
-    #     index_pkl_path = SINGLE_FACTORS_PKL_DIR + 'index.pkl'
-    #     index_df = pd.read_pickle(index_pkl_path)
-    #     index_df['trade_date'] = index_df['trade_date'].astype(str)
-    
-    #     if start_date != "":
-    #         index_df = index_df[index_df['trade_date'] >= start_date]
-    
-    #     if end_date != "":
-    #         index_df = index_df[index_df['trade_date'] <= end_date]
-    
-    #     if index_df.empty:
-    #         return index_df
-    
-    #     # 获取日期范围的位置
-    #     start_index = index_df.index[0]
-    #     end_index = index_df.index[-1]
-    
-    #     factor_dfs = []
-    
-    #     # 逐个读取因子 .pkl 文件
-    #     for factor in factor_list:
-    #         factor = factor.replace('$', '')
-    #         factor_file = os.path.join(single_factors_pkl_dir, f'{factor}.pkl')
-    #         if (os.path.isfile(factor_file)):
-    #             # 加载因子数据
-    #             factor_data = pd.read_pickle(factor_file)
-    #             factor_data[factor] = pd.to_numeric(factor_data[factor], errors='coerce')
-    
-    #             # 筛选对应日期的因子数据
-    #             factor_data = factor_data.iloc[start_index:end_index+1]
-    #             factor_dfs.append(factor_data)
-                
-    #             del factor_data
-    #         else:
-    #             print(f"Warning: {factor_file} not found")
-    
-    #     # 将所有因子数据合并为一个 DataFrame
-    #     combined_factors_df = pd.concat(factor_dfs, axis=1)
-    
-    #     df_factor = index_df.join(combined_factors_df, how='left')
-
-    #     if stock_list != []:
-    #         df_list = []
-    #         combined_factors_df=df_factor.copy()
-    #         for ts_code in stock_list:
-    #             df_tmp = combined_factors_df[combined_factors_df['ts_code'] == ts_code]
-    #             df_list.append(df_tmp)
-    
-    #         df_factor = pd.concat(df_list)
-    #         del df_list
-    #     else:
-            
-    #         pass
-
-        
-    #     del combined_factors_df,index_df,factor_dfs,df_tmp
-
-    #     df_factor = df_factor.set_index(['ts_code', 'trade_date'])
-    #     df_factor = df_factor.sort_index()           
-        
-    #     return df_factor
-
-
-    def inspectFactor(factor_name, factor_type="matrix", market='cn_stock', freq='1m'):
+    def inspectFactor(factor_name, factor_type="matrix", market='cn_stock', freq='1m', start_date=None, end_date=None,only_exists=False):
         """
         检查因子的基本信息，包括开始日期、结束日期、文件大小和代码数量
         
@@ -173,6 +26,8 @@ class factorManager:
             factor_type: 因子类型，"matrix"或"vector"
             market: 市场类型，如cn_stock
             freq: 频率，如1m, 5m, 1d等
+            start_date: 开始日期，格式为"YYYYMMDD"，None表示不限制开始日期
+            end_date: 结束日期，格式为"YYYYMMDD"，None表示不限制结束日期
             
         返回:
             包含因子信息的字典，如不存在则返回None
@@ -190,6 +45,16 @@ class factorManager:
                 "exists": False
             }
             
+            # 如果start_date和end_date不为None，转换为datetime对象
+            start_dt = None
+            end_dt = None
+            if start_date is not None:
+                start_dt = datetime.strptime(start_date, "%Y%m%d")
+            if end_date is not None:
+                end_dt = datetime.strptime(end_date, "%Y%m%d")
+            
+            print("start_date: {}, end_date: {}".format(start_date, end_date))
+
             if factor_type == "matrix":
                 # 矩阵型因子的检查逻辑
                 base_path = f"{FACTORS_DIR}/matrix/{market}/{freq}"
@@ -200,27 +65,80 @@ class factorManager:
                 if os.path.exists(base_path):
                     if 'w' in freq or 'd' in freq:
                         # 按年存储
-                        time_dirs = [f"{year}" for year in os.listdir(base_path) 
+                        all_years = [f"{year}" for year in os.listdir(base_path) 
                                      if os.path.isdir(os.path.join(base_path, str(year)))]
+                        
+                        # 根据日期范围筛选年份目录
+                        if start_dt is not None or end_dt is not None:
+                            for year in all_years:
+                                year_int = int(year)
+                                # 如果年份在范围内，则添加到time_dirs
+                                if (start_dt is None or year_int >= start_dt.year) and \
+                                   (end_dt is None or year_int <= end_dt.year):
+                                    time_dirs.append(year)
+                        else:
+                            time_dirs = all_years
+                            
                     elif 'h' in freq or 'm' in freq:
                         # 按年/月存储
                         for year in os.listdir(base_path):
                             year_path = os.path.join(base_path, year)
+                            year_int = int(year)
+                            
+                            # 根据日期范围筛选年份
+                            if start_dt is not None and year_int < start_dt.year:
+                                continue
+                            if end_dt is not None and year_int > end_dt.year:
+                                continue
+                                
                             if os.path.isdir(year_path):
                                 for month in os.listdir(year_path):
                                     month_path = os.path.join(year_path, month)
+                                    month_int = int(month)
+                                    
+                                    # 根据日期范围筛选月份
+                                    if start_dt is not None and year_int == start_dt.year and month_int < start_dt.month:
+                                        continue
+                                    if end_dt is not None and year_int == end_dt.year and month_int > end_dt.month:
+                                        continue
+                                        
                                     if os.path.isdir(month_path):
                                         time_dirs.append(f"{year}/{month}")
+                                        
                     elif 's' in freq:
                         # 按年/月/日存储
                         for year in os.listdir(base_path):
                             year_path = os.path.join(base_path, year)
+                            year_int = int(year)
+                            
+                            # 根据日期范围筛选年份
+                            if start_dt is not None and year_int < start_dt.year:
+                                continue
+                            if end_dt is not None and year_int > end_dt.year:
+                                continue
+                                
                             if os.path.isdir(year_path):
                                 for month in os.listdir(year_path):
                                     month_path = os.path.join(year_path, month)
+                                    month_int = int(month)
+                                    
+                                    # 根据日期范围筛选月份
+                                    if start_dt is not None and year_int == start_dt.year and month_int < start_dt.month:
+                                        continue
+                                    if end_dt is not None and year_int == end_dt.year and month_int > end_dt.month:
+                                        continue
+                                        
                                     if os.path.isdir(month_path):
                                         for day in os.listdir(month_path):
                                             day_path = os.path.join(month_path, day)
+                                            day_int = int(day)
+                                            
+                                            # 根据日期范围筛选日期
+                                            if start_dt is not None and year_int == start_dt.year and month_int == start_dt.month and day_int < start_dt.day:
+                                                continue
+                                            if end_dt is not None and year_int == end_dt.year and month_int == end_dt.month and day_int > end_dt.day:
+                                                continue
+                                                
                                             if os.path.isdir(day_path):
                                                 time_dirs.append(f"{year}/{month}/{day}")
                 
@@ -230,7 +148,7 @@ class factorManager:
                 # 排序时间目录以确定开始和结束日期
                 time_dirs.sort()
                 
-                all_dates = []
+                all_times = []
                 all_codes = set()
                 total_size = 0
                 factor_exists = False
@@ -247,18 +165,39 @@ class factorManager:
                         index_path = f"{dir_path}/{code}/index.pkl"
                         
                         # 检查因子文件是否存在
+                        #print(f"Checking {factor_path}...")
                         if os.path.exists(factor_path):
-                            factor_exists = True
-                            all_codes.add(code)
+                            if only_exists:
+                                factor_exists = True
+                                break
                             total_size += os.path.getsize(factor_path)
                             
-                            # 从索引文件中获取日期信息
+                            # 从索引文件中获取时间信息
                             if os.path.exists(index_path):
                                 try:
                                     index_df = pd.read_pickle(index_path)
-                                    if 'trade_date' in index_df.columns:
-                                        dates = index_df['trade_date'].astype(str).tolist()
-                                        all_dates.extend(dates)
+                                    # 检查索引结构，使用time而不是time
+                                    if  'time' in index_df.index.names:
+                                        times = index_df.index.get_level_values('time')
+                                        # 如果有日期范围限制，则进行过滤
+                                        if start_dt is not None or end_dt is not None:
+                                            valid_times = times
+                                            if start_dt is not None:
+                                                start_dt_tz = pd.Timestamp(start_dt).tz_localize('Asia/Shanghai')
+                                                valid_times = valid_times[valid_times >= start_dt_tz]
+                                            if end_dt is not None:
+                                                end_dt_tz = pd.Timestamp(end_dt).tz_localize('Asia/Shanghai')
+                                                valid_times = valid_times[valid_times <= end_dt_tz]
+
+                                            if len(valid_times) > 0:
+                                                all_times.extend(valid_times)
+                                                all_codes.add(code)
+                                                factor_exists = True
+                                        else:
+                                            # 无日期限制，添加全部时间
+                                            all_times.extend(times)
+                                            all_codes.add(code)
+                                            factor_exists = True
                                 except Exception as e:
                                     Log.error(f"Error reading index file {index_path}: {str(e)}")
                 
@@ -267,10 +206,11 @@ class factorManager:
                     result["code_count"] = len(all_codes)
                     result["total_size_mb"] = round(total_size / (1024 * 1024), 2)  # 转换为MB
                     
-                    if all_dates:
-                        all_dates = sorted(all_dates)
-                        result["start_date"] = all_dates[0]
-                        result["end_date"] = all_dates[-1]
+                    if all_times:
+                        all_times = sorted(all_times)
+                        # 将时间戳转换为字符串格式YYYYMMDD
+                        result["start_date"] = all_times[0].strftime("%Y%m%d")
+                        result["end_date"] = all_times[-1].strftime("%Y%m%d")
                 
             elif factor_type == "vector":
                 # 向量型因子的检查逻辑
@@ -278,6 +218,9 @@ class factorManager:
                 
                 if os.path.exists(factor_path):
                     result["exists"] = True
+                    if only_exists:
+                        return result
+                    
                     result["total_size_mb"] = round(os.path.getsize(factor_path) / (1024 * 1024), 2)  # 转换为MB
                     
                     try:
@@ -286,14 +229,31 @@ class factorManager:
                         
                         if not vector_df.empty:
                             # 获取代码数量
-
                             result["code_count"] = 0
                             
-                            # 获取日期范围
-                            if 'trade_date' in vector_df.columns:
-                                vector_df['trade_date'] = vector_df['trade_date'].astype(str)
-                                result["start_date"] = vector_df['trade_date'].min()
-                                result["end_date"] = vector_df['trade_date'].max()
+                            # 检查索引格式
+                            if isinstance(vector_df.index, pd.MultiIndex) and 'time' in vector_df.index.names and 'code' in vector_df.index.names:
+                                times = vector_df.index.get_level_values('time')
+                                
+                                # 如果有日期范围限制，则进行过滤
+                                if start_dt is not None or end_dt is not None:
+                                    valid_times = times
+                                    if start_dt is not None:
+                                        start_dt_tz = pd.Timestamp(start_dt).tz_localize('Asia/Shanghai')
+                                        valid_times = valid_times[valid_times >= start_dt_tz]
+                                    if end_dt is not None:
+                                        end_dt_tz = pd.Timestamp(end_dt).tz_localize('Asia/Shanghai')
+                                        valid_times = valid_times[valid_times <= end_dt_tz]
+                                    
+                                    if len(valid_times) > 0:
+                                        result["start_date"] = valid_times.min().strftime("%Y%m%d")
+                                        result["end_date"] = valid_times.max().strftime("%Y%m%d")
+                                        result["code_count"] = len(vector_df.index.get_level_values('code').unique())
+                                else:
+                                    # 无日期限制，使用全部时间
+                                    result["start_date"] = times.min().strftime("%Y%m%d")
+                                    result["end_date"] = times.max().strftime("%Y%m%d")
+                                    result["code_count"] = len(vector_df.index.get_level_values('code').unique())
                     except Exception as e:
                         Log.error(f"Error reading vector factor {factor_path}: {str(e)}")
             
@@ -413,15 +373,6 @@ class factorManager:
                 try:
                     index_df = pd.read_pickle(index_path)
                     
-                    # 确保trade_date列为字符串格式
-                    if 'trade_date' in index_df.columns:
-                        index_df['trade_date'] = index_df['trade_date'].astype(str)
-                        
-                    # 根据日期范围过滤
-                    if 'trade_date' in index_df.columns:
-                        index_df = index_df[(index_df['trade_date'] >= start_date) & 
-                                          (index_df['trade_date'] <= end_date)]
-                    
                     if index_df.empty:
                         continue
                     
@@ -471,28 +422,28 @@ class factorManager:
                     try:
                         vector_df = pd.read_pickle(vector_path)
                         
-                        # 确保trade_date列为字符串格式
-                        if 'trade_date' in vector_df.columns:
-                            vector_df['trade_date'] = vector_df['trade_date'].astype(str)
+                        # 确保time列为字符串格式
+                        if 'time' in vector_df.columns:
+                            vector_df['time'] = vector_df['time'].astype(str)
                             
                         # 根据日期范围过滤
-                        if 'trade_date' in vector_df.columns:
-                            vector_df = vector_df[(vector_df['trade_date'] >= start_date) & 
-                                                (vector_df['trade_date'] <= end_date)]
+                        if 'time' in vector_df.columns:
+                            vector_df = vector_df[(vector_df['time'] >= start_date) & 
+                                                (vector_df['time'] <= end_date)]
                         
                         # 如果code_list不为空，则筛选
-                        if code_list and 'ts_code' in vector_df.columns:
-                            vector_df = vector_df[vector_df['ts_code'].isin(code_list)]
+                        if code_list and 'code' in vector_df.columns:
+                            vector_df = vector_df[vector_df['code'].isin(code_list)]
                         
                         # 设置索引以便与final_df合并
-                        if 'ts_code' in vector_df.columns and 'trade_date' in vector_df.columns:
-                            vector_df = vector_df.set_index(['ts_code', 'trade_date'])
+                        if 'code' in vector_df.columns and 'time' in vector_df.columns:
+                            vector_df = vector_df.set_index(['code', 'time'])
                             
                             # 确保final_df也有相同的索引
-                            if not set(['ts_code', 'trade_date']).issubset(final_df.columns):
+                            if not set(['code', 'time']).issubset(final_df.columns):
                                 continue
                                 
-                            final_df = final_df.set_index(['ts_code', 'trade_date'])
+                            final_df = final_df.set_index(['code', 'time'])
                             
                             # 合并向量因子数据
                             final_df = final_df.join(vector_df[[factor]], how='left')
@@ -504,8 +455,8 @@ class factorManager:
                         traceback.print_exc()
         
         # 设置最终的索引并排序
-        if not final_df.empty and 'ts_code' in final_df.columns and 'trade_date' in final_df.columns:
-            final_df = final_df.set_index(['ts_code', 'trade_date'])
+        if not final_df.empty and 'code' in final_df.columns and 'time' in final_df.columns:
+            final_df = final_df.set_index(['code', 'time'])
             final_df = final_df.sort_index()
         
         # 保存到缓存
@@ -563,7 +514,8 @@ class factorManager:
                         left=line.split('=')
                         left=left[0]
                         
-                        pattern = re.compile(r"df\[\'([A-Za-z0-9_\-]*?)\'\]")   # 查找数字
+                        # 修改正则表达式，确保df前面没有任何字母、数字、下划线或横杠
+                        pattern = re.compile(r"(?<![A-Za-z0-9_\-])df\[\'([A-Za-z0-9_\-]*?)\'\]")   # 查找数字
                         
                         flist = pattern.findall(left)
                         

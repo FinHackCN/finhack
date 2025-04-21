@@ -439,16 +439,41 @@ class indicatorEngine():
             time_ranges = indicatorEngine.timeSplit(start_date, end_date, freq)
             print(f"时间范围拆分为 {len(time_ranges)} 个区间")
             print(time_ranges)
-            for range_start, range_end in time_ranges:
+            
+            # 遍历时间区间
+            for i, (range_start, range_end) in enumerate(time_ranges):
                 print(f"处理时间区间: {range_start} - {range_end}")
+                
+                # 判断当前是否为最后一个time_ranges元素
+                is_last_range = (i == len(time_ranges) - 1)
+                
+                # 如果不是最后一个区间，检查因子是否已存在
+                if not is_last_range:
+                    should_skip = True
+                    for indicator in indicator_list:
+                        factor_info = factorManager.inspectFactor(indicator, market=market, freq=freq,start_date=range_start, end_date=range_end,only_exists=True)
+                        # print(factor_info)
+                        if not factor_info["exists"]:
+                            # 只要有一个因子不存在，就不跳过
+                            should_skip = False
+                            break
+                    
+                    if should_skip:
+                        # print(f"时间区间 {range_start} - {range_end} 的因子已存在，跳过计算")
+                        continue
+                
                 # 加载该时间区间的依赖字段数据
+                # 根据频率调整起始日期，确保有足够的历史数据用于计算
+                adjusted_start_date = indicatorEngine.adjustStartDateByFreq(range_start, freq)
+                print(f"原始起始日期: {range_start}, 调整后的起始日期: {adjusted_start_date}")
+                
                 df_ref = factorManager.loadFactors(
                         matrix_list=referenced_fields,
                         vector_list=[],
                         code_list=code_list,
                         market=market,
                         freq=freq,
-                        start_date=range_start,
+                        start_date=adjusted_start_date,  # 使用调整后的起始日期
                         end_date=range_end,
                         cache=True  # 使用缓存加速
                 )
@@ -468,15 +493,32 @@ class indicatorEngine():
                     if code_list:
                         stocks = code_list
                     else:
-                        stocks = df_ref.index.get_level_values('ts_code').unique().tolist()
+                        # 检查df_ref是否为MultiIndex
+                        if isinstance(df_ref.index, pd.MultiIndex) and 'code' in df_ref.index.names:
+                            stocks = df_ref.index.get_level_values('code').unique().tolist()
+                        else:
+                            # 如果不是MultiIndex或没有code级别，检查是否有code列
+                            if 'code' in df_ref.columns:
+                                stocks = df_ref['code'].unique().tolist()
+                            else:
+                                print("警告：无法从df_ref中获取股票代码列表，数据结构不符合预期")
+                                print(f"索引名称: {df_ref.index.names}")
+                                print(f"列名: {df_ref.columns.tolist()}")
+                                stocks = []
                         
                     code_results = []
+                    params=indicator.split('_')
+                    # print("df_ref:")
+                    # print(df_ref)
+
                     for code in stocks:
-                        code_df = df_ref.xs(code, level='ts_code')
+                        code_df = df_ref.xs(code, level='code')
                         if not code_df.empty:
                             try:
-                                code_result = func(code_df, indicator_list)
-                                code_result['ts_code'] = code
+                                # 创建DataFrame的副本而非引用，避免SettingWithCopyWarning
+                                code_df_copy = code_df.copy()
+                                code_result = func(code_df_copy, params)
+                                code_result['code'] = code
                                 code_results.append(code_result)
                             except Exception as e:
                                 print(f"计算股票 {code} 的时间序列指标失败: {str(e)}")
@@ -485,15 +527,16 @@ class indicatorEngine():
                         result_df = pd.concat(code_results)
                 elif module_type == "cs":
                         # 横截面因子，对每个交易日分别计算
-                    dates = df_ref.index.get_level_values('trade_date').unique().tolist()
+                    dates = df_ref.index.get_level_values('time').unique().tolist()
                         
                     date_results = []
+                    params=indicator.split('_')
                     for date in dates:
-                        date_df = df_ref.xs(date, level='trade_date')
+                        date_df = df_ref.xs(date, level='time')
                         if not date_df.empty:
                             try:
-                                date_result = func(date_df, indicator_list)
-                                date_result['trade_date'] = date
+                                date_result = func(date_df, params)
+                                date_result['time'] = date
                                 date_results.append(date_result)
                             except Exception as e:
                                 print(f"计算日期 {date} 的横截面指标失败: {str(e)}")
@@ -523,19 +566,90 @@ class indicatorEngine():
                                 result_df[new_column_name] = result_df[new_column_name].shift(shift_value)
                     
                     # 如果计算成功且需要保存
+                    print(result_df)
+                    
+                    # 过滤结果，确保只保存在指定日期范围内的数据
+                    if not result_df.empty and start_date and end_date:
+                        # 将字符串日期转换为datetime对象
+                        if end_date == 'now':
+                            end_date = datetime.datetime.now().strftime("%Y%m%d")
+                            
+                        try:
+                            # 获取结果DataFrame中的时间索引
+                            if isinstance(result_df.index, pd.MultiIndex):
+                                times = result_df.index.get_level_values('time')
+                            else:
+                                # 如果不是MultiIndex，检查是否有time列
+                                if 'time' in result_df.columns:
+                                    times = result_df['time']
+                                else:
+                                    # 假设整个索引就是时间
+                                    times = result_df.index
+                            
+                            # 确保times是datetime类型
+                            if not pd.api.types.is_datetime64_any_dtype(times):
+                                try:
+                                    # 尝试将times转换为datetime
+                                    times = pd.to_datetime(times)
+                                except Exception as e:
+                                    print(f"无法将时间索引转换为datetime: {str(e)}")
+                                    print("跳过日期过滤，使用原始数据")
+                                    raise
+                            
+                            # 统一转换处理时区
+                            # 1. 先转换输入的日期为带时区的时间戳
+                            start_datetime = pd.to_datetime(start_date)
+                            end_datetime = pd.to_datetime(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+                            
+                            # 2. 转换times时间处理时区问题
+                            if hasattr(times, 'tz') and times.tz is not None:
+                                # 如果times有时区，将start_datetime和end_datetime本地化为相同时区
+                                start_datetime = start_datetime.tz_localize(times.tz)
+                                end_datetime = end_datetime.tz_localize(times.tz)
+                            else:
+                                # 如果times没有时区，移除start_datetime和end_datetime的时区
+                                if hasattr(start_datetime, 'tz') and start_datetime.tz is not None:
+                                    start_datetime = start_datetime.tz_localize(None)
+                                if hasattr(end_datetime, 'tz') and end_datetime.tz is not None:
+                                    end_datetime = end_datetime.tz_localize(None)
+                            
+                            # 创建日期过滤条件
+                            date_mask = (times >= start_datetime) & (times <= end_datetime)
+                            
+                            # 应用过滤
+                            filtered_df = result_df[date_mask]
+                            
+                            # 如果过滤后结果为空，则记录警告
+                            if filtered_df.empty and not result_df.empty:
+                                print(f"警告：过滤后没有符合日期范围 {start_date} 到 {end_date} 的数据")
+                            else:
+                                print(f"日期过滤前数据量: {len(result_df)}, 过滤后数据量: {len(filtered_df)}")
+                                result_df = filtered_df
+                        except Exception as e:
+                            print(f"日期过滤过程出错: {str(e)}")
+                            print("跳过日期过滤，使用原始数据")
+                            traceback.print_exc()
+                    
+                    if 'time' in result_df.columns:
+                        result_df = result_df.reset_index(drop=True)
+                    else:
+                        result_df = result_df.reset_index(drop=False)
+                    result_df = result_df.sort_values(by=['time', 'code'])
+                    result_df = result_df.set_index(['time', 'code'])
+
                     if save:
                         indicatorEngine.saveFactors(result_df, indicator_list, market, freq)
                     
                     print(f"计算指标组 {indicator_list} 成功，结果数据量: {len(result_df)}")
                     print(result_df)
-                    exit()
+                    # exit()
         except Exception as e:
             print(f"指标计算过程出现未预期异常: {str(e)}")
             traceback.print_exc()
     
-    def saveFactors(df_factors, indicator_list, market, freq, max_workers=8):
+    def saveFactors(df_factors, indicator_list, market, freq, max_workers=8, buffer_size=50):
         """
-        保存因子数据到指定目录结构 (多线程版本)
+        优化版本的因子数据保存函数 - 批量写入和缓冲区处理
         
         参数:
             df_factors: 计算得到的因子数据DataFrame
@@ -543,47 +657,38 @@ class indicatorEngine():
             market: 市场类型
             freq: 频率
             max_workers: 最大线程数
-            
-        返回:
-            保存的DataFrame
+            buffer_size: 内存缓冲区大小，即积累多少个股票数据后一次性写入
         """
         try:
-            # 按照频率确定存储路径
+            # 设置基本路径
             base_path = FACTORS_DIR + f"/matrix/{market}/{freq}"
             
-            # 确保索引中有time和code
+            # 检查索引格式
             if not isinstance(df_factors.index, pd.MultiIndex) or 'time' not in df_factors.index.names or 'code' not in df_factors.index.names:
                 print("因子数据索引格式不正确，需要包含time和code")
                 return df_factors
             
-            # 创建额外保存的基础指标列表
+            # 基础指标映射
             basic_indicators = ['open_0', 'high_0', 'low_0', 'close_0', 'volume_0', 'amount_0']
             basic_mapping = {
-                'open_0': 'open',
-                'high_0': 'high',
-                'low_0': 'low',
-                'close_0': 'close',
-                'volume_0': 'volume',
-                'amount_0': 'amount'
+                'open_0': 'open', 'high_0': 'high', 'low_0': 'low',
+                'close_0': 'close', 'volume_0': 'volume', 'amount_0': 'amount'
             }
             
-            # 对时间索引标准化处理（解决时区问题）
+            # 标准化时间索引
             df_factors = df_factors.copy()
             df_factors.index = df_factors.index.set_levels(
                 [pd.DatetimeIndex(df_factors.index.levels[0]).normalize(), 
-                 df_factors.index.levels[1]]
+                df_factors.index.levels[1]]
             )
             
-            # 根据频率给每个时间点分配存储路径组
+            # 定义时间分组函数
             def get_time_group(time_obj):
                 if 'w' in freq or 'd' in freq:
-                    # 按年分组
                     return f"{time_obj.year}"
                 elif 'h' in freq or 'm' in freq:
-                    # 按年月分组
                     return f"{time_obj.year}{time_obj.month:02d}"
                 elif 's' in freq:
-                    # 按年月日分组
                     return f"{time_obj.year}{time_obj.month:02d}{time_obj.day:02d}"
                 else:
                     return "default"
@@ -591,14 +696,26 @@ class indicatorEngine():
             # 为DataFrame添加分组列
             df_factors['_time_group'] = df_factors.index.get_level_values('time').map(get_time_group)
             
-            # 定义保存单个股票因子数据的函数
-            def save_stock_factor_group(time_group, group_df, indicators):
+            # 创建内存缓冲区
+            buffer = {}
+            
+            # 定义处理单个时间组的函数 - 使用缓冲区和批量写入
+            def process_time_group(time_group, group_df, indicators):
                 # 按股票代码分组处理
-                for code, code_df in group_df.groupby(level='code'):
-                    # 获取第一个时间对象来确定目录路径
+                codes = group_df.index.get_level_values('code').unique()
+                
+                # 创建缓冲区
+                code_buffer = {}
+                buffer_count = 0
+                
+                for code in codes:
+                    # 获取该股票的数据
+                    code_df = group_df.xs(code, level='code')
+                    
+                    # 获取样本时间确定目录路径
                     sample_time = code_df.index.get_level_values('time')[0]
                     
-                    # 根据频率确定存储路径
+                    # 确定存储路径
                     if 'w' in freq or 'd' in freq:
                         date_path = f"{sample_time.year}"
                     elif 'h' in freq or 'm' in freq:
@@ -613,91 +730,92 @@ class indicatorEngine():
                     save_dir = f"{base_path}/{date_path}/{code}"
                     os.makedirs(save_dir, exist_ok=True)
                     
-                    # 保存索引（第一次）
+                    # 创建索引DataFrame（如果需要）
                     index_path = f"{save_dir}/index.pkl"
                     if not os.path.exists(index_path):
-                        # 创建索引DataFrame
-                        index_df = pd.DataFrame(index=code_df.index.get_level_values('time').unique())
+                        index_df = pd.DataFrame(index=code_df.index)
                         index_df['code'] = code
                         index_df['time'] = index_df.index
                         index_df.to_pickle(index_path)
                     
-                    # 对每个指标处理
+                    # 为每个指标准备数据
                     for indicator in indicators:
                         if indicator in code_df.columns:
-                            factor_path = f"{save_dir}/{indicator}.pkl"
+                            # 创建该指标的Series
+                            factor_series = pd.Series(
+                                code_df[indicator].values, 
+                                index=code_df.index,
+                                dtype=float
+                            )
                             
-                            # 创建该指标在所有时间点的Series
-                            factor_series = pd.Series(dtype=float)
-                            for time_obj, row in code_df.iterrows():
-                                time_obj = time_obj[0]  # 获取时间部分
-                                factor_series[time_obj] = row[indicator]
-                            
-                            # 如果文件已存在，读取并更新
-                            if os.path.exists(factor_path):
-                                try:
-                                    existing_series = pd.read_pickle(factor_path)
-                                    # 合并现有数据和新数据
-                                    factor_series = pd.concat([existing_series, factor_series]).drop_duplicates()
-                                    factor_series.to_pickle(factor_path)
-                                except Exception as e:
-                                    print(f"更新因子文件失败: {factor_path}, 错误: {str(e)}")
-                                    factor_series.to_pickle(factor_path)
+                            # 将数据添加到缓冲区
+                            buffer_key = (save_dir, indicator)
+                            if buffer_key not in code_buffer:
+                                code_buffer[buffer_key] = factor_series
                             else:
-                                # 创建新文件
-                                factor_series.to_pickle(factor_path)
+                                code_buffer[buffer_key] = pd.concat([code_buffer[buffer_key], factor_series])
                             
-                            # 对基础指标额外保存一份不带后缀的版本
+                            # 对基础指标额外处理
                             if indicator in basic_indicators:
                                 base_name = basic_mapping[indicator]
-                                base_factor_path = f"{save_dir}/{base_name}.pkl"
-                                
-                                # 与上面相同的逻辑
-                                if os.path.exists(base_factor_path):
-                                    try:
-                                        existing_series = pd.read_pickle(base_factor_path)
-                                        base_factor_series = pd.concat([existing_series, factor_series]).drop_duplicates()
-                                        base_factor_series.to_pickle(base_factor_path)
-                                    except Exception as e:
-                                        print(f"更新基础因子文件失败: {base_factor_path}, 错误: {str(e)}")
-                                        factor_series.to_pickle(base_factor_path)
+                                base_buffer_key = (save_dir, base_name)
+                                if base_buffer_key not in code_buffer:
+                                    code_buffer[base_buffer_key] = factor_series.copy()
                                 else:
-                                    factor_series.to_pickle(base_factor_path)
+                                    code_buffer[base_buffer_key] = pd.concat([code_buffer[base_buffer_key], factor_series])
+                    
+                    buffer_count += 1
+                    
+                    # 当缓冲区达到一定大小时，执行批量写入
+                    if buffer_count >= buffer_size:
+                        _batch_write_to_disk(code_buffer)
+                        code_buffer = {}
+                        buffer_count = 0
+                
+                # 写入剩余的缓冲区数据
+                if code_buffer:
+                    _batch_write_to_disk(code_buffer)
             
-            # 按时间分组进行保存
-            groups = df_factors.groupby('_time_group')
+            # 批量写入函数
+            def _batch_write_to_disk(data_buffer):
+                for (save_dir, indicator), series in data_buffer.items():
+                    factor_path = f"{save_dir}/{indicator}.pkl"
+                    
+                    # 如果文件存在，先读取并合并
+                    if os.path.exists(factor_path):
+                        try:
+                            existing_series = pd.read_pickle(factor_path)
+                            merged_series = pd.concat([existing_series, series]).drop_duplicates()
+                            merged_series.to_pickle(factor_path)
+                        except Exception as e:
+                            print(f"更新因子文件失败: {factor_path}, 错误: {str(e)}")
+                            series.to_pickle(factor_path)
+                    else:
+                        # 直接写入新文件
+                        series.to_pickle(factor_path)
             
-            # 创建任务列表
-            tasks = []
-            for time_group, group_df in groups:
-                # 去掉临时列
-                group_df = group_df.drop('_time_group', axis=1)
-                # 添加到任务列表
-                tasks.append((time_group, group_df, indicator_list))
-            
-            # 使用线程池并行保存
+            # 使用并行处理各个时间组
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = []
-                for task in tasks:
-                    future = executor.submit(save_stock_factor_group, *task)
-                    futures.append(future)
+                
+                # 按时间组分组并处理
+                for time_group, group_df in df_factors.groupby('_time_group'):
+                    group_df = group_df.drop('_time_group', axis=1)
+                    futures.append(executor.submit(
+                        process_time_group, time_group, group_df, indicator_list
+                    ))
                 
                 # 等待所有任务完成
                 for future in futures:
-                    try:
-                        future.result()
-                    except Exception as e:
-                        print(f"保存因子时出错: {str(e)}")
-                        traceback.print_exc()
+                    future.result()  # 这里可以加入错误处理
             
-            print(f"因子保存完成，共处理 {len(tasks)} 个时间组")
+            print(f"因子保存完成，共处理 {len(df_factors.groupby('_time_group'))} 个时间组")
             return df_factors
             
         except Exception as e:
             print(f"保存因子数据失败: {str(e)}")
             traceback.print_exc()
             return df_factors
-
     def timeSplit(start_date, end_date, freq):
         """
         根据频率拆分时间区间，返回时间段列表
@@ -781,6 +899,88 @@ class indicatorEngine():
         
         return time_ranges
 
+    def adjustStartDateByFreq(start_date, freq):
+        """
+        根据频率调整起始日期，确保有足够的历史数据用于计算指标
+        
+        Args:
+            start_date (str): 原始起始日期，格式如 '20200101'
+            freq (str): 频率，如 's'(秒), 'm'(分钟), 'h'(小时), 'd'(日), 'w'(周)
+        
+        Returns:
+            str: 调整后的起始日期
+        """
+        import datetime
+        
+        # 将字符串日期转换为datetime对象
+        if len(start_date) == 8:  # 格式为 '20200101'
+            date_format = '%Y%m%d'
+        elif len(start_date) == 10 and '-' in start_date:  # 格式为 '2020-01-01'
+            date_format = '%Y-%m-%d'
+        else:
+            # 如果格式不匹配，返回原始日期
+            return start_date
+        
+        try:
+            dt_start = datetime.datetime.strptime(start_date, date_format)
+            
+            # 根据不同频率调整日期
+            if 'w' in freq.lower():
+                # 对于周频率，使用上一年的同一周
+                adjusted_dt = datetime.datetime(dt_start.year - 1, dt_start.month, dt_start.day)
+            elif 'd' in freq.lower():
+                # 对于日频率，使用上一年的同一天
+                adjusted_dt = datetime.datetime(dt_start.year - 1, dt_start.month, dt_start.day)
+            elif 'h' in freq.lower():
+                # 对于小时频率，使用上个月的同一天
+                year = dt_start.year
+                month = dt_start.month - 1
+                if month < 1:
+                    month = 12
+                    year -= 1
+                # 处理月末问题（如1月31日回溯到上年12月时保持有效日期）
+                try:
+                    adjusted_dt = datetime.datetime(year, month, dt_start.day)
+                except ValueError:
+                    # 如果日期无效（如2月30日），使用该月的最后一天
+                    if month == 12:
+                        next_month = datetime.datetime(year + 1, 1, 1)
+                    else:
+                        next_month = datetime.datetime(year, month + 1, 1)
+                    adjusted_dt = next_month - datetime.timedelta(days=1)
+            elif 'm' in freq.lower():
+                # 对于分钟频率，使用上个月的同一天
+                year = dt_start.year
+                month = dt_start.month - 1
+                if month < 1:
+                    month = 12
+                    year -= 1
+                # 处理月末问题
+                try:
+                    adjusted_dt = datetime.datetime(year, month, dt_start.day)
+                except ValueError:
+                    # 如果日期无效，使用该月的最后一天
+                    if month == 12:
+                        next_month = datetime.datetime(year + 1, 1, 1)
+                    else:
+                        next_month = datetime.datetime(year, month + 1, 1)
+                    adjusted_dt = next_month - datetime.timedelta(days=1)
+            elif 's' in freq.lower():
+                # 对于秒级频率，使用前一天
+                adjusted_dt = dt_start - datetime.timedelta(days=7)  # 调整为前7天，提供更多历史数据
+            else:
+                # 默认情况，不调整
+                return start_date
+            
+            # 转换回字符串格式
+            if len(start_date) == 8:
+                return adjusted_dt.strftime('%Y%m%d')
+            else:
+                return adjusted_dt.strftime('%Y-%m-%d')
+        except Exception as e:
+            print(f"调整日期时出错: {str(e)}")
+            # 如果转换出错，返回原始日期
+            return start_date
 
     def computeIndicatorByCode():
         pass
