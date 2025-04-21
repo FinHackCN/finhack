@@ -294,7 +294,7 @@ class indicatorEngine():
                         left=left[0]
                         
                         #pattern = re.compile(r"df\[\'(\w*?)\'\]")   # 查找数字
-                        pattern = re.compile(r"df\[\'([A-Za-z0-9_\-]*?)\'\]")   # 查找数字
+                        pattern = re.compile(r"\bdf\[\'([A-Za-z0-9_\-]*?)\'\]")  # 查找数字
                         flist = pattern.findall(left)
                         return_fileds=return_fileds+flist
 
@@ -303,7 +303,7 @@ class indicatorEngine():
                         if 'return ' in  line:
                             if find:
                                 # 收集代码中所有出现的字段
-                                all_fields_pattern = re.compile(r"df\[\'([A-Za-z0-9_\-]*?)\'\]")
+                                all_fields_pattern = re.compile(r"\bdf\[\'([A-Za-z0-9_\-]*?)\'\]")
                                 all_fields = all_fields_pattern.findall(indicator_code)
                                 all_fields = list(set(all_fields))  # 去重
                                 
@@ -459,7 +459,7 @@ class indicatorEngine():
                             break
                     
                     if should_skip:
-                        # print(f"时间区间 {range_start} - {range_end} 的因子已存在，跳过计算")
+                        print(f"时间区间 {range_start} - {range_end} 的因子已存在，跳过计算")
                         continue
                 
                 # 加载该时间区间的依赖字段数据
@@ -477,11 +477,18 @@ class indicatorEngine():
                         end_date=range_end,
                         cache=True  # 使用缓存加速
                 )
+
+                
+                #exit()
                     
-                if df_ref.empty and module_type != "mix":
-                    print(f"时间区间 {range_start} - {range_end} 无数据")
-                    continue
-                    
+                if df_ref.empty:
+                    if module_type != "mix":
+                        print(f"时间区间 {range_start} - {range_end} 无数据")
+                        continue
+                    if len(df_ref.index)>0:
+                        df_ref['placeholder']=0
+                print(f"加载数据量: {len(df_ref)}")
+                print(df_ref)
                 # 根据模块类型计算指标
                 result_df = None
 
@@ -507,7 +514,7 @@ class indicatorEngine():
                                 stocks = []
                         
                     code_results = []
-                    params=indicator.split('_')
+                    params=indicator.split('_')[:-1]
                     # print("df_ref:")
                     # print(df_ref)
 
@@ -530,7 +537,7 @@ class indicatorEngine():
                     dates = df_ref.index.get_level_values('time').unique().tolist()
                         
                     date_results = []
-                    params=indicator.split('_')
+                    params=indicator.split('_')[:-1]
                     for date in dates:
                         date_df = df_ref.xs(date, level='time')
                         if not date_df.empty:
@@ -543,7 +550,8 @@ class indicatorEngine():
                         
                     if date_results:
                         result_df = pd.concat(date_results)
-                
+                else:
+                    print(f"未知因子类型: {module_type}")
                 # 处理指标结果 - 重命名和 shift
                 if result_df is not None and not result_df.empty:
                     # 处理每个指标的重命名和shift
@@ -569,10 +577,14 @@ class indicatorEngine():
                     print(result_df)
                     
                     # 过滤结果，确保只保存在指定日期范围内的数据
-                    if not result_df.empty and start_date and end_date:
-                        # 将字符串日期转换为datetime对象
-                        if end_date == 'now':
-                            end_date = datetime.datetime.now().strftime("%Y%m%d")
+                    if not result_df.empty:
+                        # 使用当前处理的时间范围进行过滤，而不是整个任务的日期范围
+                        current_start_date = range_start
+                        current_end_date = range_end
+                        
+                        # 确保end_date处理
+                        if current_end_date == 'now':
+                            current_end_date = datetime.datetime.now().strftime("%Y%m%d")
                             
                         try:
                             # 获取结果DataFrame中的时间索引
@@ -596,21 +608,38 @@ class indicatorEngine():
                                     print("跳过日期过滤，使用原始数据")
                                     raise
                             
-                            # 统一转换处理时区
-                            # 1. 先转换输入的日期为带时区的时间戳
-                            start_datetime = pd.to_datetime(start_date)
-                            end_datetime = pd.to_datetime(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
-                            
-                            # 2. 转换times时间处理时区问题
+                            # 统一时区处理
+                            # 1. 先判断times是否有时区信息
+                            has_tz = False
                             if hasattr(times, 'tz') and times.tz is not None:
+                                has_tz = True
+                                tz_info = times.tz
+                                print(f"检测到时区信息: {tz_info}")
+                            
+                            # 2. 转换输入的日期为datetime对象
+                            start_datetime = pd.to_datetime(current_start_date)
+                            end_datetime = pd.to_datetime(current_end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+                            
+                            # 3. 根据times的时区情况统一处理
+                            if has_tz:
                                 # 如果times有时区，将start_datetime和end_datetime本地化为相同时区
-                                start_datetime = start_datetime.tz_localize(times.tz)
-                                end_datetime = end_datetime.tz_localize(times.tz)
+                                try:
+                                    start_datetime = start_datetime.tz_localize(tz_info)
+                                    end_datetime = end_datetime.tz_localize(tz_info)
+                                except TypeError:  # 已经有时区信息的情况
+                                    start_datetime = start_datetime.tz_convert(tz_info)
+                                    end_datetime = end_datetime.tz_convert(tz_info)
                             else:
-                                # 如果times没有时区，移除start_datetime和end_datetime的时区
-                                if hasattr(start_datetime, 'tz') and start_datetime.tz is not None:
+                                # 如果times没有时区，移除所有时区信息
+                                if hasattr(times, 'dt'):  # Series类型
+                                    times = times.dt.tz_localize(None)
+                                else:  # DatetimeIndex类型
+                                    times = times.tz_localize(None)
+                                
+                                # 确保start_datetime和end_datetime也没有时区信息
+                                if hasattr(start_datetime, 'tzinfo') and start_datetime.tzinfo is not None:
                                     start_datetime = start_datetime.tz_localize(None)
-                                if hasattr(end_datetime, 'tz') and end_datetime.tz is not None:
+                                if hasattr(end_datetime, 'tzinfo') and end_datetime.tzinfo is not None:
                                     end_datetime = end_datetime.tz_localize(None)
                             
                             # 创建日期过滤条件
@@ -621,13 +650,21 @@ class indicatorEngine():
                             
                             # 如果过滤后结果为空，则记录警告
                             if filtered_df.empty and not result_df.empty:
-                                print(f"警告：过滤后没有符合日期范围 {start_date} 到 {end_date} 的数据")
+                                print(f"警告：过滤后没有符合日期范围 {current_start_date} 到 {current_end_date} 的数据")
+                                print(f"时间范围信息: start={start_datetime}, end={end_datetime}")
+                                print(f"样本时间: {times.iloc[0] if hasattr(times, 'iloc') else times[0]}")
                             else:
                                 print(f"日期过滤前数据量: {len(result_df)}, 过滤后数据量: {len(filtered_df)}")
                                 result_df = filtered_df
                         except Exception as e:
                             print(f"日期过滤过程出错: {str(e)}")
                             print("跳过日期过滤，使用原始数据")
+                            # 添加更详细的错误信息
+                            print(f"本批次范围 - 开始日期: {current_start_date}, 结束日期: {current_end_date}")
+                            if 'times' in locals():
+                                print(f"时间数据类型: {type(times)}")
+                                print(f"时区信息: {getattr(times, 'tz', None)}")
+                                print(f"样本时间: {times.iloc[0] if hasattr(times, 'iloc') else times[0] if len(times) > 0 else None}")
                             traceback.print_exc()
                     
                     if 'time' in result_df.columns:
