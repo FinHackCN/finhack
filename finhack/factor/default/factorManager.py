@@ -266,6 +266,9 @@ class factorManager:
 
 
     def loadFactors(matrix_list=[],vector_list=[],code_list=[],market='cn_stock',freq='1m',start_date="20200101",end_date="20201231",cache=False):
+        print("start_date: {}, end_date: {}".format(start_date, end_date))
+        print("matrix_list: {}, vector_list: {}".format(matrix_list, vector_list))
+        print("code_list: {}, market: {}, freq: {}".format(code_list, market, freq))
         """
         加载因子数据，支持矩阵(matrix)和向量(vector)两种类型的因子
         
@@ -342,7 +345,6 @@ class factorManager:
         
         # 使用多线程读取各个时间目录下的因子数据
         result_dfs = []
-        
         def process_time_dir(time_dir):
             matrix_dir = f"{base_matrix_path}/{time_dir}"
             

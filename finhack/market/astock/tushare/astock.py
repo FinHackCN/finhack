@@ -14,6 +14,8 @@ from runtime.constant import *
 from finhack.library.db import DB  # 替换为统一的DB类
 from concurrent.futures import ThreadPoolExecutor,ProcessPoolExecutor, wait, ALL_COMPLETED
 
+# 设置pandas选项，适应未来行为
+pd.set_option('future.no_silent_downcasting', True)
 
 
 def getStockCodeList(strict=True,db='tushare'):
@@ -414,20 +416,20 @@ def alignStockFactors(df, table, date, filed, conv=0, max_workers=10,db=None):
     # 处理多级索引，将索引重置为列
     df = df.reset_index()
     
-    # 将 code 重命名为 ts_code (如果存在)
-    if 'code' in df.columns and 'ts_code' not in df.columns:
-        df.rename(columns={'code': 'ts_code'}, inplace=True)
     
     # 将 time 转换为 trade_date
     if 'time' in df.columns:
         df['trade_date'] = df['time'].dt.strftime('%Y%m%d')
+    
+    # 确保trade_date列为字符串类型
+    df['trade_date'] = df['trade_date'].astype(str)
     
     # 检查可能的 level_0 列 (通常由 reset_index 引入)
     if 'level_0' in df.columns:
         df = df.drop(columns=['level_0'])
     
     # 获取唯一的 ts_code 列表
-    ts_codes = df['ts_code'].unique().tolist()
+    ts_codes = df['code'].unique().tolist()
     
     # 从CSV文件加载数据
     csv_data = None
@@ -443,22 +445,22 @@ def alignStockFactors(df, table, date, filed, conv=0, max_workers=10,db=None):
         return df  # 如果无法加载CSV数据，返回原始DataFrame
     
     # 定义处理单个股票的函数
-    def process_single_stock(ts_code):
+    def process_single_stock(code):
         try:
             # 筛选当前股票的数据
-            df_single = df[df['ts_code'] == ts_code].copy()
+            df_single = df[df['code'] == code].copy()
             df_single.drop_duplicates('trade_date', inplace=True)
             
             # 从CSV数据中筛选
-            df_factor = csv_data[csv_data['ts_code'] == ts_code].copy()
+            df_factor = csv_data[csv_data['code'] == code].copy()
             
             # 如果用户指定了特定字段
             if filed != '*':
                 fields_list = [f.strip() for f in filed.split(',') if f.strip()]
                 if date not in fields_list:
                     fields_list.append(date)
-                if 'ts_code' not in fields_list:
-                    fields_list.append('ts_code')
+                if 'code' not in fields_list:
+                    fields_list.append('code')
                 # 只保留需要的列
                 available_cols = [col for col in fields_list if col in df_factor.columns]
                 df_factor = df_factor[available_cols]
@@ -475,7 +477,7 @@ def alignStockFactors(df, table, date, filed, conv=0, max_workers=10,db=None):
                     # 为指定的字段创建空值列
                     fields_list = [f.strip() for f in filed.split(',') if f.strip()]
                     for f in fields_list:
-                        if f != date and f != 'ts_code' and f not in df_single.columns:
+                        if f != date and f != 'code' and f not in df_single.columns:
                             df_single[f] = None
                 return df_single
             
@@ -486,6 +488,7 @@ def alignStockFactors(df, table, date, filed, conv=0, max_workers=10,db=None):
                 print(f"处理去重时出错: {str(e)}")
                 print(df_factor)
             
+            # 确保 df_factor 中的 trade_date 列为字符串类型
             # 财务报表时间处理 (conv=3)
             if conv == 3:
                 df_factor[date] = df_factor[date].astype(str)
@@ -493,32 +496,58 @@ def alignStockFactors(df, table, date, filed, conv=0, max_workers=10,db=None):
                 df_factor[date] = df_factor[date] + timedelta(days=1)
                 df_factor[date] = df_factor[date].astype(str)
                 df_factor[date] = df_factor[date].map(lambda x: x.replace('-', ''))
-                df_factor['trade_date'] = df_factor[date]
+                df_factor['trade_date'] = df_factor[date].astype(str)
             
             # 时间格式转换 (conv=1)
             elif conv == 1:
                 df_factor[date] = df_factor[date].astype(str)
                 df_factor['trade_date'] = df_factor[date].map(lambda x: x.replace('-', ''))
-            # 其他情况保持原样，但确保列名一致
+            # 其他情况保持原样，但确保列名一致和类型一致
             elif 'trade_date' not in df_factor.columns:
                 df_factor.rename(columns={date: 'trade_date'}, inplace=True)
             
+            # 确保 trade_date 列为字符串类型
+            df_factor['trade_date'] = df_factor['trade_date'].astype(str)
+            
             # 处理列名重复
             overlap_cols = [col for col in df_single.columns if col in df_factor.columns 
-                          and col != 'trade_date' and col != 'ts_code']
+                          and col != 'trade_date' and col != 'code']
             df_single = df_single.drop(columns=overlap_cols)
             
+            # 打印数据类型信息以便调试
+            # print(f"df_single['trade_date'] dtype: {df_single['trade_date'].dtype}")
+            # print(f"df_factor['trade_date'] dtype: {df_factor['trade_date'].dtype}")
+            
             # 合并数据
-            df_merged = pd.merge(df_single, df_factor, how='left', on='trade_date', validate="one_to_one", copy=True)
+            try:
+                df_merged = pd.merge(df_single, df_factor, how='left', on='trade_date', validate="one_to_one", copy=True)
+            except ValueError as e:
+                print(f"合并数据时出错: {str(e)}")
+                print(f"df_single['trade_date'] dtype: {df_single['trade_date'].dtype}")
+                print(f"df_factor['trade_date'] dtype: {df_factor['trade_date'].dtype}")
+                # 尝试使用 concat 方法
+                df_single.set_index('trade_date', inplace=True)
+                df_factor.set_index('trade_date', inplace=True)
+                df_merged = pd.concat([df_single, df_factor], axis=1)
+                df_merged.reset_index(inplace=True)
+            
             df_merged.drop_duplicates('trade_date', inplace=True)
             
             # 根据 conv 参数确定是否向下填充
             if conv != 2:  # conv!=2 表示需要填充
-                df_merged = df_merged.fillna(method='ffill')
+                # 执行前向填充并明确处理数据类型
+                df_merged = df_merged.ffill()
+                # 使用infer_objects明确处理数据类型，避免隐式类型转换警告
+                df_merged = df_merged.infer_objects(copy=False)
+            
+            # 处理可能的列冲突 (code_x, code_y)
+            if 'code_x' in df_merged.columns and 'code_y' in df_merged.columns:
+                df_merged['code'] = df_merged['code_x'].combine_first(df_merged['code_y'])
+                df_merged.drop(['code_x', 'code_y'], axis=1, inplace=True)
             
             return df_merged
         except Exception as e:
-            print(f"处理股票 {ts_code} 时出错: {str(e)}")
+            print(f"处理股票 {code} 时出错: {str(e)}")
             traceback.print_exc()
             return pd.DataFrame()
     
@@ -542,7 +571,8 @@ def alignStockFactors(df, table, date, filed, conv=0, max_workers=10,db=None):
     # 合并所有处理过的数据
     if result_dfs:
         final_df = pd.concat(result_dfs)
-        final_df['code'] = final_df['ts_code']
+        if 'code' in final_df.columns and 'ts_code' in final_df.columns:
+            final_df['code'] = final_df['ts_code']
         # 恢复原始索引结构
         if has_multi_index:
             # 确保有必要的列用于重建索引
@@ -555,7 +585,12 @@ def alignStockFactors(df, table, date, filed, conv=0, max_workers=10,db=None):
                 # 如果没有time列，尝试用trade_date代替
                 final_df = final_df.sort_values(['code', 'trade_date'])
                 # 将trade_date转回datetime格式
-                final_df['time'] = pd.to_datetime(final_df['trade_date'], format='%Y%m%d')
+                try:
+                    final_df['time'] = pd.to_datetime(final_df['trade_date'], format='%Y%m%d')
+                except Exception as e:
+                    print(f"将trade_date转换为时间失败: {str(e)}")
+                    # 创建一个临时time列
+                    final_df['time'] = pd.to_datetime('19700101')
                 final_df = final_df.set_index(['code', 'time'])
             
             # 重命名索引以匹配原始索引名称

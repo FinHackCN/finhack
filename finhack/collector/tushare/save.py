@@ -57,7 +57,7 @@ class TushareSaver:
             ]
         }
         
-        # 定义财务数据表与输出映射
+        # 定义数据表与输出映射
         self.finance_tables_map = {
             'astock_finance_audit': {'output_path': 'market/reference/cn_stock/astock_finance_audit.csv'},
             'astock_finance_balancesheet': {'output_path': 'market/reference/cn_stock/astock_finance_balancesheet.csv'},
@@ -93,7 +93,7 @@ class TushareSaver:
             Log.logger.info("开始导出K线数据到CSV文件...")
             
             # 使用线程池并行处理不同的表
-            with concurrent.futures.ThreadPoolExecutor(max_workers=min(6, len(self.table_dataname_map))) as executor:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(10, len(self.table_dataname_map))) as executor:
                 futures = {executor.submit(self._process_table_optimized, table_name, dataname): (table_name, dataname) 
                           for table_name, dataname in self.table_dataname_map.items()}
                 
@@ -119,7 +119,7 @@ class TushareSaver:
             Log.logger.info("开始导出代码列表数据到CSV文件...")
             
             # 使用线程池并行处理不同的表
-            with concurrent.futures.ThreadPoolExecutor(max_workers=min(7, len(self.list_tables_map))) as executor:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(10, len(self.list_tables_map))) as executor:
                 futures = {executor.submit(self._process_list_table, table_name, config): table_name 
                           for table_name, config in self.list_tables_map.items()}
                 
@@ -145,7 +145,7 @@ class TushareSaver:
             Log.logger.info("开始导出复权因子数据到CSV文件...")
             
             # 使用线程池并行处理不同的表
-            with concurrent.futures.ThreadPoolExecutor(max_workers=min(2, len(self.adj_tables_map))) as executor:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(10, len(self.adj_tables_map))) as executor:
                 futures = {executor.submit(self._process_adj_table, table_name, config): table_name 
                           for table_name, config in self.adj_tables_map.items()}
                 
@@ -186,13 +186,13 @@ class TushareSaver:
             Log.logger.error(traceback.format_exc())
             return False
 
-    def save_finance_data_to_csv(self):
-        """将财务数据表导出到CSV文件"""
+    def save_table_data_to_csv(self):
+        """将数据表导出到CSV文件"""
         try:
-            Log.logger.info("开始导出财务数据到CSV文件...")
+            Log.logger.info("开始导出数据到CSV文件...")
             
             # 使用线程池并行处理不同的表
-            with concurrent.futures.ThreadPoolExecutor(max_workers=min(5, len(self.finance_tables_map))) as executor:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(10, len(self.finance_tables_map))) as executor:
                 futures = {executor.submit(self._process_finance_table, table_name, config): table_name 
                           for table_name, config in self.finance_tables_map.items()}
                 
@@ -200,15 +200,15 @@ class TushareSaver:
                     table_name = futures[future]
                     try:
                         result = future.result()
-                        Log.logger.info(f"财务表 {table_name} 处理完成")
+                        Log.logger.info(f"表 {table_name} 处理完成")
                     except Exception as exc:
-                        Log.logger.error(f"处理财务表 {table_name} 时发生错误: {str(exc)}")
+                        Log.logger.error(f"处理表 {table_name} 时发生错误: {str(exc)}")
             
-            Log.logger.info("所有财务数据导出完成")
+            Log.logger.info("所有数据导出完成")
             return True
             
         except Exception as e:
-            Log.logger.error(f"财务数据导出过程中发生错误: {str(e)}")
+            Log.logger.error(f"数据导出过程中发生错误: {str(e)}")
             Log.logger.error(traceback.format_exc())
             return False
 
@@ -342,7 +342,7 @@ class TushareSaver:
             return False
 
     def _process_finance_table(self, table_name, config):
-        """处理单个财务数据表"""
+        """处理单个数据表"""
         try:
             # 验证表是否存在
             if not mydb.tableExists(table_name, self.db):
@@ -357,7 +357,7 @@ class TushareSaver:
             os.makedirs(os.path.dirname(output_file), exist_ok=True)
             
             # 查询数据
-            Log.logger.info(f"查询表 {table_name} 的财务数据...")
+            Log.logger.info(f"查询表 {table_name} 的数据...")
             
             # 查询语句
             sql = f"SELECT * FROM {table_name}"
@@ -374,11 +374,11 @@ class TushareSaver:
             # 保存数据到CSV
             self._save_csv(df, output_file, header=True)
             
-            Log.logger.info(f"已保存财务数据到 {output_file}")
+            Log.logger.info(f"已保存数据到 {output_file}")
             return True
             
         except Exception as e:
-            Log.logger.error(f"处理财务表 {table_name} 时发生错误: {str(e)}")
+            Log.logger.error(f"处理表 {table_name} 时发生错误: {str(e)}")
             Log.logger.error(traceback.format_exc())
             return False
 
