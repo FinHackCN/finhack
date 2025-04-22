@@ -152,37 +152,55 @@ class TushareCollector:
         
         return True
     
-        cfgTS=Config.get_config('ts')
-        db=cfgTS['db']
+        # cfgTS=Config.get_config('ts')
+        # db=cfgTS['db']
         
-        tables_list=mydb.selectToList('show tables',db)
-        for v in tables_list:
-            table=list(v.values())[0]
-            tsSHelper.setIndex(table,db)    
+        # tables_list=mydb.selectToList('show tables',db)
+        # for v in tables_list:
+        #     table=list(v.values())[0]
+        #     tsSHelper.setIndex(table,db)    
     
     def save(self):
-        """将数据库中的数据导出到CSV文件"""
+        """将数据库中的数据导出到CSV文件，使用多线程提高效率"""
         try:
             from finhack.collector.tushare.save import TushareSaver
+            import threading
+            import concurrent.futures
+            
             saver = TushareSaver()
+            results = {}
             
-            # 保存K线数据
-            result_kline = saver.save_kline_to_csv()
+            # 创建线程池
+            max_workers = min(5, os.cpu_count() or 4)  # 限制最大线程数
+            Log.logger.info(f"启动数据保存任务，使用{max_workers}线程...")
             
-            # 保存代码列表数据
-            result_lists = saver.save_lists_to_csv()
-            
-            # 保存复权因子数据
-            result_adj = saver.save_adj_factors_to_csv()
-            
-            # 保存交易日历数据
-            result_calendar = saver.save_calendars_to_csv()
-            
-            # 保存财务数据
-            result_finance = saver.save_finance_data_to_csv()
+            # 使用线程池执行各个保存任务
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                # 提交各个保存任务
+                futures = {
+                    'kline': executor.submit(saver.save_kline_to_csv),
+                    'lists': executor.submit(saver.save_lists_to_csv),
+                    'adj': executor.submit(saver.save_adj_factors_to_csv),
+                    'calendar': executor.submit(saver.save_calendars_to_csv),
+                    'finance': executor.submit(saver.save_table_data_to_csv),
+                }
+                
+                # 获取各个任务的结果
+                for name, future in futures.items():
+                    try:
+                        results[name] = future.result()
+                        status = "成功" if results[name] else "失败"
+                        Log.logger.info(f"{name}数据保存{status}")
+                    except Exception as e:
+                        results[name] = False
+                        Log.logger.error(f"{name}数据保存出错: {str(e)}")
+                        Log.logger.error(traceback.format_exc())
             
             # 所有步骤都成功才返回True
-            return all([result_kline, result_lists, result_adj, result_calendar, result_finance])
+            all_success = all(results.values())
+            Log.logger.info(f"所有数据保存任务已完成，状态: {'成功' if all_success else '部分失败'}")
+            return all_success
+            
         except Exception as e:
             Log.logger.error(f"导出数据时发生错误: {str(e)}")
             Log.logger.error(traceback.format_exc())
