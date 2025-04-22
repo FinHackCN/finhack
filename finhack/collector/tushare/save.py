@@ -57,6 +57,21 @@ class TushareSaver:
             ]
         }
         
+        # 定义财务数据表与输出映射
+        self.finance_tables_map = {
+            'astock_finance_audit': {'output_path': 'market/reference/cn_stock/astock_finance_audit.csv'},
+            'astock_finance_balancesheet': {'output_path': 'market/reference/cn_stock/astock_finance_balancesheet.csv'},
+            'astock_finance_cashflow': {'output_path': 'market/reference/cn_stock/astock_finance_cashflow.csv'},
+            'astock_finance_disclosure_date': {'output_path': 'market/reference/cn_stock/astock_finance_disclosure_date.csv'},
+            'astock_finance_dividend': {'output_path': 'market/reference/cn_stock/astock_finance_dividend.csv'},
+            'astock_finance_express': {'output_path': 'market/reference/cn_stock/astock_finance_express.csv'},
+            'astock_finance_forecast': {'output_path': 'market/reference/cn_stock/astock_finance_forecast.csv'},
+            'astock_finance_income': {'output_path': 'market/reference/cn_stock/astock_finance_income.csv'},
+            'astock_finance_indicator': {'output_path': 'market/reference/cn_stock/astock_finance_indicator.csv'},
+            'astock_finance_mainbz': {'output_path': 'market/reference/cn_stock/astock_finance_mainbz.csv'},
+            'astock_price_daily_basic': {'output_path': 'market/reference/cn_stock/astock_price_daily_basic.csv'}
+        }
+        
         # 定义数据类型对应的时间格式
         self.time_format_map = {
             'cn_stock': '%Y-%m-%d 09:30:00+08:00',
@@ -168,6 +183,32 @@ class TushareSaver:
             
         except Exception as e:
             Log.logger.error(f"交易日历数据导出过程中发生错误: {str(e)}")
+            Log.logger.error(traceback.format_exc())
+            return False
+
+    def save_finance_data_to_csv(self):
+        """将财务数据表导出到CSV文件"""
+        try:
+            Log.logger.info("开始导出财务数据到CSV文件...")
+            
+            # 使用线程池并行处理不同的表
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(5, len(self.finance_tables_map))) as executor:
+                futures = {executor.submit(self._process_finance_table, table_name, config): table_name 
+                          for table_name, config in self.finance_tables_map.items()}
+                
+                for future in concurrent.futures.as_completed(futures):
+                    table_name = futures[future]
+                    try:
+                        result = future.result()
+                        Log.logger.info(f"财务表 {table_name} 处理完成")
+                    except Exception as exc:
+                        Log.logger.error(f"处理财务表 {table_name} 时发生错误: {str(exc)}")
+            
+            Log.logger.info("所有财务数据导出完成")
+            return True
+            
+        except Exception as e:
+            Log.logger.error(f"财务数据导出过程中发生错误: {str(e)}")
             Log.logger.error(traceback.format_exc())
             return False
 
@@ -297,6 +338,47 @@ class TushareSaver:
             
         except Exception as e:
             Log.logger.error(f"处理交易日历表 {table_name} 时发生错误: {str(e)}")
+            Log.logger.error(traceback.format_exc())
+            return False
+
+    def _process_finance_table(self, table_name, config):
+        """处理单个财务数据表"""
+        try:
+            # 验证表是否存在
+            if not mydb.tableExists(table_name, self.db):
+                Log.logger.warning(f"表 {table_name} 不存在，跳过")
+                return False
+                
+            # 获取输出路径
+            output_path = config['output_path']
+            output_file = os.path.join(self.base_dir, output_path)
+            
+            # 确保输出目录存在
+            os.makedirs(os.path.dirname(output_file), exist_ok=True)
+            
+            # 查询数据
+            Log.logger.info(f"查询表 {table_name} 的财务数据...")
+            
+            # 查询语句
+            sql = f"SELECT * FROM {table_name}"
+            df = mydb.selectToDf(sql, self.db)
+            
+            if df.empty:
+                Log.logger.warning(f"表 {table_name} 没有数据")
+                return False
+            
+            # 如果ts_code列存在，重命名为code
+            if 'ts_code' in df.columns:
+                df.rename(columns={'ts_code': 'code'}, inplace=True)
+            
+            # 保存数据到CSV
+            self._save_csv(df, output_file, header=True)
+            
+            Log.logger.info(f"已保存财务数据到 {output_file}")
+            return True
+            
+        except Exception as e:
+            Log.logger.error(f"处理财务表 {table_name} 时发生错误: {str(e)}")
             Log.logger.error(traceback.format_exc())
             return False
 
