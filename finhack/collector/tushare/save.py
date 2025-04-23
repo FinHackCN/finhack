@@ -227,24 +227,41 @@ class TushareSaver:
             # 确保输出目录存在
             os.makedirs(os.path.dirname(output_file), exist_ok=True)
             
+            # 检查是否存在CSV文件，以及是否可以进行增量更新
+            max_date = None
+            condition = ""
+            if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
+                try:
+                    # 读取现有CSV文件，检查是否有trade_date列
+                    existing_df = pd.read_csv(output_file)
+                    if 'trade_date' in existing_df.columns and not existing_df.empty:
+                        max_date = existing_df['trade_date'].max()
+                        if pd.notna(max_date):
+                            condition = f" WHERE trade_date > '{max_date}'"
+                            Log.logger.info(f"发现现有文件 {output_file}，将只查询 {max_date} 之后的数据")
+                except Exception as e:
+                    Log.logger.warning(f"读取现有CSV文件时发生错误，将执行全量导出: {str(e)}")
+            
             # 查询数据
             Log.logger.info(f"查询表 {table_name} 的代码列表数据...")
             
-            # 查询语句
-            sql = f"SELECT * FROM {table_name}"
+            # 查询语句，根据是否有最大日期构建不同的SQL
+            sql = f"SELECT * FROM {table_name}{condition}"
             df = mydb.selectToDf(sql, self.db)
             
             if df.empty:
-                Log.logger.warning(f"表 {table_name} 没有数据")
-                return False
+                Log.logger.info(f"表 {table_name} 没有新数据需要更新")
+                return True  # 没有新数据也算成功
             
             # 根据表名处理特定的映射逻辑
             processed_df = self._process_list_dataframe(df, table_name, config)
             
             # 保存数据到CSV
-            self._save_csv(processed_df, output_file, header=True)
+            mode = 'a' if max_date is not None else 'w'  # 如果是增量更新则追加模式，否则覆盖模式
+            header = not (max_date is not None and os.path.exists(output_file))  # 增量更新不需要表头
+            processed_df.to_csv(output_file, index=False, mode=mode, header=header)
             
-            Log.logger.info(f"已保存代码列表数据到 {output_file}")
+            Log.logger.info(f"已{'追加' if mode == 'a' else '保存'}代码列表数据到 {output_file}")
             return True
             
         except Exception as e:
