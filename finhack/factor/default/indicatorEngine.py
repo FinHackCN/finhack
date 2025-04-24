@@ -35,13 +35,27 @@ class indicatorEngine():
                 if file in task_list.split(','):
                     with open(os.path.join(root, file), 'r', encoding='utf-8') as f:
                         lines = [line.strip() for line in f.readlines()]
-                        indicator_list.extend(lines)
+                        # 对于不包含'_'的指标，在尾部添加_0
+                        processed_lines = []
+                        for line in lines:
+                            if '_' not in line and line.strip() not in ['open', 'high', 'low', 'close', 'volume']:
+                                processed_lines.append(f"{line}_0")
+                            else:
+                                processed_lines.append(line)
+                        indicator_list.extend(processed_lines)
         for root, dirs, files in os.walk(CONFIG_DIR + f"/factorlist/indicatorlist/{market}/x{freq}/"):
             for file in files:
                 if file in task_list.split(','):
                     with open(os.path.join(root, file), 'r', encoding='utf-8') as f:
                         lines = [line.strip() for line in f.readlines()]
-                        indicator_list.extend(lines)
+                        # 对于不包含'_'的指标，在尾部添加_0
+                        processed_lines = []
+                        for line in lines:
+                            if '_' not in line and line.strip() not in ['open', 'high', 'low', 'close', 'volume']:
+                                processed_lines.append(f"{line}_0")
+                            else:
+                                processed_lines.append(line)
+                        indicator_list.extend(processed_lines)
         return indicator_list
 
 
@@ -285,8 +299,7 @@ class indicatorEngine():
                             function_name=line.split('def ')
                             function_name=function_name[1]
                             function_name=function_name.split('(')
-                            function_name=function_name[0]
-                            function_name=function_name.strip()
+                            function_name=function_name[0].strip()
                             indicator_code=line
                         else:
                             indicator_code=indicator_code+"\n"+line
