@@ -775,216 +775,222 @@ class alphaEngine():
 
 
     def computeAlpha(alpha_item, market="cn_stock", freq="1d", start_date='', end_date='', code_list=[]):
-        """
-        计算单个alpha因子
+        try:
+            # 计算单个alpha因子
+            """
+            计算单个alpha因子
+            
+            参数:
+                alpha_item: 单个alpha项，包含name和formula
+                market: 市场类型
+                freq: 频率
+                start_date: 开始日期
+                end_date: 结束日期
+                code_list: 代码列表
+            
+            返回:
+                计算结果包含alpha_name和alpha_result
+            """
+            alpha_name = alpha_item["name"]
+            formula = alpha_item["formula"]
+
+            pd.options.display.max_rows = 100
+            t1=time.time()
+            formula=formula.replace("||"," | ")
+            formula=formula.replace("&&"," & ")
+            formula=formula.replace("^"," ** ")
+            formula=formula.replace("\n"," ")
+
+            if '?' in formula:
+                formula=ternary_trans(formula)
+
+            col_list=alphaEngine.get_col_list(formula)
+
+
+            time_ranges = factorManager.timeSplit(start_date, end_date, freq)
+            print(f"时间范围拆分为 {len(time_ranges)} 个区间")
+            print(time_ranges)
+                
+            # 遍历时间区间
+            for i, (range_start, range_end) in enumerate(time_ranges):
+                print(f"处理时间区间: {range_start} - {range_end}")
+                    
+                # 判断当前是否为最后一个time_ranges元素
+                is_last_range = (i == len(time_ranges) - 1)
+                    
+                # 如果不是最后一个区间，检查因子是否已存在
+                if not is_last_range:
+                    should_skip = True
+                    factor_info = factorManager.inspectFactor(alpha_name, market=market, freq=freq,start_date=range_start, end_date=range_end,only_exists=True)
+                        # print(factor_info)
+                    if not factor_info["exists"]:
+                            # 只要有一个因子不存在，就不跳过
+                        should_skip = False
         
-        参数:
-            alpha_item: 单个alpha项，包含name和formula
-            market: 市场类型
-            freq: 频率
-            start_date: 开始日期
-            end_date: 结束日期
-            code_list: 代码列表
-        
-        返回:
-            计算结果包含alpha_name和alpha_result
-        """
-        alpha_name = alpha_item["name"]
-        formula = alpha_item["formula"]
-
-        pd.options.display.max_rows = 100
-        t1=time.time()
-        formula=formula.replace("||"," | ")
-        formula=formula.replace("&&"," & ")
-        formula=formula.replace("^"," ** ")
-        formula=formula.replace("\n"," ")
-
-        if '?' in formula:
-            formula=ternary_trans(formula)
-
-        col_list=alphaEngine.get_col_list(formula)
-
-
-        time_ranges = factorManager.timeSplit(start_date, end_date, freq)
-        print(f"时间范围拆分为 {len(time_ranges)} 个区间")
-        print(time_ranges)
-            
-        # 遍历时间区间
-        for i, (range_start, range_end) in enumerate(time_ranges):
-            print(f"处理时间区间: {range_start} - {range_end}")
-                
-            # 判断当前是否为最后一个time_ranges元素
-            is_last_range = (i == len(time_ranges) - 1)
-                
-            # 如果不是最后一个区间，检查因子是否已存在
-            if not is_last_range:
-                should_skip = True
-                factor_info = factorManager.inspectFactor(alpha_name, market=market, freq=freq,start_date=range_start, end_date=range_end,only_exists=True)
-                    # print(factor_info)
-                if not factor_info["exists"]:
-                        # 只要有一个因子不存在，就不跳过
-                    should_skip = False
-      
-                    
-                if should_skip:
-                    print(f"时间区间 {range_start} - {range_end} 的因子已存在，跳过计算")
-                    continue
-                
-                # 加载该时间区间的依赖字段数据
-                # 根据频率调整起始日期，确保有足够的历史数据用于计算
-            adjusted_start_date = factorManager.adjustStartDateByFreq(range_start, freq)
-            print(f"原始起始日期: {range_start}, 调整后的起始日期: {adjusted_start_date}")
-        
-
-            
-            df = factorManager.loadFactors(
-                        matrix_list=[s.replace('$', '', 1) for s in col_list],
-                        vector_list=[],
-                        code_list=code_list,
-                        market=market,
-                        freq=freq,
-                        start_date=adjusted_start_date,  # 使用调整后的起始日期
-                        end_date=range_end,
-                        cache=True  # 使用缓存加速
-            )
-
-            print(df)
-
-            if df.empty:
-                Log.logger.warning(f"数据为空，无法计算alpha: {alpha_name}")
-                return {"name": alpha_name, "result": pd.DataFrame()}
-            
-            try:
-                for col in col_list:
-                    formula=formula.replace(col,"df['%s']" % (col[1:]))
-                    df[col[1:]]=df[col[1:]].astype(float)
-            except KeyError as e:
-                Log.logger.error("%s error:%s" % (formula,str(e))) 
-                return pd.DataFrame()
-
-  
-            Log.logger.info(alpha_name+"计算公式:"+formula)
-            res=eval(formula)
-
-            # 创建结果DataFrame
-            result_df = pd.DataFrame()
-            
-            # 检查res是否为Series或DataFrame，并相应处理
-            if isinstance(res, pd.Series):
-                # 将Series转换为DataFrame，列名为alpha_name
-                result_df = pd.DataFrame({alpha_name: res})
-            elif isinstance(res, pd.DataFrame):
-                # 如果已经是DataFrame，重命名列为alpha_name
-                if len(res.columns) == 1:
-                    result_df = res.rename(columns={res.columns[0]: alpha_name})
-                else:
-                    # 如果有多列，选择第一列并重命名
-                    result_df = pd.DataFrame({alpha_name: res.iloc[:, 0]})
-            
-            # 过滤结果，确保只保存在指定日期范围内的数据
-            if not result_df.empty:
-                # 使用当前处理的时间范围进行过滤，而不是整个任务的日期范围
-                current_start_date = range_start
-                current_end_date = range_end
-                
-                # 确保end_date处理
-                if current_end_date == 'now':
-                    current_end_date = datetime.datetime.now().strftime("%Y%m%d")
-                    
-                try:
-                    # 获取结果DataFrame中的时间索引
-                    if isinstance(result_df.index, pd.MultiIndex):
-                        times = result_df.index.get_level_values('time')
-                    else:
-                        # 如果不是MultiIndex，检查是否有time列
-                        if 'time' in result_df.columns:
-                            times = result_df['time']
-                        else:
-                            # 假设整个索引就是时间
-                            times = result_df.index
-                    
-                    # 确保times是datetime类型
-                    if not pd.api.types.is_datetime64_any_dtype(times):
-                        try:
-                            # 尝试将times转换为datetime
-                            times = pd.to_datetime(times)
-                        except Exception as e:
-                            print(f"无法将时间索引转换为datetime: {str(e)}")
-                            print("跳过日期过滤，使用原始数据")
-                            raise
-                    
-                    # 统一时区处理
-                    # 1. 先判断times是否有时区信息
-                    has_tz = False
-                    if hasattr(times, 'tz') and times.tz is not None:
-                        has_tz = True
-                        tz_info = times.tz
-                        print(f"检测到时区信息: {tz_info}")
-                    
-                    # 2. 转换输入的日期为datetime对象
-                    start_datetime = pd.to_datetime(current_start_date)
-                    end_datetime = pd.to_datetime(current_end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
-                    
-                    # 3. 根据times的时区情况统一处理
-                    if has_tz:
-                        # 如果times有时区，将start_datetime和end_datetime本地化为相同时区
-                        try:
-                            start_datetime = start_datetime.tz_localize(tz_info)
-                            end_datetime = end_datetime.tz_localize(tz_info)
-                        except TypeError:  # 已经有时区信息的情况
-                            start_datetime = start_datetime.tz_convert(tz_info)
-                            end_datetime = end_datetime.tz_convert(tz_info)
-                    else:
-                        # 如果times没有时区，移除所有时区信息
-                        if hasattr(times, 'dt'):  # Series类型
-                            times = times.dt.tz_localize(None)
-                        else:  # DatetimeIndex类型
-                            times = times.tz_localize(None)
                         
-                        # 确保start_datetime和end_datetime也没有时区信息
-                        if hasattr(start_datetime, 'tzinfo') and start_datetime.tzinfo is not None:
-                            start_datetime = start_datetime.tz_localize(None)
-                        if hasattr(end_datetime, 'tzinfo') and end_datetime.tzinfo is not None:
-                            end_datetime = end_datetime.tz_localize(None)
+                    if should_skip:
+                        print(f"时间区间 {range_start} - {range_end} 的因子已存在，跳过计算")
+                        continue
                     
-                    # 创建日期过滤条件
-                    date_mask = (times >= start_datetime) & (times <= end_datetime)
-                    
-                    # 应用过滤
-                    filtered_df = result_df[date_mask]
-                    
-                    # 如果过滤后结果为空，则记录警告
-                    if filtered_df.empty and not result_df.empty:
-                        print(f"警告：过滤后没有符合日期范围 {current_start_date} 到 {current_end_date} 的数据")
-                        print(f"时间范围信息: start={start_datetime}, end={end_datetime}")
-                        print(f"样本时间: {times.iloc[0] if hasattr(times, 'iloc') else times[0]}")
+                    # 加载该时间区间的依赖字段数据
+                    # 根据频率调整起始日期，确保有足够的历史数据用于计算
+                adjusted_start_date = factorManager.adjustStartDateByFreq(range_start, freq)
+                print(f"原始起始日期: {range_start}, 调整后的起始日期: {adjusted_start_date}")
+            
+
+                
+                df = factorManager.loadFactors(
+                            matrix_list=[s.replace('$', '', 1) for s in col_list],
+                            vector_list=[],
+                            code_list=code_list,
+                            market=market,
+                            freq=freq,
+                            start_date=adjusted_start_date,  # 使用调整后的起始日期
+                            end_date=range_end,
+                            cache=True  # 使用缓存加速
+                )
+
+                print(df)
+
+                if df.empty:
+                    Log.logger.warning(f"数据为空，无法计算alpha: {alpha_name}")
+                    return {"name": alpha_name, "result": pd.DataFrame()}
+                
+                try:
+                    for col in col_list:
+                        formula=formula.replace(col,"df['%s']" % (col[1:]))
+                        df[col[1:]]=df[col[1:]].astype(float)
+                except KeyError as e:
+                    Log.logger.error("%s error:%s" % (formula,str(e))) 
+                    continue
+
+    
+                Log.logger.info(alpha_name+"计算公式:"+formula)
+                res=eval(formula)
+
+                # 创建结果DataFrame
+                result_df = pd.DataFrame()
+                
+                # 检查res是否为Series或DataFrame，并相应处理
+                if isinstance(res, pd.Series):
+                    # 将Series转换为DataFrame，列名为alpha_name
+                    result_df = pd.DataFrame({alpha_name: res})
+                elif isinstance(res, pd.DataFrame):
+                    # 如果已经是DataFrame，重命名列为alpha_name
+                    if len(res.columns) == 1:
+                        result_df = res.rename(columns={res.columns[0]: alpha_name})
                     else:
-                        print(f"日期过滤前数据量: {len(result_df)}, 过滤后数据量: {len(filtered_df)}")
-                        result_df = filtered_df
-                except Exception as e:
-                    print(f"日期过滤过程出错: {str(e)}")
-                    print("跳过日期过滤，使用原始数据")
-                    # 添加更详细的错误信息
-                    print(f"本批次范围 - 开始日期: {current_start_date}, 结束日期: {current_end_date}")
-                    if 'times' in locals():
-                        print(f"时间数据类型: {type(times)}")
-                        print(f"时区信息: {getattr(times, 'tz', None)}")
-                        print(f"样本时间: {times.iloc[0] if hasattr(times, 'iloc') else times[0] if len(times) > 0 else None}")
-                    traceback.print_exc()
-            
-            # 整理结果的索引结构
-            if 'time' in result_df.columns:
-                result_df = result_df.reset_index(drop=True)
-            else:
-                result_df = result_df.reset_index(drop=False)
-            
-            # 排序和设置索引
-            result_df = result_df.sort_values(by=['time', 'code'])
-            result_df = result_df.set_index(['time', 'code'])
-            
-            # 保存因子数据
-            factorManager.saveFactors(result_df, [alpha_name], market, freq)
-            
-            print(f"计算因子 {alpha_name} 成功，结果数据量: {len(result_df)}")
-            
-            return {"name": alpha_name, "result": result_df}
+                        # 如果有多列，选择第一列并重命名
+                        result_df = pd.DataFrame({alpha_name: res.iloc[:, 0]})
+                
+                # 过滤结果，确保只保存在指定日期范围内的数据
+                if not result_df.empty:
+                    # 使用当前处理的时间范围进行过滤，而不是整个任务的日期范围
+                    current_start_date = range_start
+                    current_end_date = range_end
+                    
+                    # 确保end_date处理
+                    if current_end_date == 'now':
+                        current_end_date = datetime.datetime.now().strftime("%Y%m%d")
+                        
+                    try:
+                        # 获取结果DataFrame中的时间索引
+                        if isinstance(result_df.index, pd.MultiIndex):
+                            times = result_df.index.get_level_values('time')
+                        else:
+                            # 如果不是MultiIndex，检查是否有time列
+                            if 'time' in result_df.columns:
+                                times = result_df['time']
+                            else:
+                                # 假设整个索引就是时间
+                                times = result_df.index
+                        
+                        # 确保times是datetime类型
+                        if not pd.api.types.is_datetime64_any_dtype(times):
+                            try:
+                                # 尝试将times转换为datetime
+                                times = pd.to_datetime(times)
+                            except Exception as e:
+                                print(f"无法将时间索引转换为datetime: {str(e)}")
+                                print("跳过日期过滤，使用原始数据")
+                                continue
+                        
+                        # 统一时区处理
+                        # 1. 先判断times是否有时区信息
+                        has_tz = False
+                        if hasattr(times, 'tz') and times.tz is not None:
+                            has_tz = True
+                            tz_info = times.tz
+                            print(f"检测到时区信息: {tz_info}")
+                        
+                        # 2. 转换输入的日期为datetime对象
+                        start_datetime = pd.to_datetime(current_start_date)
+                        end_datetime = pd.to_datetime(current_end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+                        
+                        # 3. 根据times的时区情况统一处理
+                        if has_tz:
+                            # 如果times有时区，将start_datetime和end_datetime本地化为相同时区
+                            try:
+                                start_datetime = start_datetime.tz_localize(tz_info)
+                                end_datetime = end_datetime.tz_localize(tz_info)
+                            except TypeError:  # 已经有时区信息的情况
+                                start_datetime = start_datetime.tz_convert(tz_info)
+                                end_datetime = end_datetime.tz_convert(tz_info)
+                        else:
+                            # 如果times没有时区，移除所有时区信息
+                            if hasattr(times, 'dt'):  # Series类型
+                                times = times.dt.tz_localize(None)
+                            else:  # DatetimeIndex类型
+                                times = times.tz_localize(None)
+                            
+                            # 确保start_datetime和end_datetime也没有时区信息
+                            if hasattr(start_datetime, 'tzinfo') and start_datetime.tzinfo is not None:
+                                start_datetime = start_datetime.tz_localize(None)
+                            if hasattr(end_datetime, 'tzinfo') and end_datetime.tzinfo is not None:
+                                end_datetime = end_datetime.tz_localize(None)
+                        
+                        # 创建日期过滤条件
+                        date_mask = (times >= start_datetime) & (times <= end_datetime)
+                        
+                        # 应用过滤
+                        filtered_df = result_df[date_mask]
+                        
+                        # 如果过滤后结果为空，则记录警告
+                        if filtered_df.empty and not result_df.empty:
+                            print(f"警告：过滤后没有符合日期范围 {current_start_date} 到 {current_end_date} 的数据")
+                            print(f"时间范围信息: start={start_datetime}, end={end_datetime}")
+                            print(f"样本时间: {times.iloc[0] if hasattr(times, 'iloc') else times[0]}")
+                        else:
+                            print(f"日期过滤前数据量: {len(result_df)}, 过滤后数据量: {len(filtered_df)}")
+                            result_df = filtered_df
+                    except Exception as e:
+                        print(f"日期过滤过程出错: {str(e)}")
+                        print("跳过日期过滤，使用原始数据")
+                        # 添加更详细的错误信息
+                        print(f"本批次范围 - 开始日期: {current_start_date}, 结束日期: {current_end_date}")
+                        if 'times' in locals():
+                            print(f"时间数据类型: {type(times)}")
+                            print(f"时区信息: {getattr(times, 'tz', None)}")
+                            print(f"样本时间: {times.iloc[0] if hasattr(times, 'iloc') else times[0] if len(times) > 0 else None}")
+                        traceback.print_exc()
+                
+                # 整理结果的索引结构
+                if 'time' in result_df.columns:
+                    result_df = result_df.reset_index(drop=True)
+                else:
+                    result_df = result_df.reset_index(drop=False)
+                
+                # 排序和设置索引
+                result_df = result_df.sort_values(by=['time', 'code'])
+                result_df = result_df.set_index(['time', 'code'])
+                
+                # 保存因子数据
+                factorManager.saveFactors(result_df, [alpha_name], market, freq)
+                
+                print(f"计算因子 {alpha_name} 成功，结果数据量: {len(result_df)}")
+                
+                return {"name": alpha_name, "result": result_df}
+        except Exception as e:
+            Log.logger.error(f"计算alpha因子 {alpha_item['name']} 失败: {str(e)}")
+            return {"name": alpha_item["name"], "result": pd.DataFrame()}
+        
