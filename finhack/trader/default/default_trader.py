@@ -13,7 +13,7 @@ from .object import *
 from .performance import Performance 
 from .context import context,g
 from datetime import datetime
-from finhack.library.mydb import mydb
+from finhack.library.db import DB
 from multiprocessing import Process,Pool,Semaphore
 
 
@@ -31,7 +31,7 @@ class DefaultTrader:
     
     def get(id):
         sql = 'SELECT * FROM backtest WHERE instance_id="%s"' % (id)
-        result = mydb.selectToDf(sql, 'finhack')
+        result = DB.select_to_df(sql, 'finhack')
 
         if not result.empty:
             # 从查询结果中提取数据并还原到 context 变量中
@@ -151,7 +151,7 @@ class DefaultTrader:
         log("正在初始化交易上下文")
 
         hassql='select id from backtest where instance_id="%s"' % (context.id)
-        has=mydb.selectToDf(hassql,'finhack')
+        has=DB.select_to_df(hassql,'finhack')
         if(not has.empty and args['replace'].lower()[0:1]!="t"): 
             log("存在相同回测记录，本次回测结束！")
             return  
@@ -226,7 +226,7 @@ class DefaultTrader:
         bench_string = ','.join(bench_string_list)
         
     
-        #from finhack.library.mydb import mydb
+        #from finhack.library.db import DB
         
         
         
@@ -234,7 +234,7 @@ class DefaultTrader:
         train=''
         
         if context.trade.model_id!='':
-            model=mydb.selectToDf('select * from auto_train where hash="'+context.trade.model_id+'"','finhack')
+            model=DB.select_to_df('select * from auto_train where hash="'+context.trade.model_id+'"','finhack')
             if(not model.empty):  
                 model=model.iloc[0]
                 features_list=model['features']
@@ -282,7 +282,7 @@ class DefaultTrader:
         
         ) 
         #print(sql)
-        mydb.exec('delete from backtest where instance_id="%s"' % (context.id),'finhack') 
-        mydb.exec(sql,'finhack')
+        DB.exec('delete from backtest where instance_id="%s"' % (context.id),'finhack') 
+        DB.exec(sql,'finhack')
         
     

@@ -4,7 +4,7 @@ import datetime
 import traceback
 import pandas as pd
 
-from finhack.library.mydb import mydb
+from finhack.library.db import DB
 from finhack.library.alert import alert
 from finhack.library.monitor import tsMonitor
 from finhack.collector.tushare.helper import tsSHelper
@@ -14,9 +14,9 @@ class tsFuntures:
     @tsMonitor
     def fut_basic(pro,db):
         table='futures_basic'
-        #mydb.truncateTable(table,db)
-        mydb.exec("drop table if exists "+table+"_tmp",db)
-        engine=mydb.getDBEngine(db)
+        #DB.truncate_table(table,db)
+        DB.exec("drop table if exists "+table+"_tmp",db)
+        engine=DB.get_db_engine(db)
         exchange_list=['CFFEX','DCE','CZCE','SHFE','NE']
         for e in exchange_list:
             data=pro.fut_basic(exchange=e)
@@ -26,7 +26,7 @@ class tsFuntures:
                    'code' in col.lower() or 'symbol' in col.lower() or 'date' in col.lower():
                     data[col] = data[col].astype(str)
             #data.to_sql(table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
-            mydb.safe_to_sql(data, table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
+            DB.safe_to_sql(data, table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
         
         # 获取数据库适配器类型
         from finhack.library.db import DB
@@ -74,9 +74,9 @@ class tsFuntures:
                 Log.logger.warning(f"无法完成表替换，将使用临时表 {table_to_use} 作为最终表")
         else:
             # MySQL重命名语法
-            mydb.exec('rename table '+table+' to '+table+'_old;',db);
-            mydb.exec('rename table '+table+'_tmp to '+table+';',db);
-            mydb.exec("drop table if exists "+table+'_old',db)
+            DB.exec('rename table '+table+' to '+table+'_old;',db);
+            DB.exec('rename table '+table+'_tmp to '+table+';',db);
+            DB.exec("drop table if exists "+table+'_old',db)
             table_to_use = table
         
         tsSHelper.setIndex(table_to_use,db)
@@ -84,9 +84,9 @@ class tsFuntures:
     @tsMonitor    
     def trade_cal(pro,db):
         table='futures_trade_cal'
-        #mydb.truncateTable(table,db)
-        mydb.exec("drop table if exists "+table+"_tmp",db)
-        engine=mydb.getDBEngine(db)
+        #DB.truncate_table(table,db)
+        DB.exec("drop table if exists "+table+"_tmp",db)
+        engine=DB.get_db_engine(db)
         exchange_list=['CFFEX','DCE','CZCE','SHFE','NE']
         for e in exchange_list:
             data=pro.trade_cal(exchange=e)
@@ -96,7 +96,7 @@ class tsFuntures:
                    'code' in col.lower() or 'symbol' in col.lower() or 'date' in col.lower():
                     data[col] = data[col].astype(str)
             #data.to_sql(table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
-            mydb.safe_to_sql(data, table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
+            DB.safe_to_sql(data, table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
         
         # 获取数据库适配器类型
         from finhack.library.db import DB
@@ -144,9 +144,9 @@ class tsFuntures:
                 Log.logger.warning(f"无法完成表替换，将使用临时表 {table_to_use} 作为最终表")
         else:
             # MySQL重命名语法
-            mydb.exec('rename table '+table+' to '+table+'_old;',db);
-            mydb.exec('rename table '+table+'_tmp to '+table+';',db);
-            mydb.exec("drop table if exists "+table+'_old',db)
+            DB.exec('rename table '+table+' to '+table+'_old;',db);
+            DB.exec('rename table '+table+'_tmp to '+table+';',db);
+            DB.exec("drop table if exists "+table+'_old',db)
             table_to_use = table
         
         tsSHelper.setIndex(table_to_use,db)

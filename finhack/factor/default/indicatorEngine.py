@@ -14,7 +14,7 @@ from importlib import import_module
 from multiprocessing import cpu_count 
 import importlib
 from runtime.constant import *
-from finhack.library.mydb import mydb
+from finhack.library.db import DB
 from finhack.library.config import Config
 from finhack.factor.default.factorManager import factorManager
 from concurrent.futures import ThreadPoolExecutor,ProcessPoolExecutor, wait, ALL_COMPLETED

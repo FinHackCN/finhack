@@ -4,7 +4,7 @@ import datetime
 import traceback
 import pandas as pd
 
-from finhack.library.mydb import mydb
+from finhack.library.db import DB
 from finhack.library.alert import alert
 from finhack.library.monitor import tsMonitor
 from finhack.collector.tushare.helper import tsSHelper

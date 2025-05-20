@@ -1,5 +1,5 @@
 from finhack.library.config import Config
-from finhack.library.mydb import mydb
+from finhack.library.db import DB
 from finhack.market.astock.astock import AStock
 import time
 import hashlib
@@ -23,11 +23,11 @@ warnings.simplefilter(action='ignore', category=pd.errors.PerformanceWarning)
 class preCheck():
     
     def beforeCheck():
-        mydb.exec('update finhack.factors_list set status="checking"','finhack')
+        DB.exec('update finhack.factors_list set status="checking"','finhack')
         pass
     
     def afterCheck():
-        mydb.exec('update finhack.factors_list set status="deleted" where status="checking"','finhack')  
+        DB.exec('update finhack.factors_list set status="deleted" where status="checking"','finhack')  
         pass
     
     #检查全部因子有效性
@@ -90,10 +90,10 @@ class preCheck():
     
                             if("df['"+factor_filed+"_") in left or ("df['"+factor_filed+"']") in left:
                                 find=True
-                                mydb.exec('update finhack.factors_list set status="acvivate" where factor_name="%s"' % (factor_name),'finhack')   
+                                DB.exec('update finhack.factors_list set status="acvivate" where factor_name="%s"' % (factor_name),'finhack')   
                             if 'return ' in  line:
                                 if find:
-                                    old_md5=mydb.selectToDf('select md5 from factors_list where BINARY  factor_name="%s"' % (factor_name),'finhack')
+                                    old_md5=DB.select_to_df('select md5 from factors_list where BINARY  factor_name="%s"' % (factor_name),'finhack')
                                     now=time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time()))
                                     hashstr="%s%s%s%s%s" % (factor_name,indicators,function_name,code,",".join(return_fileds))
                                     md5=hashlib.md5(hashstr.encode(encoding='utf-8')).hexdigest()
@@ -101,17 +101,17 @@ class preCheck():
                                         insertsql="INSERT INTO `finhack`.`factors_list`(`factor_name`, `indicators`, `func_name`, `code`, `return_fileds`, `md5`) \
                                         VALUES ('%s', '%s', '%s', '%s', '%s', '%s')"  % (factor_name,indicators,function_name,code.replace("'" , "\\'").replace("\n" , "\\n"),",".join(return_fileds),md5)
                                         print(insertsql)
-                                        mydb.exec(insertsql,'finhack')
+                                        DB.exec(insertsql,'finhack')
                                         check_list.append(factor_name)
                                     elif old_md5.md5.tolist()[0]!=md5:
                                         updatesql="update finhack.factors_list set indicators='%s',func_name='%s',code='%s',return_fileds='%s',md5='%s',check_type=0,updated_at='%s',check_type=0,status='acvivate' \
                                         where factor_name='%s'"  % (indicators,function_name,code.replace("'" , "\\'").replace("\n" , "\\n"),",".join(return_fileds),md5,now,factor_name)
-                                        mydb.exec(updatesql,'finhack')
+                                        DB.exec(updatesql,'finhack')
                                         print(factor_name+md5)
                                         check_list.append(factor_name)
                                     break                              
         
-        uncheck=mydb.selectToDf("select factor_name from finhack.factors_list where factor_name not like 'alpha%'  and check_type=0",'tushare')
+        uncheck=DB.select_to_df("select factor_name from finhack.factors_list where factor_name not like 'alpha%'  and check_type=0",'tushare')
 
         print("检测因子函数变动---End---")
         
@@ -246,7 +246,7 @@ class preCheck():
             ftype=ftype.replace("ea","4")
             print("------{%s,%s}-----" % (ftype,factor_name))
             updatesql="update finhack.factors_list set check_type=%s,status='acvivate' where factor_name='%s'"  % (ftype,factor_name)
-            mydb.exec(updatesql,'finhack')   
+            DB.exec(updatesql,'finhack')   
                 
  
         print('检查指标计算类型---End---')
@@ -264,7 +264,7 @@ class preCheck():
     #compute_type ds=1,da=2,es=3,ea=4
     #error_type ok=1,nan=2,inf=3,0=4,false=5
     def getFactorCheckType(factor_name, indicators, func_name, code, return_fileds):
-        old_md5=mydb.selectToDf('select md5 from factors_list where BINARY factor_name="%s"' % (factor_name),'finhack')
+        old_md5=DB.select_to_df('select md5 from factors_list where BINARY factor_name="%s"' % (factor_name),'finhack')
         now=time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time()))
         hashstr="%s%s%s%s%s" % (factor_name,indicators,func_name,code,",".join(return_fileds))
         md5=hashlib.md5(hashstr.encode(encoding='utf-8')).hexdigest()
@@ -273,21 +273,21 @@ class preCheck():
             insertsql="INSERT INTO `finhack`.`factors_list`(`factor_name`, `indicators`, `func_name`, `code`, `return_fileds`, `md5`) \
             VALUES ('%s', '%s', '%s', '%s', '%s', '%s')"  % (factor_name,indicators,func_name,code.replace("'" , "\\'").replace("\n" , "\\n"),",".join(return_fileds),md5)
             print(insertsql)
-            mydb.exec(insertsql,'finhack')
+            DB.exec(insertsql,'finhack')
             compute_type=0
             return 0
         #变化
         elif old_md5.md5.tolist()[0]!=md5:
             updatesql="update finhack.factors_list set indicators='%s',func_name='%s',code='%s',return_fileds='%s',md5='%s',updated_at='%s',check_type=0,status='acvivate' \
                 where factor_name='%s'"  % (indicators,func_name,code.replace("'" , "\\'").replace("\n" , "\\n"),",".join(return_fileds),md5,now,factor_name)
-            mydb.exec(updatesql,'finhack')
+            DB.exec(updatesql,'finhack')
             print(factor_name+md5)     
             compute_type=0
             return 0
         #不变
         else:
-            check_type=mydb.selectToDf('select check_type from factors_list where BINARY  factor_name="%s"' % (factor_name),'finhack')
-        mydb.exec('update finhack.factors_list set status="acvivate" where factor_name="%s"' % (factor_name),'finhack')   
+            check_type=DB.select_to_df('select check_type from factors_list where BINARY  factor_name="%s"' % (factor_name),'finhack')
+        DB.exec('update finhack.factors_list set status="acvivate" where factor_name="%s"' % (factor_name),'finhack')   
         return check_type['check_type'].tolist()[0]
             
         
@@ -388,7 +388,7 @@ class preCheck():
                     ftype=ftype.replace("ea","4") #需要逐行计算dfall
                 print("------{%s,%s}-----" % (ftype,alphaname))
                 updatesql="update finhack.factors_list set check_type=%s,status='acvivate' where factor_name='%s'"  % (ftype,alphaname)
-                mydb.exec(updatesql,'finhack')   
+                DB.exec(updatesql,'finhack')   
             if ftype==41:
                 pass
         except Exception as e:

@@ -7,7 +7,7 @@ from finhack.factor.default.alphaEngine import alphaEngine
 from finhack.factor.default.factorManager import factorManager
 from finhack.factor.default.factorAnalyzer import factorAnalyzer
 from finhack.factor.default.factorPkl import factorPkl
-from finhack.library.mydb import mydb
+from finhack.library.db import DB
 import pandas as pd
 import numpy as np
 from finhack.library.ai import AI
@@ -76,12 +76,12 @@ class DefaultXxx():
     
 
     def run7(self):
-        bt_list=mydb.selectToDf("SELECT instance_id FROM `finhack`.`backtest`  order by sharpe desc",'finhack')   
+        bt_list=DB.select_to_df("SELECT instance_id FROM `finhack`.`backtest`  order by sharpe desc",'finhack')   
         for btid in bt_list['instance_id'].tolist():
             try:
                 # 查询数据库中存储的数据
                 sql = 'SELECT * FROM backtest WHERE instance_id="%s"' % (btid)
-                result = mydb.selectToDf(sql, 'finhack')
+                result = DB.select_to_df(sql, 'finhack')
 
                 if not result.empty:
                     # 从查询结果中提取数据并还原到 context 变量中
@@ -165,7 +165,7 @@ class DefaultXxx():
         calendar=Calendar.get_calendar("2019-03-20 00:00:00","2024-03-20 00:00:00",market='astock')
         #print(calendar)
         calendar = [date.replace('-', '') for date in calendar]
-        df_limit=mydb.selectToDf("SELECT * FROM astock_price_limit_list where `limit`='U' and trade_date>'2019-03-20'",'tushare')
+        df_limit=DB.select_to_df("SELECT * FROM astock_price_limit_list where `limit`='U' and trade_date>'2019-03-20'",'tushare')
         #print(ulist)
 
         # 假设 df_limit 是您的涨停记录DataFrame，calendar 是交易日列表
@@ -219,7 +219,7 @@ class DefaultXxx():
         consecutive_limit_df=consecutive_limit_df[consecutive_limit_df['max']>=12]
         # 现在 consecutive_limit_df 是一个DataFrame，包含股票代码、计数和第一次涨停日期
 
-        df_basic=mydb.selectToDf("SELECT * FROM `tushare`.`astock_basic`",'tushare')
+        df_basic=DB.select_to_df("SELECT * FROM `tushare`.`astock_basic`",'tushare')
         # 进行合并操作，假设 df_basic 是包含完整信息的DataFrame
         merged_df = pd.merge(consecutive_limit_df, df_basic[['ts_code', 'name',  'industry', 'list_date']], on='ts_code', how='left')
         merged_df.reset_index(drop=True)

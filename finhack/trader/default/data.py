@@ -10,7 +10,7 @@ import time
 from datetime import datetime
 import calendar
 import finhack.library.log as Log
-from finhack.library.mydb import mydb
+from finhack.library.db import DB
 from finhack.library.mycache import mycache
 from finhack.core.classes.dictobj import DictObj
 
@@ -112,7 +112,7 @@ class Data:
                 #   "cash_div_tax":{"000420.SZ":0.1,"600177.SH":0.3}}
     def init_astock_daily_info_to_file(df_price,cache=True):
         slice_list=Data.slice_date(start_date='20000101',end_date=datetime.now().strftime("%Y%m%d"),slice_type='m')
-        df_div=mydb.selectToDf('SELECT ts_code,record_date,ex_date,pay_date,stk_div,cash_div_tax FROM `tushare`.`astock_finance_dividend` where  div_proc="实施"','tushare')
+        df_div=DB.select_to_df('SELECT ts_code,record_date,ex_date,pay_date,stk_div,cash_div_tax FROM `tushare`.`astock_finance_dividend` where  div_proc="实施"','tushare')
         
         
 
@@ -231,7 +231,7 @@ class Data:
         # 如果dividend_state不存在或者时间间隔大于12小时，则进行更新
         #if True:
         if dividend_state is None or (current_time - float(dividend_state)) > 43200:
-            df=mydb.selectToDf('SELECT ts_code,record_date,ex_date,pay_date,stk_div,cash_div_tax FROM `tushare`.`astock_finance_dividend` where  div_proc="实施"','tushare')
+            df=DB.select_to_df('SELECT ts_code,record_date,ex_date,pay_date,stk_div,cash_div_tax FROM `tushare`.`astock_finance_dividend` where  div_proc="实施"','tushare')
             grouped=df.groupby("record_date")
             for date,group in grouped:
                 group=group.drop_duplicates('ts_code',keep='last')

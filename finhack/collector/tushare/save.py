@@ -4,7 +4,7 @@ import pandas as pd
 from datetime import datetime
 import concurrent.futures
 import numpy as np
-from finhack.library.mydb import mydb
+from finhack.library.db import DB
 from finhack.library.config import Config
 import finhack.library.log as Log
 
@@ -216,7 +216,7 @@ class TushareSaver:
         """处理单个代码列表表"""
         try:
             # 验证表是否存在
-            if not mydb.tableExists(table_name, self.db):
+            if not DB.table_exists(table_name, self.db):
                 Log.logger.warning(f"表 {table_name} 不存在，跳过")
                 return False
                 
@@ -247,7 +247,7 @@ class TushareSaver:
             
             # 查询语句，根据是否有最大日期构建不同的SQL
             sql = f"SELECT * FROM {table_name}{condition}"
-            df = mydb.selectToDf(sql, self.db)
+            df = DB.select_to_df(sql, self.db)
             
             if df.empty:
                 Log.logger.info(f"表 {table_name} 没有新数据需要更新")
@@ -273,7 +273,7 @@ class TushareSaver:
         """处理单个复权因子表"""
         try:
             # 验证表是否存在
-            if not mydb.tableExists(table_name, self.db):
+            if not DB.table_exists(table_name, self.db):
                 Log.logger.warning(f"表 {table_name} 不存在，跳过")
                 return False
                 
@@ -289,7 +289,7 @@ class TushareSaver:
             
             # 查询语句
             sql = f"SELECT * FROM {table_name}"
-            df = mydb.selectToDf(sql, self.db)
+            df = DB.select_to_df(sql, self.db)
             
             if df.empty:
                 Log.logger.warning(f"表 {table_name} 没有数据")
@@ -316,7 +316,7 @@ class TushareSaver:
         """处理单个交易日历表，支持多个输出位置"""
         try:
             # 验证表是否存在
-            if not mydb.tableExists(table_name, self.db):
+            if not DB.table_exists(table_name, self.db):
                 Log.logger.warning(f"表 {table_name} 不存在，跳过")
                 return False
                 
@@ -325,7 +325,7 @@ class TushareSaver:
             
             # 查询语句
             sql = f"SELECT * FROM {table_name}"
-            df = mydb.selectToDf(sql, self.db)
+            df = DB.select_to_df(sql, self.db)
             
             if df.empty:
                 Log.logger.warning(f"表 {table_name} 没有数据")
@@ -362,7 +362,7 @@ class TushareSaver:
         """处理单个数据表"""
         try:
             # 验证表是否存在
-            if not mydb.tableExists(table_name, self.db):
+            if not DB.table_exists(table_name, self.db):
                 Log.logger.warning(f"表 {table_name} 不存在，跳过")
                 return False
                 
@@ -378,7 +378,7 @@ class TushareSaver:
             
             # 查询语句
             sql = f"SELECT * FROM {table_name}"
-            df = mydb.selectToDf(sql, self.db)
+            df = DB.select_to_df(sql, self.db)
             
             if df.empty:
                 Log.logger.warning(f"表 {table_name} 没有数据")
@@ -504,7 +504,7 @@ class TushareSaver:
             Log.logger.info(f"开始处理表 {table_name}...")
             
             # 验证表是否存在
-            if not mydb.tableExists(table_name, self.db):
+            if not DB.table_exists(table_name, self.db):
                 Log.logger.warning(f"表 {table_name} 不存在，跳过")
                 return False
                 
@@ -556,7 +556,7 @@ class TushareSaver:
                 """
                 
                 Log.logger.info(f"查询 {year} 年 {table_name} 表数据...")
-                df = mydb.selectToDf(sql, self.db)
+                df = DB.select_to_df(sql, self.db)
                 
                 if df.empty:
                     Log.logger.warning(f"{year} 年 {table_name} 表没有数据")
@@ -637,7 +637,7 @@ class TushareSaver:
                 """
             
             Log.logger.info(f"查询 {table_name} 表最新数据...")
-            df = mydb.selectToDf(sql, self.db)
+            df = DB.select_to_df(sql, self.db)
             
             if df.empty:
                 Log.logger.warning(f"{table_name} 表没有最新数据")
