@@ -4,7 +4,7 @@ import datetime
 import traceback
 import pandas as pd
 
-from finhack.library.mydb import mydb
+from finhack.library.db import DB
 from finhack.library.alert import alert
 from finhack.library.monitor import tsMonitor
 from finhack.collector.tushare.helper import tsSHelper
@@ -23,7 +23,7 @@ class tsAStockOther:
     @tsMonitor
     def report_rc(pro,db):
         table="astock_other_report_rc"
-        engine=mydb.getDBEngine(db)
+        engine=DB.get_db_engine(db)
         if True:
             try_times=0
             while True:
@@ -33,7 +33,7 @@ class tsAStockOther:
                     lastdate=tsSHelper.getLastDateAndDelete('astock_other_report_rc','report_date',ts_code='',db=db)
                     df =pro.report_rc(start_date=lastdate, end_date=today)
                     #df.to_sql('astock_other_report_rc', engine, index=False, if_exists='append', chunksize=5000)
-                    mydb.safe_to_sql(df, table, engine, index=False, if_exists='append', chunksize=5000)
+                    DB.safe_to_sql(df, table, engine, index=False, if_exists='append', chunksize=5000)
                     break
                 except Exception as e:
                     if "每天最多访问" in str(e) or "每小时最多访问" in str(e):
@@ -59,7 +59,7 @@ class tsAStockOther:
     @tsMonitor
     def cyq_perf(pro,db):
         tsAStockPrice.getPrice(pro,'cyq_perf','astock_other_cyq_perf',db)
-        # engine=mydb.getDBEngine(db)
+        # engine=DB.get_db_engine(db)
         # if True:
         #     try_times=0
         #     while True:
@@ -96,8 +96,8 @@ class tsAStockOther:
         pass
     #感觉tushare的这个接口好像有问题
         table='astock_other_cyq_chips'
-        mydb.exec("drop table if exists "+table+"_tmp",db)
-        engine=mydb.getDBEngine(db)
+        DB.exec("drop table if exists "+table+"_tmp",db)
+        engine=DB.get_db_engine(db)
         data=tsSHelper.getAllAStock(True,pro,db)
         stock_list=data['ts_code'].tolist()
         
@@ -107,7 +107,7 @@ class tsAStockOther:
                 try:
                     df = pro.cyq_chips(ts_code=ts_code)
                     #df.to_sql('astock_other_cyq_chips_tmp', engine, index=False, if_exists='append', chunksize=5000)
-                    mydb.safe_to_sql(df, table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
+                    DB.safe_to_sql(df, table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
                     break
                 except Exception as e:
                     if "每天最多访问" in str(e) or "每小时最多访问" in str(e):
@@ -129,12 +129,12 @@ class tsAStockOther:
                             Log.logger.error(info)
                             break
             
-        mydb.exec('rename table '+table+' to '+table+'_old;',db);
-        mydb.exec('rename table '+table+'_tmp to '+table+';',db);
-        mydb.exec("drop table if exists "+table+'_old',db)
+        DB.exec('rename table '+table+' to '+table+'_old;',db);
+        DB.exec('rename table '+table+'_tmp to '+table+';',db);
+        DB.exec("drop table if exists "+table+'_old',db)
         tsSHelper.setIndex(table,db)        
         
-        # engine=mydb.getDBEngine(db)
+        # engine=DB.get_db_engine(db)
         # if True:
         #     try_times=0
         #     while True:

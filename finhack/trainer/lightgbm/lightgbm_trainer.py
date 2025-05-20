@@ -7,7 +7,7 @@ import json
 from math import e
 import numpy as np
 from runtime.constant import *
-from finhack.library.mydb import mydb
+from finhack.library.db import DB
 import os
 import runtime.global_var as global_var
 from finhack.library.config import Config
@@ -135,7 +135,7 @@ class LightgbmTrainer(Trainer):
 
 
             hassql='select * from auto_train where hash="%s"' % (md5)
-            has=mydb.selectToDf(hassql,'finhack')
+            has=DB.select_to_df(hassql,'finhack')
 
             #有值且不替换
             if(not has.empty):  
@@ -149,7 +149,7 @@ class LightgbmTrainer(Trainer):
             self.pred(df_pred,data_path,md5,True)
             insert_sql="INSERT INTO auto_train (start_date, valid_date, end_date, features, label, shift, param, hash,loss,algorithm,filter) VALUES ('%s', '%s', '%s', '%s', '%s', %s, '%s', '%s','%s','%s','%s')" % (start_date,valid_date,end_date,','.join(features),label,str(shift),str(param).replace("'",'"'),md5,loss,'lgb',filter_name)
             if(has.empty): 
-                mydb.exec(insert_sql,'finhack')            
+                DB.exec(insert_sql,'finhack')            
             self.score(md5)
             return md5
         except Exception as e:
@@ -295,7 +295,7 @@ class LightgbmTrainer(Trainer):
     
     def score(self,md5='test',df_pred=pd.DataFrame()):
         data_path=DATA_DIR
-        model=mydb.selectToDf('select * from auto_train where hash="'+md5+'"','finhack')
+        model=DB.select_to_df('select * from auto_train where hash="'+md5+'"','finhack')
         model=model.iloc[0]
         start_date=model['start_date']
         valid_date=model['valid_date']
@@ -340,7 +340,7 @@ class LightgbmTrainer(Trainer):
         
         sql="UPDATE auto_train SET score = %s WHERE hash='%s'" %(score,md5)
         
-        mydb.exec(sql,'finhack')
+        DB.exec(sql,'finhack')
         # if score<0.03:
         os.remove(pred_file)
         #print(score)

@@ -6,7 +6,7 @@ import os
 import importlib
 import lightgbm as lgb
 from runtime.constant import *
-from finhack.library.mydb import mydb
+from finhack.library.db import DB
 import numpy as np
 from datetime import datetime
 
@@ -14,7 +14,7 @@ from datetime import datetime
 class Trainer:
     
     def getPredData(market,freq,model_id,start_date,end_date,norm=False):
-        model_info=mydb.selectToDf(f"SELECT * FROM `auto_train` WHERE `hash` = '{model_id}'",'finhack')
+        model_info=DB.select_to_df(f"SELECT * FROM `auto_train` WHERE `hash` = '{model_id}'",'finhack')
         if model_info.empty:
             print("model error")
             return pd.DataFrame()

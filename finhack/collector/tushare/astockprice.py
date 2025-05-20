@@ -4,7 +4,7 @@ import datetime
 import traceback
 import pandas as pd
 
-from finhack.library.mydb import mydb
+from finhack.library.db import DB
 from finhack.library.alert import alert
 from finhack.library.monitor import tsMonitor
 from finhack.collector.tushare.helper import tsSHelper
@@ -12,7 +12,7 @@ import finhack.library.log as Log
 
 class tsAStockPrice:
     def getPrice(pro,api,table,db):
-        engine=mydb.getDBEngine(db)
+        engine=DB.get_db_engine(db)
         lastdate=tsSHelper.getLastDateAndDelete(table=table,filed='trade_date',ts_code="",db=db)
         begin = datetime.datetime.strptime(lastdate, "%Y%m%d")
         end = datetime.datetime.now()
@@ -47,13 +47,26 @@ class tsAStockPrice:
                             break
             #print(table+'-'+str(len(df))+'-'+day)
             #res = df.to_sql(table, engine, index=False, if_exists='append', chunksize=5000)
-            mydb.safe_to_sql(df, table, engine, index=False, if_exists='append', chunksize=5000)
+            DB.safe_to_sql(df, table, engine, index=False, if_exists='append', chunksize=5000)
             i=i+1
      
     
     @tsMonitor
     def daily(pro,db):
-        tsAStockPrice.getPrice(pro,'daily','astock_price_daily',db)
+        table='astock_price_daily'
+        engine=DB.get_db_engine(db)
+        last_date = tsSHelper.getLastDateAndDelete(table=table, filed='trade_date', ts_code='000001.SZ', db=db)
+        start_date = datetime.datetime.strptime(last_date, '%Y%m%d').date() - datetime.timedelta(days=1)
+        end_date = datetime.datetime.now().date()
+        start_date_str = start_date.strftime('%Y%m%d')
+        end_date_str = end_date.strftime('%Y%m%d')
+        df = pro.daily(start_date=start_date_str, end_date=end_date_str)
+        # 预处理数据，确保股票代码等字段为字符串类型
+        for col in df.columns:
+            if col in ['ts_code', 'symbol', 'code', 'ann_date', 'end_date', 'trade_date', 'pre_date', 'actual_date'] or \
+               'code' in col.lower() or 'symbol' in col.lower() or 'date' in col.lower():
+                df[col] = df[col].astype(str)
+        DB.safe_to_sql(df, table, db, index=False, if_exists='append', chunksize=5000)
 
     @tsMonitor
     def weekly(pro,db):

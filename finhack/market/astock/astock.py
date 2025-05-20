@@ -11,7 +11,7 @@ import threading
 # 股票信息获取模块
 from datetime import timedelta
 from runtime.constant import *
-from finhack.library.mydb import mydb
+from finhack.library.db import DB
 from concurrent.futures import ThreadPoolExecutor,ProcessPoolExecutor, wait, ALL_COMPLETED
 
 

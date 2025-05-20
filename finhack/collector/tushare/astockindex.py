@@ -4,7 +4,7 @@ import datetime
 import traceback
 import pandas as pd
 
-from finhack.library.mydb import mydb
+from finhack.library.db import DB
 from finhack.library.alert import alert
 from finhack.library.monitor import tsMonitor
 from finhack.collector.tushare.helper import tsSHelper
@@ -43,7 +43,7 @@ class tsAStockIndex:
         while n>0:        
             for ts_code in index_list:
                 lastdate=tsSHelper.getLastDateAndDelete('astock_index_daily','trade_date',ts_code=ts_code,db=db)
-                engine=mydb.getDBEngine(db)   
+                engine=DB.get_db_engine(db)   
                 today = datetime.datetime.now()
                 today=today.strftime("%Y%m%d")
                 try_times=0
@@ -57,7 +57,7 @@ class tsAStockIndex:
                         df=pro.index_daily(ts_code=ts_code, start_date=lastdate, end_date=today)
                         if(not df.empty):
                             #res = df.to_sql('astock_index_daily', engine, index=False, if_exists='append', chunksize=5000)
-                            mydb.safe_to_sql(df, table, engine, index=False, if_exists='append', chunksize=5000)
+                            DB.safe_to_sql(df, table, engine, index=False, if_exists='append', chunksize=5000)
                             
                         break
                     except Exception as e:
@@ -120,7 +120,7 @@ class tsAStockIndex:
     #     index_list=data['ts_code'].tolist()
     #     for ts_code in index_list:
     #         lastdate=tsSHelper.getLastDateAndDelete('astock_index_weekly','trade_date',ts_code=ts_code,db=db)
-    #         engine=mydb.getDBEngine(db)   
+    #         engine=DB.get_db_engine(db)   
     #         today = datetime.datetime.now()
     #         today=today.strftime("%Y%m%d")
     #         #print(ts_code)
@@ -150,7 +150,7 @@ class tsAStockIndex:
     #     index_list=data['ts_code'].tolist()
     #     for ts_code in index_list:
     #         lastdate=tsSHelper.getLastDateAndDelete('astock_index_monthly','trade_date',ts_code=ts_code,db=db)
-    #         engine=mydb.getDBEngine(db)   
+    #         engine=DB.get_db_engine(db)   
     #         today = datetime.datetime.now()
     #         today=today.strftime("%Y%m%d")
     #         #print(ts_code)
@@ -176,8 +176,8 @@ class tsAStockIndex:
     @tsMonitor
     def index_weight(pro,db):
         table="astock_index_weight"
-        engine=mydb.getDBEngine(db)
-        #mydb.truncateTable('astock_index_weight',db)
+        engine=DB.get_db_engine(db)
+        #DB.truncate_table('astock_index_weight',db)
         data=tsSHelper.getAllAStockIndex(pro,db)
         #index_list=data['ts_code'].tolist()
         index_list=['000001.SH','000300.SH','000852.SH','000905.SH']
@@ -198,7 +198,7 @@ class tsAStockIndex:
                         df = pro.index_weight(index_code=ts_code,start_date=dt, end_date=dt)
                         df = df.rename({'index_code':'ts_code'}, axis='columns')
                         #df.to_sql('astock_index_weight', engine, index=False, if_exists='append', chunksize=5000)
-                        mydb.safe_to_sql(df, table, engine, index=False, if_exists='append', chunksize=5000)
+                        DB.safe_to_sql(df, table, engine, index=False, if_exists='append', chunksize=5000)
                         break
                     except Exception as e:
                         if "每天最多访问" in str(e) or "每小时最多访问" in str(e):
@@ -223,8 +223,8 @@ class tsAStockIndex:
     
     # @tsMonitor
     # def index_dailybasic(pro,db):
-    #     engine=mydb.getDBEngine(db)
-    #     #mydb.truncateTable('astock_index_weight',db)
+    #     engine=DB.get_db_engine(db)
+    #     #DB.truncate_table('astock_index_weight',db)
     #     data=tsSHelper.getAllAStockIndex(pro,db)
     #     index_list=['000001.SH','000300.SH ','000905.SH','399001.SZ','399005.SZ','399006.SZ','399016.SZ ','399300.SZ']
     #     for ts_code in index_list:
@@ -248,8 +248,8 @@ class tsAStockIndex:
     
     # @tsMonitor
     # def index_classify(pro,db):
-    #     mydb.truncateTable('astock_index_classify',db)
-    #     engine=mydb.getDBEngine(db)
+    #     DB.truncate_table('astock_index_classify',db)
+    #     engine=DB.get_db_engine(db)
     #     #获取申万一级行业列表
     #     df = pro.index_classify(level='L1', src='SW2021')
     #     df.to_sql('astock_index_classify', engine, index=False, if_exists='append', chunksize=5000)
@@ -265,10 +265,10 @@ class tsAStockIndex:
     @tsMonitor
     def index_member(pro,db):
         table='astock_index_member'
-        mydb.exec("drop table if exists "+table+"_tmp",db)
-        engine=mydb.getDBEngine(db)
+        DB.exec("drop table if exists "+table+"_tmp",db)
+        engine=DB.get_db_engine(db)
         sql='select * from astock_index_classify'
-        data=mydb.selectToDf(sql,db)
+        data=DB.select_to_df(sql,db)
 
         index_code_list=data['index_code'].to_list()
         for index_code in index_code_list:
@@ -279,7 +279,7 @@ class tsAStockIndex:
                     df = df.rename({'is_new':'isnew'}, axis='columns')
                     if(not df.empty):
                         #df.to_sql('astock_index_member_tmp', engine, index=False, if_exists='append', chunksize=5000)
-                        mydb.safe_to_sql(df, table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
+                        DB.safe_to_sql(df, table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
                     break
                 except Exception as e:
                     if "每天最多访问" in str(e) or "每小时最多访问" in str(e):
@@ -300,14 +300,14 @@ class tsAStockIndex:
                             alert.send('astock_index_member','函数异常',str(info))
                             Log.logger.error(info)  
 
-        mydb.exec('rename table '+table+' to '+table+'_old;',db)
-        mydb.exec('rename table '+table+'_tmp to '+table+';',db)
-        mydb.exec("drop table if exists "+table+'_old',db)
+        DB.exec('rename table '+table+' to '+table+'_old;',db)
+        DB.exec('rename table '+table+'_tmp to '+table+';',db)
+        DB.exec("drop table if exists "+table+'_old',db)
         tsSHelper.setIndex(table,db)
     
     # @tsMonitor
     # def daily_info(pro,db):
-    #     engine=mydb.getDBEngine(db)
+    #     engine=DB.get_db_engine(db)
     #     if True:
     #         while True:
     #             try:
@@ -329,7 +329,7 @@ class tsAStockIndex:
     
     # @tsMonitor
     # def sz_daily_info(pro,db):
-    #     engine=mydb.getDBEngine(db)
+    #     engine=DB.get_db_engine(db)
     #     if True:
     #         while True:
     #             try:

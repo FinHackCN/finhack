@@ -1,4 +1,4 @@
-from finhack.library.mydb import mydb
+from finhack.library.db import DB
 class Calendar:
     def get_calendar(start_time,end_time,market):
         start_time=start_time.replace('-','')[0:8]
@@ -13,7 +13,7 @@ class Calendar:
     
     #获取A股交易日历
     def get_astock_calendar(start_time,end_time):
-        cal=mydb.selectToDf(f"select cal_date from astock_trade_cal where is_open=1 \
+        cal=DB.select_to_df(f"select cal_date from astock_trade_cal where is_open=1 \
         and exchange='SSE'  and cal_date>={start_time} and cal_date<={end_time} \
         order by cal_date asc",'tushare')
         return cal['cal_date'].tolist()

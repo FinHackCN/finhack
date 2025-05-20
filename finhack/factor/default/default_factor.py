@@ -12,7 +12,7 @@ from finhack.factor.default.factorMining import factorMining
 from finhack.library.mycache import mycache
 import gc
 import tracemalloc
-from finhack.library.mydb import mydb
+from finhack.library.db import DB
 
 class DefaultFactor:
     def __init__(self):
@@ -60,7 +60,7 @@ class DefaultFactor:
         for factor in factor_list:
             factorAnalyzer.analys(factor_name=factor,source='default',replace=False,stock_list=stock300)
             # sql=f"select * from factors_analysis where updated_at<\"2024-03-01\" and factor_name=\"{factor}\""
-            # has=mydb.selectToDf(sql,"finhack")
+            # has=DB.select_to_df(sql,"finhack")
             # if not has.empty:
             #     factorAnalyzer.analys(factor_name=factor,source='default',replace=True,stock_list=stock300)
         

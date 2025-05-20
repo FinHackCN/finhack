@@ -41,57 +41,10 @@ class tsSHelper:
     def setIndex(table, db='default'):
         """
         为表创建索引
-        支持DuckDB和MySQL
+        使用DB.set_index统一接口
         """
-        # 获取数据库适配器类型
-        adapter = DB.get_adapter(db)
-        adapter_type = adapter.__class__.__name__
-        
-        # 首先检查表是否存在
-        if adapter_type == 'DuckDBAdapter':
-            check_table_sql = f"SELECT name FROM sqlite_master WHERE type='table' AND name='{table}'"
-        else:
-            check_table_sql = f"SHOW TABLES LIKE '{table}'"
-            
-        result = DB.select_to_list(check_table_sql, db)
-        if not result:
-            Log.logger.warning(f"表 {table} 不存在，无法创建索引")
-            return
-            
-        # 获取表的列信息
-        if adapter_type == 'DuckDBAdapter':
-            columns_sql = f"PRAGMA table_info({table})"
-            columns_result = DB.select_to_list(columns_sql, db)
-            if columns_result:
-                available_columns = [col['name'] for col in columns_result]
-            else:
-                available_columns = []
-        else:
-            columns_sql = f"SHOW COLUMNS FROM {table}"
-            columns_result = DB.select_to_list(columns_sql, db)
-            if columns_result:
-                available_columns = [col['Field'] for col in columns_result]
-            else:
-                available_columns = []
-        
-        index_list=['ts_code', 'end_date', 'trade_date']
-        for index in index_list:
-            # 检查列是否存在
-            if index not in available_columns:
-                Log.logger.warning(f"表 {table} 中不存在列 {index}，跳过创建索引")
-                continue
-                
-            if adapter_type == 'DuckDBAdapter':
-                # DuckDB索引语法
-                sql = f"CREATE INDEX IF NOT EXISTS idx_{table}_{index} ON {table}({index})"
-            else:
-                # MySQL索引语法
-                sql = f"CREATE INDEX {index} ON {table} ({index}(10))"
-            
-            try:
-                DB.exec(sql, db)
-            except Exception as e:
-                Log.logger.warning(f"为表 {table} 创建索引 {index} 失败: {str(e)}")
+        # 直接使用DB类的set_index方法
+        DB.set_index(table, db)
   
     def getAllFund(db='default'):
         sql='select * from fund_basic'
@@ -108,56 +61,11 @@ class tsSHelper:
         # 使用DB类的to_sql方法
         DB.to_sql(data, f"{table}_tmp", db, 'replace')
         
-        # 重命名表
-        adapter = DB.get_adapter(db)
-        adapter_type = adapter.__class__.__name__
+        # 使用统一的replace_table方法替换表
+        table_to_use = DB.replace_table(table, f"{table}_tmp", db)
         
-        if adapter_type == 'DuckDBAdapter':
-            # DuckDB处理方式：尝试删除原表并重命名临时表
-            try:
-                # 检查表是否存在
-                result = DB.select_to_list(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{table}'", db)
-                if result:
-                    # 表存在，先尝试删除原表
-                    try:
-                        # 使用 CASCADE 选项删除表及其依赖
-                        DB.exec(f"DROP TABLE IF EXISTS {table} CASCADE", db)
-                        Log.logger.info(f"成功删除原表 {table}")
-                    except Exception as e:
-                        Log.logger.error(f"删除原表失败: {str(e)}")
-                        # 尝试使用其他方式处理依赖关系
-                        try:
-                            # 查找依赖关系
-                            deps_query = f"SELECT * FROM duckdb_dependencies() WHERE dependency_name = '{table}'"
-                            deps = DB.select_to_list(deps_query, db)
-                            if deps:
-                                Log.logger.info(f"表 {table} 存在依赖关系，尝试处理")
-                                # 可以在这里添加处理依赖的代码
-                            
-                            # 再次尝试删除
-                            DB.exec(f"DROP TABLE IF EXISTS {table}", db)
-                        except Exception as inner_e:
-                            Log.logger.error(f"处理依赖关系失败: {str(inner_e)}")
-                            # 如果无法删除，备份原表
-                            DB.exec(f"ALTER TABLE {table} RENAME TO {table}_backup", db)
-                            Log.logger.info(f"已将原表重命名为 {table}_backup")
-                
-                # 重命名临时表
-                DB.exec(f"ALTER TABLE {table}_tmp RENAME TO {table}", db)
-                Log.logger.info(f"成功将临时表重命名为 {table}")
-            except Exception as e:
-                Log.logger.error(f"DuckDB重命名表失败: {str(e)}")
-                # 如果重命名失败，尝试直接使用临时表
-                Log.logger.warning(f"尝试直接使用临时表 {table}_tmp")
-                # 确保在索引创建时使用正确的表名
-                table = f"{table}_tmp"
-        else:
-            # MySQL重命名语法
-            DB.exec(f"RENAME TABLE {table} TO {table}_old", db)
-            DB.exec(f"RENAME TABLE {table}_tmp TO {table}", db)
-            DB.exec(f"DROP TABLE IF EXISTS {table}_old", db)
-        
-        tsSHelper.setIndex(table, db)
+        # 设置索引
+        tsSHelper.setIndex(table_to_use, db)
     
     
     # 根据最后日期获取数据
@@ -281,20 +189,11 @@ class tsSHelper:
                             Log.logger.error(str(info))
                             return
      
-        # 重命名表
-        adapter = DB.get_adapter(db)
-        adapter_type = adapter.__class__.__name__
-        
-        if adapter_type == 'DuckDBAdapter':
-            # DuckDB重命名语法
-            DB.exec(f"ALTER TABLE {table}_tmp RENAME TO {table}", db)
-        else:
-            # MySQL重命名语法
-            DB.exec(f"RENAME TABLE {table} TO {table}_old", db)
-            DB.exec(f"RENAME TABLE {table}_tmp TO {table}", db)
-            DB.exec(f"DROP TABLE IF EXISTS {table}_old", db)
+        # 使用统一的replace_table方法替换表
+        table_to_use = DB.replace_table(table, f"{table}_tmp", db)
             
-        tsSHelper.setIndex(table, db)
+        # 设置索引
+        tsSHelper.setIndex(table_to_use, db)
         
     
     # 查一下最后的数据是哪天

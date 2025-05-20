@@ -8,7 +8,7 @@ import gplearn as gp
 from gplearn.genetic import SymbolicTransformer
 
 from finhack.library.config import Config
-from finhack.library.mydb import mydb
+from finhack.library.db import DB
 
 import finhack.factor.default.alphaEngine as alphaFunc
 from finhack.factor.default.alphaEngine import alphaEngine

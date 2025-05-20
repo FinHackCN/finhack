@@ -4,7 +4,7 @@ import datetime
 import traceback
 import pandas as pd
 
-from finhack.library.mydb import mydb
+from finhack.library.db import DB
 from finhack.library.alert import alert
 from finhack.library.monitor import tsMonitor
 from finhack.collector.tushare.helper import tsSHelper
@@ -14,7 +14,7 @@ class tsAStockFinance:
     
     def getPeriodList(db):
         lastdate_sql="select max(end_date) as max from astock_finance_disclosure_date"
-        lastdate=mydb.selectToDf(lastdate_sql,db)
+        lastdate=DB.select_to_df(lastdate_sql,db)
         if(type(lastdate) == bool or lastdate.empty):
             lastdate='19980321'            
         else:
@@ -37,9 +37,9 @@ class tsAStockFinance:
         table_sql="select end_date from "+table+" where ts_code='"+ts_code+"'"
         if(report_type>0):
             table_sql=table_sql+" and report_type="+str(report_type)
-        table_df=mydb.selectToDf(table_sql,db)
+        table_df=DB.select_to_df(table_sql,db)
         disclosure_sql="select end_date from astock_finance_disclosure_date where ts_code='"+ts_code+"'  and not ISNULL(actual_date)"
-        disclosure_df=mydb.selectToDf(disclosure_sql,db)
+        disclosure_df=DB.select_to_df(disclosure_sql,db)
         table_list=[]
         disclosure_list=[]
         if(type(table_df) != bool and not table_df.empty):
@@ -65,13 +65,13 @@ class tsAStockFinance:
         table_sql="select * from "+table+" where ts_code='"+ts_code+"' and end_date='"+end_date+"'"
         if(report_type>0):
             table_sql=table_sql+" and report_type="+str(report_type)
-        table_res=mydb.selectToDf(table_sql,db)
+        table_res=DB.select_to_df(table_sql,db)
         if type(table_res) == bool:
             table_count=0
         else:
             table_count=len(table_res)
         disclosure_sql="select * from astock_finance_disclosure_date where ts_code='"+ts_code+"' and end_date='"+end_date+"' and not ISNULL(actual_date)"
-        disclosure_res=mydb.selectToDf(disclosure_sql,db)
+        disclosure_res=DB.select_to_df(disclosure_sql,db)
         disclosure_count=len(disclosure_res)
         #print(str(table_count)+","+str(disclosure_count)+","+ts_code+","+str(report_type))
         return table_count<disclosure_count
@@ -95,7 +95,7 @@ class tsAStockFinance:
             lastdate_sql="select max(end_date) as max from "+table+" where ts_code='"+ts_code+"'"
             if(report_type>0):
                 lastdate_sql=lastdate_sql+" and report_type="+str(report_type)
-            lastdate=mydb.selectToDf(lastdate_sql,db)
+            lastdate=DB.select_to_df(lastdate_sql,db)
             if(type(lastdate) == bool or lastdate.empty):
                 lastdate='20000321'
             else:
@@ -107,7 +107,7 @@ class tsAStockFinance:
                 sql="delete from "+table+" where ts_code='"+ts_code+"' and end_date='"+lastdate+"'"
                 if(report_type>0):
                     sql=sql+" and report_type="+str(report_type)
-                mydb.delete(sql,db)
+                DB.delete(sql,db)
                 diff_list.insert(0,lastdate)
             
             #print(diff_count)
@@ -115,7 +115,7 @@ class tsAStockFinance:
             #exit()
             
             df=pd.DataFrame()
-            engine=mydb.getDBEngine(db)
+            engine=DB.get_db_engine(db)
             
             end_list=[]
             for end_date in diff_list:
@@ -145,7 +145,7 @@ class tsAStockFinance:
                         else:
                             df=f(ts_code=ts_code,period=end_list[-1],fileds=fileds)
                     #df.to_sql(table, engine, index=False, if_exists='append', chunksize=5000)
-                    mydb.safe_to_sql(df, table, engine, index=False, if_exists='append', chunksize=5000)
+                    DB.safe_to_sql(df, table, engine, index=False, if_exists='append', chunksize=5000)
                     break
                 except Exception as e:
                     if "每天最多访问" in str(e) or "每小时最多访问" in str(e):
@@ -181,7 +181,7 @@ class tsAStockFinance:
     def disclosure_date(pro,db):
         table="astock_finance_disclosure_date"
         end_date_list=['0331','0630','0930','1231']
-        engine=mydb.getDBEngine(db)
+        engine=DB.get_db_engine(db)
         lastdate=tsSHelper.getLastDateAndDelete(table='astock_finance_disclosure_date',filed='end_date',ts_code="",db=db)
         api='disclosure_date'
         
@@ -210,7 +210,7 @@ class tsAStockFinance:
                     try:
                         df = pro.disclosure_date(end_date=end_date,limit=1000,offset=1000*i)
                         #df.to_sql('astock_finance_disclosure_date', engine, index=False, if_exists='append', chunksize=5000)
-                        mydb.safe_to_sql(df, table, engine, index=False, if_exists='append', chunksize=5000)
+                        DB.safe_to_sql(df, table, engine, index=False, if_exists='append', chunksize=5000)
                         break
                     except Exception as e:
                         if "每天最多访问" in str(e) or "每小时最多访问" in str(e):
@@ -265,9 +265,9 @@ class tsAStockFinance:
     
     @tsMonitor
     def dividend(pro,db):
-        engine=mydb.getDBEngine(db)
+        engine=DB.get_db_engine(db)
         table='astock_finance_dividend'
-        mydb.exec("drop table if exists "+table+"_tmp",db)
+        DB.exec("drop table if exists "+table+"_tmp",db)
         stock_list_data=tsSHelper.getAllAStock(True,pro,db)
         stock_list=stock_list_data['ts_code'].tolist()
         for ts_code in stock_list:
@@ -276,7 +276,7 @@ class tsAStockFinance:
                 try:
                     df = pro.dividend(ts_code=ts_code)
                     #df.to_sql('astock_finance_dividend_tmp', engine, index=False, if_exists='append', chunksize=5000)
-                    mydb.safe_to_sql(df, table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
+                    DB.safe_to_sql(df, table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
                     break
                 except Exception as e:
                     if "每天最多访问" in str(e) or "每小时最多访问" in str(e):
@@ -296,9 +296,9 @@ class tsAStockFinance:
                             info = traceback.format_exc()
                             alert.send('dividend','函数异常',str(info))
                             Log.logger.error(info)
-        mydb.exec('rename table '+table+' to '+table+'_old;',db);
-        mydb.exec('rename table '+table+'_tmp to '+table+';',db);
-        mydb.exec("drop table if exists "+table+'_old',db)
+        DB.exec('rename table '+table+' to '+table+'_old;',db);
+        DB.exec('rename table '+table+'_tmp to '+table+';',db);
+        DB.exec("drop table if exists "+table+'_old',db)
         tsSHelper.setIndex(table,db)
             
     @tsMonitor

@@ -11,7 +11,7 @@ import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
 warnings.simplefilter(action='ignore', category=RuntimeWarning)
 warnings.simplefilter(action='ignore', category=UserWarning)
-from finhack.library.mydb import mydb
+from finhack.library.db import DB
 from finhack.factor.default.factorManager import factorManager
 from finhack.market.astock.astock import AStock
 from scipy.stats import zscore
@@ -27,7 +27,7 @@ class factorAnalyzer():
     
     def stock_pool(max_num=300):
         # 从数据库中获取数据
-        df = mydb.selectToDf('SELECT a.ts_code, trade_date, pe, pb, ps, total_mv, industry, market FROM astock_price_daily_basic a LEFT JOIN astock_basic b ON a.ts_code=b.ts_code', 'tushare')
+        df = DB.select_to_df('SELECT a.ts_code, trade_date, pe, pb, ps, total_mv, industry, market FROM astock_price_daily_basic a LEFT JOIN astock_basic b ON a.ts_code=b.ts_code', 'tushare')
     
         # 确保 'trade_date' 是 datetime 类型
         df['trade_date'] = pd.to_datetime(df['trade_date'])
@@ -219,7 +219,7 @@ class factorAnalyzer():
             hashstr=factor_name+'-'+(str(days))+'-'+source+'-'+start_date+':'+end_date+'#'+formula
             md5=hashlib.md5(hashstr.encode(encoding='utf-8')).hexdigest()
             
-            has=mydb.selectToDf('select * from %s where  hash="%s"' % (table,md5),'finhack')
+            has=DB.select_to_df('select * from %s where  hash="%s"' % (table,md5),'finhack')
             
             
             #有值且不替换
@@ -259,7 +259,7 @@ class factorAnalyzer():
             if 'mean' in desc and desc['mean']==desc['max']:
                 if factor_name!='alpha':
                     updatesql="update finhack.factors_list set check_type=%s,status='acvivate' where factor_name='%s'"  % ('14',factor_name)
-                    mydb.exec(updatesql,'finhack')  
+                    DB.exec(updatesql,'finhack')  
                 return False
             
             
@@ -297,9 +297,9 @@ class factorAnalyzer():
                 #有值且替换
                 if(not has.empty and  replace):  
                     del_sql="DELETE FROM `finhack`.`%s` WHERE `hash` = '%s'" % (table,md5)    
-                    mydb.exec(del_sql,'finhack')
+                    DB.exec(del_sql,'finhack')
                 insert_sql="INSERT INTO `finhack`.`%s`(`factor_name`, `days`, `source`, `start_date`, `end_date`, `formula`, `IC`, `IR`, `Sharpe`, `score`, `hash`) VALUES ( '%s', '%s', '%s', '%s', '%s', '%s', %s, %s, %s, %s, '%s')" %  (table,factor_name,str(days),source,start_date,end_date,formula,str(IC),str(IR),str(max_sharpe),str(score),md5)
-                mydb.exec(insert_sql,'finhack')
+                DB.exec(insert_sql,'finhack')
             #print(insert_sql)
             
             # print(IC_list)

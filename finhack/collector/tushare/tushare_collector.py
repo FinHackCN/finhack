@@ -1,6 +1,6 @@
 import sys
 import time
-from finhack.library.mydb import mydb
+from finhack.library.db import DB
 from finhack.library.config import Config
 from finhack.library.thread import collectThread
 from finhack.collector.tushare.astockbasic import tsAStockBasic
@@ -48,7 +48,7 @@ class TushareCollector:
         else:
             # 检查表是否存在
             try:
-                result = mydb.selectToList(f"SELECT 1 FROM {table_name} LIMIT 1", self.db)
+                result = DB.selectToList(f"SELECT 1 FROM {table_name} LIMIT 1", self.db)
                 return len(result) > 0
             except Exception as e:
                 Log.logger.warning(f"检查表 {table_name} 失败: {str(e)}")
@@ -63,7 +63,7 @@ class TushareCollector:
         ts.set_token(cfgTS['token'])
         self.pro = ts.pro_api()
         self.db=cfgTS['db']
-        self.engine=mydb.getDBEngine(cfgTS['db'])
+        self.engine=DB.get_db_engine(cfgTS['db'])
         
         # 第一步：获取基础数据（股票、交易日历等）
         # 这些数据是其他数据的基础依赖
@@ -155,7 +155,7 @@ class TushareCollector:
         # cfgTS=Config.get_config('ts')
         # db=cfgTS['db']
         
-        # tables_list=mydb.selectToList('show tables',db)
+        # tables_list=DB.selectToList('show tables',db)
         # for v in tables_list:
         #     table=list(v.values())[0]
         #     tsSHelper.setIndex(table,db)    

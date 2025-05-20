@@ -7,7 +7,7 @@ import os
 import importlib
 import finhack.library.log as Log
 import runtime.global_var as global_var
-from finhack.library.mydb import mydb
+from finhack.library.db import DB
 from finhack.trader.default.default_trader import DefaultTrader
 from flask import Flask, send_from_directory,render_template,request
 import re
@@ -94,9 +94,9 @@ class DefaultServer:
             # where=' where 1=1 and created_at > (NOW() - INTERVAL 1 DAY)'
             # if strategy:
             #     where=where+f" and strategy='{strategy}'"
-            #     bt_list=mydb.selectToList(f"SELECT id, instance_id, features_list, train, model, strategy, start_date, end_date, init_cash, params, total_value, alpha, beta, annual_return, cagr, annual_volatility, info_ratio, downside_risk, R2, sharpe, sortino, calmar, omega, max_down, SQN, created_at, filter, win, server, trade_num, runtime, starttime, endtime,  roto, simulate, benchmark, strategy_code FROM `finhack`.`backtest` {where} order by sharpe desc LIMIT 100",'finhack')
+            #     bt_list=DB.select_to_list(f"SELECT id, instance_id, features_list, train, model, strategy, start_date, end_date, init_cash, params, total_value, alpha, beta, annual_return, cagr, annual_volatility, info_ratio, downside_risk, R2, sharpe, sortino, calmar, omega, max_down, SQN, created_at, filter, win, server, trade_num, runtime, starttime, endtime,  roto, simulate, benchmark, strategy_code FROM `finhack`.`backtest` {where} order by sharpe desc LIMIT 100",'finhack')
             # else:
-            #     bt_list=mydb.selectToList(f"SELECT id, instance_id, features_list, train, model, strategy, start_date, end_date, init_cash, params, total_value, alpha, beta, annual_return, cagr, annual_volatility, info_ratio, downside_risk, R2, sharpe, sortino, calmar, omega, max_down, SQN, created_at, filter, win, server, trade_num, runtime, starttime, endtime,  roto, simulate, benchmark, strategy_code FROM `finhack`.`backtest` {where} order by sharpe desc LIMIT 100",'finhack')   
+            #     bt_list=DB.select_to_list(f"SELECT id, instance_id, features_list, train, model, strategy, start_date, end_date, init_cash, params, total_value, alpha, beta, annual_return, cagr, annual_volatility, info_ratio, downside_risk, R2, sharpe, sortino, calmar, omega, max_down, SQN, created_at, filter, win, server, trade_num, runtime, starttime, endtime,  roto, simulate, benchmark, strategy_code FROM `finhack`.`backtest` {where} order by sharpe desc LIMIT 100",'finhack')   
             
 
             sql=""
@@ -112,7 +112,7 @@ class DefaultServer:
             ORDER BY b.sharpe desc limit 100"""
 
 
-            bt_list=mydb.selectToList(sql,'finhack')
+            bt_list=DB.select_to_list(sql,'finhack')
 
             return render_template('index.html', data=bt_list)
 

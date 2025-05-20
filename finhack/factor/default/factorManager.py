@@ -10,7 +10,7 @@ from numpy.lib import recfunctions
 import datetime
 import traceback
 
-from finhack.library.mydb import mydb
+from finhack.library.db import DB
 from runtime.constant import *
 from concurrent.futures import ThreadPoolExecutor,ProcessPoolExecutor, wait, ALL_COMPLETED
 import finhack.library.log as Log

@@ -4,7 +4,7 @@ import datetime
 import traceback
 import pandas as pd
 
-from finhack.library.mydb import mydb
+from finhack.library.db import DB
 from finhack.library.alert import alert
 from finhack.library.monitor import tsMonitor
 from finhack.collector.tushare.helper import tsSHelper
@@ -33,7 +33,7 @@ class tsCB:
     @tsMonitor
     def get_cb_list(pro,db):
         sql='select * from cb_basic'
-        data=mydb.selectToDf(sql,db)
+        data=DB.select_to_df(sql,db)
         return data
    
    
@@ -41,8 +41,8 @@ class tsCB:
     def cb_price_chg(pro,db):
         table='cb_price_chg'
         api='cb_price_chg'
-        mydb.exec("drop table if exists "+table+"_tmp",db)
-        engine=mydb.getDBEngine(db)
+        DB.exec("drop table if exists "+table+"_tmp",db)
+        engine=DB.get_db_engine(db)
         data=tsCB.get_cb_list(pro,db)
         cb_list=data['ts_code'].tolist()
         
@@ -52,7 +52,7 @@ class tsCB:
                 try:
                     df = pro.cb_price_chg(ts_code=ts_code)
                     #df.to_sql(table+'_tmp', engine, index=False, if_exists='append', chunksize=5000)
-                    mydb.safe_to_sql(df, table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
+                    DB.safe_to_sql(df, table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
                     break
                 except Exception as e:
                     if "每天最多访问" in str(e) or "每小时最多访问" in str(e):
@@ -74,9 +74,9 @@ class tsCB:
                             Log.logger.error(info)
                             break
             
-        mydb.exec('rename table '+table+' to '+table+'_old;',db);
-        mydb.exec('rename table '+table+'_tmp to '+table+';',db);
-        mydb.exec("drop table if exists "+table+'_old',db)
+        DB.exec('rename table '+table+' to '+table+'_old;',db);
+        DB.exec('rename table '+table+'_tmp to '+table+';',db);
+        DB.exec("drop table if exists "+table+'_old',db)
         tsSHelper.setIndex(table,db)  
         
 
@@ -84,8 +84,8 @@ class tsCB:
     def cb_share(pro,db):
         table='cb_share'
         api='cb_share'
-        mydb.exec("drop table if exists "+table+"_tmp",db)
-        engine=mydb.getDBEngine(db)
+        DB.exec("drop table if exists "+table+"_tmp",db)
+        engine=DB.get_db_engine(db)
         data=tsCB.get_cb_list(pro,db)
         cb_list=data['ts_code'].tolist()
         
@@ -95,7 +95,7 @@ class tsCB:
                 try:
                     df = pro.cb_share(ts_code=ts_code)
                     #df.to_sql(table+'_tmp', engine, index=False, if_exists='append', chunksize=5000)
-                    mydb.safe_to_sql(df, table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
+                    DB.safe_to_sql(df, table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
                     break
                 except Exception as e:
                     if "每天最多访问" in str(e) or "每小时最多访问" in str(e):
@@ -117,7 +117,7 @@ class tsCB:
                             Log.logger.error(info)
                             break
             
-        mydb.exec('rename table '+table+' to '+table+'_old;',db);
-        mydb.exec('rename table '+table+'_tmp to '+table+';',db);
-        mydb.exec("drop table if exists "+table+'_old',db)
+        DB.exec('rename table '+table+' to '+table+'_old;',db);
+        DB.exec('rename table '+table+'_tmp to '+table+';',db);
+        DB.exec("drop table if exists "+table+'_old',db)
         tsSHelper.setIndex(table,db)  
