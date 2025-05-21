@@ -259,7 +259,7 @@ class SQLiteAdapter(DbAdapter):
         return df.to_sql(table_name, engine, **kwargs)
     
     def safe_to_sql(self, df: pd.DataFrame, table_name: str, **kwargs) -> int:
-        """安全地将DataFrame写入数据库，处理可能的列缺失问题"""
+        """安全地将DataFrame写入数据库，处理可能的列缺失问题。类型转换已移除。"""
         # 空DataFrame检查
         if df.empty or len(df.columns) == 0:
             Log.logger.warning(f"尝试写入空DataFrame到表 {table_name}, 操作已跳过")
@@ -267,150 +267,98 @@ class SQLiteAdapter(DbAdapter):
         
         engine = self.get_engine()
         
+        final_to_sql_kwargs = kwargs.copy()
+        final_to_sql_kwargs.setdefault('index', False)
+        final_to_sql_kwargs.setdefault('if_exists', 'append')
+        final_to_sql_kwargs.setdefault('chunksize', 5000) # Default for SQLite, can be overridden by kwargs
+
         try:
-            # 预处理数据，确保类型正确
-            for col in df.columns:
-                # 对于可能包含股票代码/日期的列，强制转为字符串类型
-                if col in ['ts_code', 'symbol', 'code', 'ann_date', 'end_date', 'trade_date', 'pre_date', 'actual_date'] or \
-                   'code' in col.lower() or 'symbol' in col.lower() or 'date' in col.lower():
-                    df[col] = df[col].fillna('').astype(str)
-                    # 将字符串'None'替换为空字符串
-                    df[col] = df[col].replace('None', '')
-                # 对于数值类型的列，将None值替换为0
-                elif 'float' in str(df[col].dtype) or 'int' in str(df[col].dtype):
-                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-                # 对于其他类型的列，确保None值替换为空字符串
-                elif df[col].dtype == 'object':
-                    df[col] = df[col].fillna('').astype(str)
-            
             # 检查表是否存在，不存在则直接写入
             if not self.table_exists(table_name):
-                # 准备参数
-                safe_kwargs = kwargs.copy()
-                if 'if_exists' not in safe_kwargs:
-                    safe_kwargs['if_exists'] = 'append'
+                return df.to_sql(table_name, engine, **final_to_sql_kwargs)
                 
-                # 确保正确的参数设置
-                safe_kwargs.update({
-                    'index': False,
-                    'chunksize': safe_kwargs.get('chunksize', 5000)
-                })
-                
-                # 移除可能导致问题的参数
-                safe_kwargs.pop('connection', None)
-                safe_kwargs.pop('con', None)
-                
-                return df.to_sql(table_name, engine, **safe_kwargs)
-                
-            # 获取表结构
-            conn, cursor = self.get_connection()
+            # 表存在，获取表的列信息
+            conn_for_pragma, _ = self.get_connection() # Need a direct connection for PRAGMA
             try:
-                cursor.execute(f"PRAGMA table_info({table_name})")
-                table_info = cursor.fetchall()
+                cursor_for_pragma = conn_for_pragma.cursor()
+                cursor_for_pragma.execute(f"PRAGMA table_info({table_name})")
+                table_info = cursor_for_pragma.fetchall()
                 existing_columns = {col["name"] for col in table_info}
                 
-                # 检查DataFrame中是否有表中不存在的列
                 missing_columns = [col for col in df.columns if col not in existing_columns]
                 
-                # 如果有缺失的列，添加这些列
                 if missing_columns:
-                    Log.logger.info(f"表 {table_name} 缺少 {len(missing_columns)} 列：{', '.join(missing_columns)}")
-                    
+                    Log.logger.info(f"表 {table_name} 缺少 {len(missing_columns)} 列：{ ', '.join(missing_columns)}")
                     for col in missing_columns:
                         try:
-                            # 确定列类型
-                            col_type = "TEXT"  # 默认为TEXT类型
-                            dtype = str(df[col].dtype)
-                            if 'int' in dtype:
-                                col_type = "INTEGER"
-                            elif 'float' in dtype:
-                                col_type = "REAL"
-                            elif 'bool' in dtype:
-                                col_type = "INTEGER"  # SQLite没有布尔类型，使用INTEGER
-                            elif 'datetime' in dtype:
-                                col_type = "TEXT"  # 日期类型使用TEXT
+                            sql_type = "TEXT"  # 默认为TEXT类型
                             
-                            # 添加新列
-                            alter_sql = f"ALTER TABLE {table_name} ADD COLUMN \"{col}\" {col_type}"
-                            cursor.execute(alter_sql)
-                            conn.commit()
+                            alter_sql = f"ALTER TABLE {table_name} ADD COLUMN \"{col}\" {sql_type}"
+                            cursor_for_pragma.execute(alter_sql)
+                            conn_for_pragma.commit()
                             Log.logger.info(f"成功添加列 {col} 到表 {table_name}")
                         except Exception as add_col_error:
-                            conn.rollback()
-                            Log.logger.warning(f"添加列 {col} 失败: {str(add_col_error)}")
-                            # 如果不是列已存在的错误，记录但继续处理其他列
+                            conn_for_pragma.rollback()
                             if "duplicate column name" not in str(add_col_error).lower():
-                                # 不抛出异常，继续处理其他列
-                                pass
+                                Log.logger.error(f"添加列 {col} 到表 {table_name} 失败: {str(add_col_error)}")
+                                raise # Re-raise if it's not a duplicate column error
+                            else:
+                                Log.logger.warning(f"尝试添加已存在的列 {col} 到表 {table_name}: {str(add_col_error)}")
             except Exception as e:
-                Log.logger.error(f"检查表 {table_name} 结构时出错: {str(e)}")
-                # 继续执行，尝试写入数据
+                Log.logger.error(f"检查表 {table_name} 结构或添加列时出错: {str(e)}")
+                # 继续执行，尝试写入数据，让后续步骤处理错误
             finally:
-                conn.close()
+                if conn_for_pragma:
+                    conn_for_pragma.close()
             
-            # 准备最终参数
-            final_kwargs = kwargs.copy()
-            if 'if_exists' not in final_kwargs:
-                final_kwargs['if_exists'] = 'append'
-            
-            # 确保正确的参数设置
-            final_kwargs.update({
-                'index': False,
-                'chunksize': final_kwargs.get('chunksize', 5000)
-            })
-            
-            # 移除可能导致问题的参数
-            final_kwargs.pop('connection', None)
-            final_kwargs.pop('con', None)
-            
-            # 尝试写入数据
-            return df.to_sql(table_name, engine, **final_kwargs)
+            return df.to_sql(table_name, engine, **final_to_sql_kwargs)
+
         except Exception as e:
             error_str = str(e)
-            
-            # 检查是否是"no such column"错误
+            # 检查是否是"no such column"错误 (SQLite specific)
             if "no such column" in error_str.lower():
-                # 尝试从错误消息中提取列名
-                column_match = re.search(r"no such column:?\s*\"?\'?([^\"\']+)\"?\'?", error_str.lower())
+                column_match = re.search(r"no such column:?\s*[\x27\x22]?([^\x27\x22 ]+)[\x27\x22]?", error_str.lower())
                 if column_match:
                     missing_column = column_match.group(1).strip()
-                    Log.logger.warning(f"写入时发现缺少列 {missing_column}，尝试添加并重试")
+                    Log.logger.warning(f"写入时表 {table_name} 中缺少列 {missing_column}，尝试添加该列")
                     
-                    try:
-                        conn, cursor = self.get_connection()
+                    if missing_column in df.columns:
+                        conn_for_add, _ = self.get_connection()
                         try:
-                            # 确定列类型
-                            col_type = "TEXT"  # 默认为TEXT类型
-                            if missing_column in df.columns:
-                                dtype = str(df[missing_column].dtype)
-                                if 'int' in dtype:
-                                    col_type = "INTEGER"
-                                elif 'float' in dtype:
-                                    col_type = "REAL"
-                                elif 'bool' in dtype:
-                                    col_type = "INTEGER"  # SQLite没有布尔类型
-                                elif 'datetime' in dtype:
-                                    col_type = "TEXT"  # 日期类型使用TEXT
+                            cursor_for_add = conn_for_add.cursor()
+                            col_type_str = str(df[missing_column].dtype)
+                            sql_type = "TEXT"
+                            if 'int' in col_type_str:
+                                sql_type = "INTEGER"
+                            elif 'float' in col_type_str:
+                                sql_type = "REAL"
+                            elif 'bool' in col_type_str:
+                                sql_type = "INTEGER"
+                            elif 'datetime' in col_type_str:
+                                sql_type = "TEXT"
                             
-                            # 添加列
-                            alter_sql = f"ALTER TABLE {table_name} ADD COLUMN \"{missing_column}\" {col_type}"
-                            cursor.execute(alter_sql)
-                            conn.commit()
+                            alter_sql = f"ALTER TABLE {table_name} ADD COLUMN \"{missing_column}\" {sql_type}"
+                            cursor_for_add.execute(alter_sql)
+                            conn_for_add.commit()
                             Log.logger.info(f"成功添加列 {missing_column} 到表 {table_name}")
                             
                             # 重试写入
-                            return self.safe_to_sql(df, table_name, **kwargs)
+                            return df.to_sql(table_name, engine, **final_to_sql_kwargs)
                         except Exception as add_error:
-                            conn.rollback()
-                            Log.logger.error(f"添加列 {missing_column} 失败: {str(add_error)}")
+                            if conn_for_add: conn_for_add.rollback()
+                            Log.logger.error(f"重试时添加列 {missing_column} 失败: {str(add_error)}")
                             raise
                         finally:
-                            conn.close()
-                    except Exception as conn_error:
-                        Log.logger.error(f"获取连接失败: {str(conn_error)}")
+                            if conn_for_add:
+                                conn_for_add.close()
+                    else:
+                        Log.logger.error(f"DataFrame 中不包含尝试添加的未知列 {missing_column}")
                         raise
+                else:
+                     Log.logger.error(f"SQLite写入错误 (无法从错误消息中提取列名): {error_str}")
+                     raise # Could not parse column name, re-raise
             
-            Log.logger.error(f"SQLite写入错误: {error_str}")
+            Log.logger.error(f"SQLite写入DataFrame异常: {error_str}")
             raise
     
     @dbMonitor

@@ -47,7 +47,12 @@ class DbAdapterFactory:
         try:
             # 读取数据库配置
             dbcfg = Config.get_config('db', connection_name)
-            db_type = dbcfg.get('type', 'sqlite').lower()  # 默认为 sqlite 而不是 mysql
+            if 'type' not in dbcfg:
+                Log.logger.error(f"数据库配置 '{connection_name}' 中缺少 'type' 字段。")
+                import sys
+                sys.exit(1)
+                raise ValueError(f"数据库配置 '{connection_name}' 中缺少 'type' 字段。")
+            db_type = dbcfg['type'].lower()
             
             # 根据数据库类型创建适配器
             adapter = None
