@@ -30,7 +30,6 @@ class tsFuntures:
             DB.safe_to_sql(data, table+"_tmp", db, index=False, if_exists='append', chunksize=5000)
         
         # 获取数据库适配器类型
-        from finhack.library.db import DB
         adapter = DB.get_adapter(db)
         adapter_type = adapter.__class__.__name__
         
@@ -101,7 +100,6 @@ class tsFuntures:
             DB.safe_to_sql(data, table+"_tmp", db, index=False, if_exists='append', chunksize=5000)
         
         # 获取数据库适配器类型
-        from finhack.library.db import DB
         adapter = DB.get_adapter(db)
         adapter_type = adapter.__class__.__name__
         

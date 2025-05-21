@@ -207,62 +207,62 @@ class TushareCollector:
         else:
             Log.logger.error("获取行情数据失败：股票基本信息数据不存在")
             
-        # # 第三步：获取财务数据
-        # # 依赖于股票基本信息和财务披露日期
-        # Log.logger.info("第三步：获取财务数据...")
-        # if self.check_dependency('astock_basic'):
-        #     self.getAStockFinance()
-        # else:
-        #     Log.logger.error("获取财务数据失败：股票基本信息数据不存在")
+        # 第三步：获取财务数据
+        # 依赖于股票基本信息和财务披露日期
+        Log.logger.info("第三步：获取财务数据...")
+        if self.check_dependency('astock_basic'):
+            self.getAStockFinance()
+        else:
+            Log.logger.error("获取财务数据失败：股票基本信息数据不存在")
             
-        # # 第四步：获取市场数据
-        # # 依赖于股票基本信息
-        # Log.logger.info("第四步：获取市场数据...")
-        # if self.check_dependency('astock_basic'):
-        #     self.getAStockMarket()
-        # else:
-        #     Log.logger.error("获取市场数据失败：股票基本信息数据不存在")
+        # 第四步：获取市场数据
+        # 依赖于股票基本信息
+        Log.logger.info("第四步：获取市场数据...")
+        if self.check_dependency('astock_basic'):
+            self.getAStockMarket()
+        else:
+            Log.logger.error("获取市场数据失败：股票基本信息数据不存在")
             
-        # # 第五步：获取指数数据
-        # # 部分依赖于股票基本信息
-        # Log.logger.info("第五步：获取指数数据...")
-        # self.getAStockIndex()
+        # 第五步：获取指数数据
+        # 部分依赖于股票基本信息
+        Log.logger.info("第五步：获取指数数据...")
+        self.getAStockIndex()
         
-        # # 第六步：获取其他A股数据
-        # Log.logger.info("第六步：获取其他A股数据...")
-        # self.getAStockOther()
+        # 第六步：获取其他A股数据
+        Log.logger.info("第六步：获取其他A股数据...")
+        self.getAStockOther()
         
-        # # 第七步：获取基金数据
-        # Log.logger.info("第七步：获取基金数据...")
-        # self.getFund()
+        # 第七步：获取基金数据
+        Log.logger.info("第七步：获取基金数据...")
+        self.getFund()
         
-        # # 第八步：获取宏观经济数据
-        # Log.logger.info("第八步：获取宏观经济数据...")
-        # self.getEcono()
+        # 第八步：获取宏观经济数据
+        Log.logger.info("第八步：获取宏观经济数据...")
+        self.getEcono()
         
-        # # 第九步：获取其他数据
-        # Log.logger.info("第九步：获取其他数据...")
-        # self.getOther()
+        # 第九步：获取其他数据
+        Log.logger.info("第九步：获取其他数据...")
+        self.getOther()
         
-        # # 第十步：获取期货数据
-        # Log.logger.info("第十步：获取期货数据...")
-        # self.getFutures()
+        # 第十步：获取期货数据
+        Log.logger.info("第十步：获取期货数据...")
+        self.getFutures()
         
-        # # 第十一步：获取美股数据
-        # Log.logger.info("第十一步：获取美股数据...")
-        # self.getUStock()
+        # 第十一步：获取美股数据
+        Log.logger.info("第十一步：获取美股数据...")
+        self.getUStock()
         
-        # # 第十二步：获取港股数据
-        # Log.logger.info("第十二步：获取港股数据...")
-        # self.getHStock()
+        # 第十二步：获取港股数据
+        Log.logger.info("第十二步：获取港股数据...")
+        self.getHStock()
         
-        # # 第十三步：获取可转债数据
-        # Log.logger.info("第十三步：获取可转债数据...")
-        # self.getCB()
+        # 第十三步：获取可转债数据
+        Log.logger.info("第十三步：获取可转债数据...")
+        self.getCB()
         
-        # # 第十四步：获取外汇数据
-        # Log.logger.info("第十四步：获取外汇数据...")
-        # self.getFX()
+        # 第十四步：获取外汇数据
+        Log.logger.info("第十四步：获取外汇数据...")
+        self.getFX()
         
         # 启动所有线程
         Log.logger.info(f"启动 {len(self.thread_list)} 个数据采集线程...")
