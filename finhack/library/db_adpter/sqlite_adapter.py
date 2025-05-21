@@ -62,12 +62,23 @@ class SQLiteAdapter(DbAdapter):
         while retries <= self.max_retries:
             try:
                 conn = sqlite3.connect(self.db_path, timeout=self.timeout)
-                # 启用外键支持
-                conn.execute("PRAGMA foreign_keys = ON")
-                # 启用WAL模式，提高并发性能
-                conn.execute("PRAGMA journal_mode = WAL")
-                # 启用内存映射，提高读取性能
-                conn.execute("PRAGMA mmap_size = 268435456")  # 256MB
+                
+                # 尝试执行数据库优化设置，使用安全模式而非WAL模式
+                try:
+                    # 启用外键支持
+                    conn.execute("PRAGMA foreign_keys = ON")
+                    # 使用DELETE模式而非WAL模式，更安全但速度稍慢
+                    conn.execute("PRAGMA journal_mode = DELETE")
+                    # 降低同步级别以提高性能，但保持基本安全
+                    conn.execute("PRAGMA synchronous = NORMAL")
+                    # 增加缓存大小
+                    conn.execute("PRAGMA cache_size = 10000")
+                    # 临时文件存储在内存中
+                    conn.execute("PRAGMA temp_store = MEMORY")
+                except Exception as pragma_error:
+                    # 如果设置PRAGMA失败，记录错误但不中断连接
+                    Log.logger.warning(f"设置数据库PRAGMA参数失败: {str(pragma_error)}")
+                
                 # 设置返回结果为字典形式
                 conn.row_factory = sqlite3.Row
                 return conn, conn.cursor()
@@ -83,6 +94,31 @@ class SQLiteAdapter(DbAdapter):
                     else:
                         Log.logger.error(f"数据库锁定，重试次数超限: {str(e)}")
                         raise
+                elif "disk i/o error" in str(e).lower() or "database disk image is malformed" in str(e).lower():
+                    Log.logger.error(f"数据库文件损坏或磁盘错误: {str(e)}")
+                    # 尝试恢复数据库或创建新的数据库
+                    try:
+                        if os.path.exists(self.db_path):
+                            backup_path = f"{self.db_path}.bak.{int(time.time())}"
+                            Log.logger.warning(f"尝试创建数据库备份: {backup_path}")
+                            # 尝试复制而不是移动文件
+                            try:
+                                import shutil
+                                shutil.copy2(self.db_path, backup_path)
+                            except:
+                                # 如果复制失败，尝试移动
+                                os.rename(self.db_path, backup_path)
+                            # 删除可能存在的WAL文件
+                            if os.path.exists(self.db_path + "-shm"):
+                                os.remove(self.db_path + "-shm")
+                            if os.path.exists(self.db_path + "-wal"):
+                                os.remove(self.db_path + "-wal")
+                            Log.logger.info(f"已备份损坏的数据库文件，将创建新文件")
+                    except Exception as recovery_error:
+                        Log.logger.error(f"尝试恢复数据库时出错: {str(recovery_error)}")
+                    
+                    # 返回None，让上层代码处理
+                    raise
                 else:
                     # 其他错误直接抛出
                     raise
@@ -129,6 +165,11 @@ class SQLiteAdapter(DbAdapter):
             if len(parts) >= 3:
                 table = parts[2].rstrip(';')
                 sql = f"DELETE FROM {table}"
+        
+        # 处理CREATE INDEX语法，移除列名中的长度限制，例如ts_code(10) -> ts_code
+        if sql.lower().startswith('create index'):
+            # 使用正则表达式匹配类似 column_name(length) 的模式并替换为 column_name
+            sql = re.sub(r'(\w+)\s*\(\d+\)', r'\1', sql)
         
         # 替换ISNULL函数为SQLite兼容的写法
         sql = re.sub(r'(?i)not\s+ISNULL\s*\(([^)]+)\)', r'\1 IS NOT NULL', sql)
@@ -268,27 +309,42 @@ class SQLiteAdapter(DbAdapter):
                 table_info = cursor.fetchall()
                 existing_columns = {col["name"] for col in table_info}
                 
-                # 检查是否有新列需要添加
-                for col in df.columns:
-                    if col not in existing_columns:
-                        # 确定列类型
-                        col_type = "TEXT"  # 默认为TEXT类型
-                        if 'int' in str(df[col].dtype):
-                            col_type = "INTEGER"
-                        elif 'float' in str(df[col].dtype):
-                            col_type = "REAL"
-                        
+                # 检查DataFrame中是否有表中不存在的列
+                missing_columns = [col for col in df.columns if col not in existing_columns]
+                
+                # 如果有缺失的列，添加这些列
+                if missing_columns:
+                    Log.logger.info(f"表 {table_name} 缺少 {len(missing_columns)} 列：{', '.join(missing_columns)}")
+                    
+                    for col in missing_columns:
                         try:
+                            # 确定列类型
+                            col_type = "TEXT"  # 默认为TEXT类型
+                            dtype = str(df[col].dtype)
+                            if 'int' in dtype:
+                                col_type = "INTEGER"
+                            elif 'float' in dtype:
+                                col_type = "REAL"
+                            elif 'bool' in dtype:
+                                col_type = "INTEGER"  # SQLite没有布尔类型，使用INTEGER
+                            elif 'datetime' in dtype:
+                                col_type = "TEXT"  # 日期类型使用TEXT
+                            
                             # 添加新列
-                            cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN \"{col}\" {col_type}")
+                            alter_sql = f"ALTER TABLE {table_name} ADD COLUMN \"{col}\" {col_type}"
+                            cursor.execute(alter_sql)
                             conn.commit()
                             Log.logger.info(f"成功添加列 {col} 到表 {table_name}")
                         except Exception as add_col_error:
-                            Log.logger.warning(f"添加列 {col} 失败: {str(add_col_error)}")
                             conn.rollback()
-                            # 如果不是列已存在的错误，抛出异常
+                            Log.logger.warning(f"添加列 {col} 失败: {str(add_col_error)}")
+                            # 如果不是列已存在的错误，记录但继续处理其他列
                             if "duplicate column name" not in str(add_col_error).lower():
-                                raise
+                                # 不抛出异常，继续处理其他列
+                                pass
+            except Exception as e:
+                Log.logger.error(f"检查表 {table_name} 结构时出错: {str(e)}")
+                # 继续执行，尝试写入数据
             finally:
                 conn.close()
             
@@ -307,9 +363,54 @@ class SQLiteAdapter(DbAdapter):
             final_kwargs.pop('connection', None)
             final_kwargs.pop('con', None)
             
+            # 尝试写入数据
             return df.to_sql(table_name, engine, **final_kwargs)
         except Exception as e:
-            Log.logger.error(f"SQLite写入错误: {str(e)}")
+            error_str = str(e)
+            
+            # 检查是否是"no such column"错误
+            if "no such column" in error_str.lower():
+                # 尝试从错误消息中提取列名
+                column_match = re.search(r"no such column:?\s*\"?\'?([^\"\']+)\"?\'?", error_str.lower())
+                if column_match:
+                    missing_column = column_match.group(1).strip()
+                    Log.logger.warning(f"写入时发现缺少列 {missing_column}，尝试添加并重试")
+                    
+                    try:
+                        conn, cursor = self.get_connection()
+                        try:
+                            # 确定列类型
+                            col_type = "TEXT"  # 默认为TEXT类型
+                            if missing_column in df.columns:
+                                dtype = str(df[missing_column].dtype)
+                                if 'int' in dtype:
+                                    col_type = "INTEGER"
+                                elif 'float' in dtype:
+                                    col_type = "REAL"
+                                elif 'bool' in dtype:
+                                    col_type = "INTEGER"  # SQLite没有布尔类型
+                                elif 'datetime' in dtype:
+                                    col_type = "TEXT"  # 日期类型使用TEXT
+                            
+                            # 添加列
+                            alter_sql = f"ALTER TABLE {table_name} ADD COLUMN \"{missing_column}\" {col_type}"
+                            cursor.execute(alter_sql)
+                            conn.commit()
+                            Log.logger.info(f"成功添加列 {missing_column} 到表 {table_name}")
+                            
+                            # 重试写入
+                            return self.safe_to_sql(df, table_name, **kwargs)
+                        except Exception as add_error:
+                            conn.rollback()
+                            Log.logger.error(f"添加列 {missing_column} 失败: {str(add_error)}")
+                            raise
+                        finally:
+                            conn.close()
+                    except Exception as conn_error:
+                        Log.logger.error(f"获取连接失败: {str(conn_error)}")
+                        raise
+            
+            Log.logger.error(f"SQLite写入错误: {error_str}")
             raise
     
     @dbMonitor
@@ -490,4 +591,25 @@ class SQLiteAdapter(DbAdapter):
             return True, target_table
         except Exception as e:
             Log.logger.error(f"替换表失败: {str(e)}")
-            return False, source_table 
+            return False, source_table
+    
+    def get_table_columns(self, table_name: str) -> list:
+        """
+        获取表的列名列表
+        
+        Args:
+            table_name: 表名
+            
+        Returns:
+            列名列表
+        """
+        try:
+            engine = self.get_engine()
+            with engine.connect() as conn:
+                query = f"PRAGMA table_info({table_name})"
+                result = conn.execute(text(query)).fetchall()
+                columns = [row[1] for row in result]  # 列名在索引1的位置
+                return columns
+        except Exception as e:
+            Log.logger.error(f"获取表 {table_name} 的列失败: {str(e)}")
+            return [] 

@@ -24,6 +24,7 @@ import tushare as ts
 import traceback
 import pandas as pd
 import os
+import sqlite3
 
 class TushareCollector:
     def __init__(self):
@@ -37,10 +38,21 @@ class TushareCollector:
             'astock_finance_disclosure_date': False,  # 财务披露日期
             'fund_basic': False,            # 基金基本信息
             'cb_basic': False,              # 可转债基本信息
-            'hk_basic': False,              # 港股基本信息
-            'fx_basic': False               # 外汇基本信息
+            'hk_basic': True,              # 港股基本信息
+            'fx_basic': True               # 外汇基本信息
         }
-        
+
+        self.dependency_status = {
+            'astock_basic': False,           # 股票基本信息
+            'astock_trade_cal': False,      # 交易日历
+            'astock_index_basic': False,    # 指数基本信息
+            'astock_finance_disclosure_date': False,  # 财务披露日期
+            'fund_basic': False,            # 基金基本信息
+            'cb_basic': False,              # 可转债基本信息
+            'hk_basic': True,              # 港股基本信息
+            'fx_basic': True               # 外汇基本信息
+        }     
+
     def check_dependency(self, table_name):
         """检查依赖表是否存在，如果不存在但是有创建该表的功能则尝试创建"""
         if table_name in self.dependency_status:
@@ -96,6 +108,75 @@ class TushareCollector:
                 Log.logger.error(f"检查表 {table_name} 失败: {str(e)}")
                 return False
         
+    def ensure_db_directory(self, db_name):
+        """确保数据库目录存在"""
+        try:
+            # 获取数据库配置
+            db_config = Config.get_config('db', db_name)
+            
+            # 检查是否为SQLite数据库
+            if db_config.get('type', '') != 'sqlite':
+                return True
+            
+            # 获取数据库文件路径
+            db_path = db_config.get('path', '')
+            if not db_path:
+                Log.logger.warning(f"SQLite数据库配置中未指定path参数")
+                return False
+            
+            # 如果是相对路径，尝试转换为绝对路径
+            if not os.path.isabs(db_path):
+                # 当前工作目录
+                cwd = os.getcwd()
+                abs_db_path = os.path.abspath(os.path.join(cwd, db_path))
+                Log.logger.info(f"数据库相对路径: {db_path}")
+                Log.logger.info(f"转换为绝对路径: {abs_db_path}")
+                db_path = abs_db_path
+            
+            # 获取数据库目录
+            db_dir = os.path.dirname(db_path)
+            Log.logger.info(f"数据库目录: {db_dir}")
+            
+            # 检查目录是否存在
+            if not os.path.exists(db_dir):
+                Log.logger.warning(f"数据库目录不存在，创建目录: {db_dir}")
+                os.makedirs(db_dir, exist_ok=True)
+                return True
+            
+            # 检查目录是否有写权限
+            if not os.access(db_dir, os.W_OK):
+                Log.logger.error(f"数据库目录没有写权限: {db_dir}")
+                return False
+                
+            # 如果数据库文件存在，尝试检查是否可读写
+            if os.path.exists(db_path):
+                if not os.access(db_path, os.R_OK | os.W_OK):
+                    Log.logger.error(f"数据库文件没有读写权限: {db_path}")
+                    return False
+                
+                # 尝试连接数据库进行验证
+                try:
+                    conn = sqlite3.connect(db_path, timeout=10)
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT 1")
+                    conn.close()
+                    Log.logger.info(f"数据库文件可正常访问: {db_path}")
+                except Exception as e:
+                    Log.logger.error(f"数据库文件可能已损坏: {str(e)}")
+                    # 重命名损坏的数据库文件
+                    backup_path = f"{db_path}.bak.{int(time.time())}"
+                    try:
+                        os.rename(db_path, backup_path)
+                        Log.logger.warning(f"已将可能损坏的数据库文件重命名为: {backup_path}")
+                    except Exception as rename_error:
+                        Log.logger.error(f"无法重命名损坏的数据库文件: {str(rename_error)}")
+                        return False
+            
+            return True
+        except Exception as e:
+            Log.logger.error(f"检查数据库目录时出错: {str(e)}")
+            return False
+
     def run(self):
         """按照依赖关系顺序执行数据采集"""
         Log.logger.info("开始执行Tushare数据采集...")
@@ -105,7 +186,11 @@ class TushareCollector:
         ts.set_token(cfgTS['token'])
         self.pro = ts.pro_api()
         self.db=cfgTS['db']
-
+        
+        # 确保数据库目录存在
+        if not self.ensure_db_directory(self.db):
+            Log.logger.error("数据库目录检查失败，终止数据采集")
+            return False
         
         # 第一步：获取基础数据（股票、交易日历等）
         Log.logger.info("第一步：获取基础数据...")
@@ -113,70 +198,71 @@ class TushareCollector:
         if not success:
             Log.logger.error("获取股票基本信息失败，终止数据采集")
             return False
+
         # 第二步：获取行情数据
         # 依赖于股票基本信息
         Log.logger.info("第二步：获取行情数据...")
-        if self.check_dependency('astock_basic'):
+        if True or self.check_dependency('astock_basic'):
             self.getAStockPrice()
         else:
             Log.logger.error("获取行情数据失败：股票基本信息数据不存在")
             
-        # 第三步：获取财务数据
-        # 依赖于股票基本信息和财务披露日期
-        Log.logger.info("第三步：获取财务数据...")
-        if self.check_dependency('astock_basic'):
-            self.getAStockFinance()
-        else:
-            Log.logger.error("获取财务数据失败：股票基本信息数据不存在")
+        # # 第三步：获取财务数据
+        # # 依赖于股票基本信息和财务披露日期
+        # Log.logger.info("第三步：获取财务数据...")
+        # if self.check_dependency('astock_basic'):
+        #     self.getAStockFinance()
+        # else:
+        #     Log.logger.error("获取财务数据失败：股票基本信息数据不存在")
             
-        # 第四步：获取市场数据
-        # 依赖于股票基本信息
-        Log.logger.info("第四步：获取市场数据...")
-        if self.check_dependency('astock_basic'):
-            self.getAStockMarket()
-        else:
-            Log.logger.error("获取市场数据失败：股票基本信息数据不存在")
+        # # 第四步：获取市场数据
+        # # 依赖于股票基本信息
+        # Log.logger.info("第四步：获取市场数据...")
+        # if self.check_dependency('astock_basic'):
+        #     self.getAStockMarket()
+        # else:
+        #     Log.logger.error("获取市场数据失败：股票基本信息数据不存在")
             
-        # 第五步：获取指数数据
-        # 部分依赖于股票基本信息
-        Log.logger.info("第五步：获取指数数据...")
-        self.getAStockIndex()
+        # # 第五步：获取指数数据
+        # # 部分依赖于股票基本信息
+        # Log.logger.info("第五步：获取指数数据...")
+        # self.getAStockIndex()
         
-        # 第六步：获取其他A股数据
-        Log.logger.info("第六步：获取其他A股数据...")
-        self.getAStockOther()
+        # # 第六步：获取其他A股数据
+        # Log.logger.info("第六步：获取其他A股数据...")
+        # self.getAStockOther()
         
-        # 第七步：获取基金数据
-        Log.logger.info("第七步：获取基金数据...")
-        self.getFund()
+        # # 第七步：获取基金数据
+        # Log.logger.info("第七步：获取基金数据...")
+        # self.getFund()
         
-        # 第八步：获取宏观经济数据
-        Log.logger.info("第八步：获取宏观经济数据...")
-        self.getEcono()
+        # # 第八步：获取宏观经济数据
+        # Log.logger.info("第八步：获取宏观经济数据...")
+        # self.getEcono()
         
-        # 第九步：获取其他数据
-        Log.logger.info("第九步：获取其他数据...")
-        self.getOther()
+        # # 第九步：获取其他数据
+        # Log.logger.info("第九步：获取其他数据...")
+        # self.getOther()
         
-        # 第十步：获取期货数据
-        Log.logger.info("第十步：获取期货数据...")
-        self.getFutures()
+        # # 第十步：获取期货数据
+        # Log.logger.info("第十步：获取期货数据...")
+        # self.getFutures()
         
-        # 第十一步：获取美股数据
-        Log.logger.info("第十一步：获取美股数据...")
-        self.getUStock()
+        # # 第十一步：获取美股数据
+        # Log.logger.info("第十一步：获取美股数据...")
+        # self.getUStock()
         
-        # 第十二步：获取港股数据
-        Log.logger.info("第十二步：获取港股数据...")
-        self.getHStock()
+        # # 第十二步：获取港股数据
+        # Log.logger.info("第十二步：获取港股数据...")
+        # self.getHStock()
         
-        # 第十三步：获取可转债数据
-        Log.logger.info("第十三步：获取可转债数据...")
-        self.getCB()
+        # # 第十三步：获取可转债数据
+        # Log.logger.info("第十三步：获取可转债数据...")
+        # self.getCB()
         
-        # 第十四步：获取外汇数据
-        Log.logger.info("第十四步：获取外汇数据...")
-        self.getFX()
+        # # 第十四步：获取外汇数据
+        # Log.logger.info("第十四步：获取外汇数据...")
+        # self.getFX()
         
         # 启动所有线程
         Log.logger.info(f"启动 {len(self.thread_list)} 个数据采集线程...")
@@ -826,14 +912,13 @@ class TushareCollector:
                 if active_threads >= max_concurrent_threads:
                     time.sleep(1)
         
-        # 创建并启动新线程
+        # 创建新线程
         thread = collectThread(className, functionName, self.pro, self.db)
         thread.set_max_runtime(self.max_thread_runtime)  # 设置最大运行时间
-        Log.logger.info(f"启动线程: {functionName}，最大运行时间: {self.max_thread_runtime/3600}小时")
-        self.thread_list.append(thread)
+        Log.logger.info(f"创建线程: {functionName}，最大运行时间: {self.max_thread_runtime/3600}小时")
         
-        # 启动线程
-        thread.start()
+        # 添加到线程列表，但不立即启动
+        self.thread_list.append(thread)
         
         # 短暂等待，避免同时启动过多线程导致数据库锁定
         time.sleep(0.1)
