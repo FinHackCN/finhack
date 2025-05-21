@@ -43,7 +43,8 @@ class tsAStockIndex:
         while n>0:        
             for ts_code in index_list:
                 lastdate=tsSHelper.getLastDateAndDelete('astock_index_daily','trade_date',ts_code=ts_code,db=db)
-                engine=DB.get_db_engine(db)   
+                # 不需要获取engine对象，直接使用db连接名
+                # engine = DB.get_db_engine(db)   
                 today = datetime.datetime.now()
                 today=today.strftime("%Y%m%d")
                 try_times=0
@@ -57,7 +58,7 @@ class tsAStockIndex:
                         df=pro.index_daily(ts_code=ts_code, start_date=lastdate, end_date=today)
                         if(not df.empty):
                             #res = df.to_sql('astock_index_daily', engine, index=False, if_exists='append', chunksize=5000)
-                            DB.safe_to_sql(df, table, engine, index=False, if_exists='append', chunksize=5000)
+                            DB.safe_to_sql(df, table, db, index=False, if_exists='append', chunksize=5000)
                             
                         break
                     except Exception as e:
@@ -176,7 +177,8 @@ class tsAStockIndex:
     @tsMonitor
     def index_weight(pro,db):
         table="astock_index_weight"
-        engine=DB.get_db_engine(db)
+        # 不需要获取engine对象，直接使用db连接名
+        # engine = DB.get_db_engine(db)
         #DB.truncate_table('astock_index_weight',db)
         data=tsSHelper.getAllAStockIndex(pro,db)
         #index_list=data['ts_code'].tolist()
@@ -198,7 +200,7 @@ class tsAStockIndex:
                         df = pro.index_weight(index_code=ts_code,start_date=dt, end_date=dt)
                         df = df.rename({'index_code':'ts_code'}, axis='columns')
                         #df.to_sql('astock_index_weight', engine, index=False, if_exists='append', chunksize=5000)
-                        DB.safe_to_sql(df, table, engine, index=False, if_exists='append', chunksize=5000)
+                        DB.safe_to_sql(df, table, db, index=False, if_exists='append', chunksize=5000)
                         break
                     except Exception as e:
                         if "每天最多访问" in str(e) or "每小时最多访问" in str(e):
@@ -266,7 +268,8 @@ class tsAStockIndex:
     def index_member(pro,db):
         table='astock_index_member'
         DB.exec("drop table if exists "+table+"_tmp",db)
-        engine=DB.get_db_engine(db)
+        # 不需要获取engine对象，直接使用db连接名
+        # engine = DB.get_db_engine(db)
         sql='select * from astock_index_classify'
         data=DB.select_to_df(sql,db)
 
@@ -279,7 +282,7 @@ class tsAStockIndex:
                     df = df.rename({'is_new':'isnew'}, axis='columns')
                     if(not df.empty):
                         #df.to_sql('astock_index_member_tmp', engine, index=False, if_exists='append', chunksize=5000)
-                        DB.safe_to_sql(df, table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
+                        DB.safe_to_sql(df, table+"_tmp", db, index=False, if_exists='append', chunksize=5000)
                     break
                 except Exception as e:
                     if "每天最多访问" in str(e) or "每小时最多访问" in str(e):

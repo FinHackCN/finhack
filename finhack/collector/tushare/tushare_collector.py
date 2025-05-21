@@ -42,16 +42,58 @@ class TushareCollector:
         }
         
     def check_dependency(self, table_name):
-        """检查依赖表是否存在"""
+        """检查依赖表是否存在，如果不存在但是有创建该表的功能则尝试创建"""
         if table_name in self.dependency_status:
             return self.dependency_status[table_name]
         else:
             # 检查表是否存在
             try:
-                result = DB.selectToList(f"SELECT 1 FROM {table_name} LIMIT 1", self.db)
-                return len(result) > 0
+                # 获取数据库适配器
+                adapter = DB.get_adapter(self.db)
+                
+                # 检查表是否存在
+                if adapter.table_exists(table_name):
+                    # 表存在，尝试查询是否有数据
+                    result = DB.selectToList(f"SELECT 1 FROM {table_name} LIMIT 1", self.db)
+                    return len(result) > 0
+                else:
+                    # 表不存在，尝试创建基本表
+                    if table_name == 'astock_basic':
+                        Log.logger.warning(f"表 {table_name} 不存在，尝试创建...")
+                        # 创建股票基本信息表
+                        success = tsAStockBasic.stock_basic(self.pro, self.db)
+                        if success:
+                            self.dependency_status['astock_basic'] = True
+                            return True
+                        else:
+                            Log.logger.error(f"创建表 {table_name} 失败")
+                            return False
+                    elif table_name == 'astock_trade_cal':
+                        Log.logger.warning(f"表 {table_name} 不存在，尝试创建...")
+                        # 创建交易日历表
+                        success = tsAStockBasic.trade_cal(self.pro, self.db)
+                        if success:
+                            self.dependency_status['astock_trade_cal'] = True
+                            return True
+                        else:
+                            Log.logger.error(f"创建表 {table_name} 失败")
+                            return False
+                    elif table_name == 'astock_finance_disclosure_date':
+                        Log.logger.warning(f"表 {table_name} 不存在，尝试创建...")
+                        from finhack.collector.tushare.astockfinance import tsAStockFinance
+                        # 创建财务披露日期表
+                        success = tsAStockFinance.disclosure_date(self.pro, self.db)
+                        if success:
+                            self.dependency_status['astock_finance_disclosure_date'] = True
+                            return True
+                        else:
+                            Log.logger.error(f"创建表 {table_name} 失败")
+                            return False
+                    else:
+                        Log.logger.warning(f"表 {table_name} 不存在，无法自动创建")
+                        return False
             except Exception as e:
-                Log.logger.warning(f"检查表 {table_name} 失败: {str(e)}")
+                Log.logger.error(f"检查表 {table_name} 失败: {str(e)}")
                 return False
         
     def run(self):
@@ -63,16 +105,14 @@ class TushareCollector:
         ts.set_token(cfgTS['token'])
         self.pro = ts.pro_api()
         self.db=cfgTS['db']
-        self.engine=DB.get_db_engine(cfgTS['db'])
+
         
         # 第一步：获取基础数据（股票、交易日历等）
-        # 这些数据是其他数据的基础依赖
         Log.logger.info("第一步：获取基础数据...")
         success = self.getAStockBasic()
         if not success:
             Log.logger.error("获取股票基本信息失败，终止数据采集")
             return False
-            
         # 第二步：获取行情数据
         # 依赖于股票基本信息
         Log.logger.info("第二步：获取行情数据...")
@@ -491,7 +531,7 @@ class TushareCollector:
             
             # 获取大盘指数每日指标
             Log.logger.info("获取大盘指数每日指标...")
-            self.mTTread(tsAStockIndex, 'index_dailybasic', 'astock_index_basic')
+            self.mTread(tsAStockIndex, 'index_dailybasic', 'astock_index_basic')
             
             # 获取申万行业成分股
             Log.logger.info("获取申万行业成分股...")
@@ -750,15 +790,53 @@ class TushareCollector:
             return False
     
     def mTread(self, className, functionName, dependency_check=None):
+        """
+        创建并启动数据采集线程
+        
+        Args:
+            className: 数据采集类
+            functionName: 要调用的函数名
+            dependency_check: 依赖检查的表名，如果为None则不检查
+        """
         # 检查依赖是否满足
         if dependency_check and not self.check_dependency(dependency_check):
             Log.logger.warning(f"跳过线程 {functionName}，因为依赖 {dependency_check} 未满足")
             return
+        
+        # 控制并发线程数量 - 检查当前活动线程数
+        max_concurrent_threads = 20  # 最大并发线程数
+        active_threads = sum(1 for t in self.thread_list if t.is_alive())
+        
+        if active_threads >= max_concurrent_threads:
+            # 超过最大并发线程数，等待部分线程完成
+            Log.logger.info(f"已达到最大并发线程数({max_concurrent_threads})，等待部分线程完成后再启动 {functionName}")
             
+            # 等待任意线程完成
+            while active_threads >= max_concurrent_threads:
+                # 清理已完成的线程
+                completed_threads = [t for t in self.thread_list if not t.is_alive()]
+                for t in completed_threads:
+                    if t in self.thread_list:
+                        self.thread_list.remove(t)
+                
+                # 重新计算活动线程数
+                active_threads = sum(1 for t in self.thread_list if t.is_alive())
+                
+                # 如果仍然超过限制，等待一段时间
+                if active_threads >= max_concurrent_threads:
+                    time.sleep(1)
+        
+        # 创建并启动新线程
         thread = collectThread(className, functionName, self.pro, self.db)
         thread.set_max_runtime(self.max_thread_runtime)  # 设置最大运行时间
         Log.logger.info(f"启动线程: {functionName}，最大运行时间: {self.max_thread_runtime/3600}小时")
         self.thread_list.append(thread)
+        
+        # 启动线程
+        thread.start()
+        
+        # 短暂等待，避免同时启动过多线程导致数据库锁定
+        time.sleep(0.1)
 
 
 

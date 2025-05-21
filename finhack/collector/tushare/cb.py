@@ -42,7 +42,8 @@ class tsCB:
         table='cb_price_chg'
         api='cb_price_chg'
         DB.exec("drop table if exists "+table+"_tmp",db)
-        engine=DB.get_db_engine(db)
+        # 不需要获取engine对象，直接使用db连接名
+        # engine = DB.get_db_engine(db)
         data=tsCB.get_cb_list(pro,db)
         cb_list=data['ts_code'].tolist()
         
@@ -52,7 +53,7 @@ class tsCB:
                 try:
                     df = pro.cb_price_chg(ts_code=ts_code)
                     #df.to_sql(table+'_tmp', engine, index=False, if_exists='append', chunksize=5000)
-                    DB.safe_to_sql(df, table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
+                    DB.safe_to_sql(df, table+"_tmp", db, index=False, if_exists='append', chunksize=5000)
                     break
                 except Exception as e:
                     if "每天最多访问" in str(e) or "每小时最多访问" in str(e):
@@ -85,7 +86,8 @@ class tsCB:
         table='cb_share'
         api='cb_share'
         DB.exec("drop table if exists "+table+"_tmp",db)
-        engine=DB.get_db_engine(db)
+        # 不需要获取engine对象，直接使用db连接名
+        # engine = DB.get_db_engine(db)
         data=tsCB.get_cb_list(pro,db)
         cb_list=data['ts_code'].tolist()
         
@@ -95,7 +97,7 @@ class tsCB:
                 try:
                     df = pro.cb_share(ts_code=ts_code)
                     #df.to_sql(table+'_tmp', engine, index=False, if_exists='append', chunksize=5000)
-                    DB.safe_to_sql(df, table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
+                    DB.safe_to_sql(df, table+"_tmp", db, index=False, if_exists='append', chunksize=5000)
                     break
                 except Exception as e:
                     if "每天最多访问" in str(e) or "每小时最多访问" in str(e):

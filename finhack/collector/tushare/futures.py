@@ -16,7 +16,8 @@ class tsFuntures:
         table='futures_basic'
         #DB.truncate_table(table,db)
         DB.exec("drop table if exists "+table+"_tmp",db)
-        engine=DB.get_db_engine(db)
+        # 不需要获取engine对象，直接使用db连接名
+        # engine = DB.get_db_engine(db)
         exchange_list=['CFFEX','DCE','CZCE','SHFE','NE']
         for e in exchange_list:
             data=pro.fut_basic(exchange=e)
@@ -26,7 +27,7 @@ class tsFuntures:
                    'code' in col.lower() or 'symbol' in col.lower() or 'date' in col.lower():
                     data[col] = data[col].astype(str)
             #data.to_sql(table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
-            DB.safe_to_sql(data, table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
+            DB.safe_to_sql(data, table+"_tmp", db, index=False, if_exists='append', chunksize=5000)
         
         # 获取数据库适配器类型
         from finhack.library.db import DB
@@ -86,7 +87,8 @@ class tsFuntures:
         table='futures_trade_cal'
         #DB.truncate_table(table,db)
         DB.exec("drop table if exists "+table+"_tmp",db)
-        engine=DB.get_db_engine(db)
+        # 不需要获取engine对象，直接使用db连接名
+        # engine = DB.get_db_engine(db)
         exchange_list=['CFFEX','DCE','CZCE','SHFE','NE']
         for e in exchange_list:
             data=pro.trade_cal(exchange=e)
@@ -96,7 +98,7 @@ class tsFuntures:
                    'code' in col.lower() or 'symbol' in col.lower() or 'date' in col.lower():
                     data[col] = data[col].astype(str)
             #data.to_sql(table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
-            DB.safe_to_sql(data, table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
+            DB.safe_to_sql(data, table+"_tmp", db, index=False, if_exists='append', chunksize=5000)
         
         # 获取数据库适配器类型
         from finhack.library.db import DB

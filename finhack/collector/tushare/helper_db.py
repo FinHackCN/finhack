@@ -54,7 +54,8 @@ class tsDBHelper:
     # 重新获取数据 
     def getDataAndReplace(pro, api, table, db):
         DB.exec(f"DROP TABLE IF EXISTS {table}_tmp", db)
-        engine = DB.get_db_engine(db)
+        # 不需要获取engine对象，直接使用db连接名
+        # engine = DB.get_db_engine(db)
         f = getattr(pro, api)
         data = f()
         
@@ -76,7 +77,8 @@ class tsDBHelper:
     
     # 根据最后日期获取数据
     def getDataWithLastDate(pro, api, table, db, filed='trade_date', ts_code=''):
-        engine = DB.get_db_engine(db)
+        # 不需要获取engine对象，直接使用db连接名
+        # engine = DB.get_db_engine(db)
         lastdate = tsDBHelper.getLastDateAndDelete(table=table, filed=filed, ts_code=ts_code, db=db)
         begin = datetime.datetime.strptime(lastdate, "%Y%m%d")
         end = datetime.datetime.now()
@@ -164,7 +166,8 @@ class tsDBHelper:
     # 根据股票代码获取数据
     def getDataWithCodeAndClear(pro, api, table, db):
         DB.exec(f"DROP TABLE IF EXISTS {table}_tmp", db)
-        engine = DB.get_db_engine(db)
+        # 不需要获取engine对象，直接使用db连接名
+        # engine = DB.get_db_engine(db)
         
         data = tsDBHelper.getAllAStock(True, pro, db)
         stock_list = data['ts_code'].tolist()
