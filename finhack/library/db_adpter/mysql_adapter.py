@@ -45,6 +45,9 @@ class MySQLAdapter(DbAdapter):
     @dbMonitor
     def exec_sql(self, sql: str) -> None:
         """执行SQL语句"""
+        # 预处理SQL，确保索引语句包含列长度（对于TEXT/BLOB类型）
+        sql = self._adapt_sql_for_mysql(sql)
+        
         db, cursor = self.get_connection()
         try:
             cursor.execute(sql)
@@ -54,6 +57,36 @@ class MySQLAdapter(DbAdapter):
             raise
         finally:
             db.close()
+            
+    def _adapt_sql_for_mysql(self, sql: str) -> str:
+        """
+        确保SQL语句兼容MySQL语法，尤其是对于索引创建语句
+        
+        Args:
+            sql: 原始SQL语句
+            
+        Returns:
+            str: 处理后的SQL语句
+        """
+        # 处理CREATE INDEX语句，确保TEXT/BLOB类型的列有长度限制
+        if sql.lower().startswith('create index'):
+            # 检查是否已包含长度限制
+            if not re.search(r'\([^)]+\(\d+\)\)', sql):
+                # 尝试为没有长度限制的列添加限制
+                # 匹配 "ON table_name (column_name)" 模式
+                match = re.search(r'ON\s+(\w+)\s*\(([^)]+)\)', sql)
+                if match:
+                    table_name = match.group(1)
+                    column_name = match.group(2).strip()
+                    
+                    # 如果是创建TEXT/BLOB类型列的索引但没有指定长度，添加长度限制
+                    if not re.search(r'\(\d+\)', column_name):
+                        Log.logger.debug(f"为CREATE INDEX语句添加列长度限制: {sql}")
+                        # 添加默认长度32
+                        sql = sql.replace(f"({column_name})", f"({column_name}(32))")
+                        Log.logger.debug(f"处理后的SQL: {sql}")
+        
+        return sql
     
     @dbMonitor
     def select_to_list(self, sql: str) -> List[Dict[str, Any]]:
@@ -117,9 +150,81 @@ class MySQLAdapter(DbAdapter):
     
     def safe_to_sql(self, df: pd.DataFrame, table_name: str, **kwargs) -> int:
         """安全地将DataFrame写入数据库，处理可能的列缺失问题"""
+        # 空DataFrame检查
+        if df.empty or len(df.columns) == 0:
+            Log.logger.warning(f"尝试写入空DataFrame到表 {table_name}, 操作已跳过")
+            return 0
+            
         engine = self.get_engine()
+        
         try:
+            # 预处理数据，确保类型正确
+            for col in df.columns:
+                # 对于可能包含股票代码/日期的列，强制转为字符串类型
+                if col in ['ts_code', 'symbol', 'code', 'ann_date', 'end_date', 'trade_date', 'pre_date', 'actual_date'] or \
+                   'code' in col.lower() or 'symbol' in col.lower() or 'date' in col.lower():
+                    df[col] = df[col].fillna('').astype(str)
+                    # 将字符串'None'替换为空字符串
+                    df[col] = df[col].replace('None', '')
+                # 对于数值类型的列，将None值替换为0
+                elif 'float' in str(df[col].dtype) or 'int' in str(df[col].dtype):
+                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+                # 对于其他类型的列，确保None值替换为空字符串
+                elif df[col].dtype == 'object':
+                    df[col] = df[col].fillna('').astype(str)
+            
+            # 检查表是否存在
+            if not self.table_exists(table_name):
+                # 如果表不存在，直接创建表
+                return df.to_sql(table_name, engine, **kwargs)
+            
+            # 表存在，获取表的列信息
+            try:
+                columns_query = f"SHOW COLUMNS FROM {table_name}"
+                with engine.connect() as conn:
+                    result = conn.execute(text(columns_query))
+                    existing_columns = {row[0] for row in result.fetchall()}  # 字段名在第一个位置
+                
+                # 检查DataFrame中是否有表中不存在的列
+                missing_columns = [col for col in df.columns if col not in existing_columns]
+                
+                # 如果有缺失的列，添加这些列
+                if missing_columns:
+                    for col in missing_columns:
+                        # 获取列的数据类型
+                        col_type = str(df[col].dtype)
+                        sql_type = "VARCHAR(255)"  # 默认类型
+                        
+                        # 根据pandas数据类型映射到SQL类型
+                        if "int" in col_type:
+                            sql_type = "BIGINT"
+                        elif "float" in col_type:
+                            sql_type = "DOUBLE"
+                        elif "datetime" in col_type:
+                            sql_type = "DATETIME"
+                        elif "bool" in col_type:
+                            sql_type = "BOOLEAN"
+                        
+                        # 添加列
+                        alter_query = f"ALTER TABLE {table_name} ADD COLUMN `{col}` {sql_type}"
+                        try:
+                            with engine.connect() as conn:
+                                conn.execute(text(alter_query))
+                                conn.commit()
+                            Log.logger.info(f"成功添加列 {col} 到表 {table_name}")
+                        except Exception as add_col_error:
+                            # 如果添加列失败，记录错误但继续处理其他列
+                            Log.logger.error(f"添加列 {col} 失败: {str(add_col_error)}")
+                            # 如果是列已存在错误，忽略它
+                            if "Duplicate column" not in str(add_col_error):
+                                raise
+            except Exception as e:
+                Log.logger.warning(f"获取表 {table_name} 的列信息失败: {str(e)}")
+                # 继续尝试写入，让数据库报具体错误
+            
+            # 尝试写入数据
             return df.to_sql(table_name, engine, **kwargs)
+                
         except Exception as e:
             error_str = str(e)
             # 检查是否是"Unknown column"错误
@@ -129,29 +234,36 @@ class MySQLAdapter(DbAdapter):
                 missing_column = unknown_col_match.group(1)
                 Log.logger.warning(f"表 {table_name} 中缺少列 {missing_column}，尝试添加该列")
                 
-                # 获取列的数据类型
-                col_type = str(df[missing_column].dtype)
-                sql_type = "VARCHAR(255)"  # 默认类型
-                
-                # 根据pandas数据类型映射到SQL类型
-                if "int" in col_type:
-                    sql_type = "BIGINT"
-                elif "float" in col_type:
-                    sql_type = "DOUBLE"
-                elif "datetime" in col_type:
-                    sql_type = "DATETIME"
-                
-                # 添加缺失的列
-                try:
-                    with engine.connect() as conn:
-                        conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {missing_column} {sql_type}"))
-                        conn.commit()
-                    Log.logger.info(f"成功添加列 {missing_column} 到表 {table_name}")
+                # 获取列的数据类型，如果列在DataFrame中
+                if missing_column in df.columns:
+                    col_type = str(df[missing_column].dtype)
+                    sql_type = "VARCHAR(255)"  # 默认类型
                     
-                    # 重试写入操作
-                    return df.to_sql(table_name, engine, **kwargs)
-                except Exception as add_col_error:
-                    Log.logger.error(f"添加列失败: {add_col_error}")
+                    # 根据pandas数据类型映射到SQL类型
+                    if "int" in col_type:
+                        sql_type = "BIGINT"
+                    elif "float" in col_type:
+                        sql_type = "DOUBLE"
+                    elif "datetime" in col_type:
+                        sql_type = "DATETIME"
+                    elif "bool" in col_type:
+                        sql_type = "BOOLEAN"
+                    
+                    # 添加缺失的列
+                    try:
+                        with engine.connect() as conn:
+                            alter_query = f"ALTER TABLE {table_name} ADD COLUMN `{missing_column}` {sql_type}"
+                            conn.execute(text(alter_query))
+                            conn.commit()
+                        Log.logger.info(f"成功添加列 {missing_column} 到表 {table_name}")
+                        
+                        # 重试写入操作
+                        return df.to_sql(table_name, engine, **kwargs)
+                    except Exception as add_col_error:
+                        Log.logger.error(f"添加列失败: {str(add_col_error)}")
+                        raise
+                else:
+                    Log.logger.error(f"未知列 {missing_column} 不在DataFrame中")
                     raise
             else:
                 # 如果不是列缺失错误，则抛出原始异常
@@ -238,3 +350,28 @@ class MySQLAdapter(DbAdapter):
                     return False, f"{target_table}_old"
             else:
                 return False, ""  # 无可用表 
+    
+    def get_table_columns(self, table_name: str) -> list:
+        """
+        获取表的列名列表
+        
+        Args:
+            table_name: 表名
+            
+        Returns:
+            列名列表
+        """
+        try:
+            db, cursor = self.get_connection()
+            try:
+                cursor.execute(f"SHOW COLUMNS FROM {table_name}")
+                columns = [row['Field'] for row in cursor.fetchall()]
+                return columns
+            except Exception as e:
+                Log.logger.error(f"获取表 {table_name} 的列失败: {str(e)}")
+                return []
+            finally:
+                db.close()
+        except Exception as e:
+            Log.logger.error(f"获取数据库连接失败: {str(e)}")
+            return [] 

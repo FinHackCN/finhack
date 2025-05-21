@@ -184,6 +184,11 @@ class DuckDBAdapter(DbAdapter):
     
     def safe_to_sql(self, df: pd.DataFrame, table_name: str, **kwargs) -> int:
         """安全地将DataFrame写入数据库，处理可能的列缺失问题"""
+        # 空DataFrame检查
+        if df.empty or len(df.columns) == 0:
+            Log.logger.warning(f"尝试写入空DataFrame到表 {table_name}, 操作已跳过")
+            return 0
+            
         conn = self.get_engine()
         
         try:
@@ -211,50 +216,103 @@ class DuckDBAdapter(DbAdapter):
                 elif df[col].dtype == 'object':
                     df[col] = df[col].fillna('').astype(str)
             
+            # 如果表不存在，直接创建表
             if not table_exists:
-                # 创建表，所有字段都使用VARCHAR类型
-                create_stmt = "CREATE TABLE {}(".format(table_name)
-                columns = []
-                for col in df.columns:
-                    # 所有字段都使用VARCHAR类型
-                    sql_type = "VARCHAR"
-                    columns.append(f"\"{col}\" {sql_type}")
+                # 准备参数
+                write_params = kwargs.copy()
+                if 'if_exists' not in write_params:
+                    write_params['if_exists'] = 'append'
                 
-                create_stmt += ", ".join(columns) + ")"
-                conn.execute(create_stmt)
-            else:
-                # 检查是否需要添加列 - 使用DuckDB的information_schema
-                existing_columns = set()
-                for col in conn.execute(f"SELECT column_name FROM information_schema.columns WHERE table_name='{table_name}'").fetchall():
-                    existing_columns.add(col[0])  # 列名在第一个位置
+                # 将DataFrame写入DuckDB
+                df.to_sql(table_name, conn, **write_params)
+                return len(df)
+            
+            # 表存在，检查列结构
+            try:
+                # 获取表中现有的列
+                columns_info = conn.execute(f"PRAGMA table_info('{table_name}')").fetchall()
+                existing_columns = {row[1] for row in columns_info}  # 列名在索引1的位置
                 
-                # 添加缺失的列
-                for col in df.columns:
-                    if col not in existing_columns:
-                        # 所有新增列都使用VARCHAR类型
-                        sql_type = "VARCHAR"
+                # 检查是否需要添加列
+                missing_columns = [col for col in df.columns if col not in existing_columns]
+                if missing_columns:
+                    Log.logger.info(f"表 {table_name} 缺少 {len(missing_columns)} 列：{', '.join(missing_columns)}")
+                    
+                    # 添加缺失的列
+                    for col in missing_columns:
+                        # 确定列类型
+                        col_type = "VARCHAR"  # 默认类型
+                        dtype = str(df[col].dtype)
+                        
+                        if "int" in dtype:
+                            col_type = "BIGINT"
+                        elif "float" in dtype:
+                            col_type = "DOUBLE"
+                        elif "bool" in dtype:
+                            col_type = "BOOLEAN"
+                        elif "datetime" in dtype:
+                            col_type = "TIMESTAMP"
+                        
                         try:
-                            conn.execute(f"ALTER TABLE {table_name} ADD COLUMN \"{col}\" {sql_type}")
+                            # 添加列
+                            conn.execute(f"ALTER TABLE {table_name} ADD COLUMN \"{col}\" {col_type}")
                             Log.logger.info(f"成功添加列 {col} 到表 {table_name}")
                         except Exception as add_col_error:
-                            # 如果添加列失败，记录错误但继续处理其他列
-                            Log.logger.warning(f"添加列 {col} 失败: {str(add_col_error)}")
-                            # 如果错误是列已存在，可以忽略继续
-                            if "already exists" not in str(add_col_error):
-                                raise
+                            # 如果是列已存在错误，忽略它
+                            if "Duplicate column name" not in str(add_col_error):
+                                Log.logger.error(f"添加列 {col} 失败: {str(add_col_error)}")
+                                # 继续处理其他列，不抛出异常
             
-            # 将DataFrame注册为临时视图，然后插入数据
-            if df.empty:
-                return 0
-            conn.register("temp_df", df)
-            conn.execute(f"INSERT INTO {table_name} SELECT * FROM temp_df")
-            return len(df)
+            except Exception as e:
+                Log.logger.warning(f"检查表 {table_name} 结构时出错: {str(e)}")
+                # 继续执行，尝试写入数据
+            
+            # 准备写入参数
+            write_params = kwargs.copy()
+            if 'if_exists' not in write_params:
+                write_params['if_exists'] = 'append'
+            
+            # 尝试写入数据
+            return df.to_sql(table_name, conn, **write_params)
+            
         except Exception as e:
-            Log.logger.error(f"DuckDB写入错误: {str(e)}")
-            Log.logger.error(f"错误数据: {table_name}")
+            error_str = str(e)
+            
+            # 检查是否是列不存在错误
+            column_not_found = re.search(r"Column ([^'\"]+)['\"] .* does not exist", error_str) or \
+                              re.search(r"column ['\"]?([^'\"]+)['\"]? does not exist", error_str)
+            
+            if column_not_found:
+                missing_column = column_not_found.group(1)
+                Log.logger.warning(f"写入时发现缺少列 {missing_column}，尝试添加并重试")
+                
+                try:
+                    # 确定列类型
+                    col_type = "VARCHAR"  # 默认类型
+                    if missing_column in df.columns:
+                        dtype = str(df[missing_column].dtype)
+                        if "int" in dtype:
+                            col_type = "BIGINT"
+                        elif "float" in dtype:
+                            col_type = "DOUBLE"
+                        elif "bool" in dtype:
+                            col_type = "BOOLEAN"
+                        elif "datetime" in dtype:
+                            col_type = "TIMESTAMP"
+                    
+                    # 添加列
+                    conn.execute(f"ALTER TABLE {table_name} ADD COLUMN \"{missing_column}\" {col_type}")
+                    Log.logger.info(f"成功添加列 {missing_column} 到表 {table_name}")
+                    
+                    # 重试写入
+                    return self.safe_to_sql(df, table_name, **kwargs)
+                    
+                except Exception as add_error:
+                    Log.logger.error(f"添加列 {missing_column} 失败: {str(add_error)}")
+                    raise
+            
+            Log.logger.error(f"DuckDB写入错误: {error_str}")
             raise
-        finally:
-            conn.close()
     
     @dbMonitor
     def truncate_table(self, table: str) -> bool:

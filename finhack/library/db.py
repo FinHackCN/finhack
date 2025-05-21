@@ -14,6 +14,9 @@ class DB:
     隐藏底层适配器细节，让用户代码可以无缝切换数据库
     """
     
+    # 用于缓存数据库适配器
+    _adapters = {}
+    
     @staticmethod
     def get_db_engine(connection='default'):
         """
@@ -29,17 +32,93 @@ class DB:
         return adapter.get_engine()
     
     @staticmethod
-    def get_adapter(connection='default'):
+    def get_adapter(db='default'):
         """
-        获取数据库适配器
+        获取指定的数据库适配器
         
         Args:
-            connection: 数据库连接名
+            db (str): 数据库配置名称，默认为'default'
             
         Returns:
-            数据库适配器对象
+            DbAdapter: 数据库适配器实例
         """
-        return DbAdapterFactory.get_adapter(connection)
+        try:
+            # 检查是否已有缓存
+            if db in DB._adapters:
+                return DB._adapters[db]
+            
+            from finhack.library.db_adpter.adapter_factory import DbAdapterFactory
+            adapter = DbAdapterFactory.get_adapter(db)
+            
+            if adapter:
+                # 缓存适配器
+                DB._adapters[db] = adapter
+                return adapter
+            else:
+                Log.logger.error(f"无法创建数据库适配器: {db}")
+                return None
+        except Exception as e:
+            # 处理可能的SQLite错误
+            if "disk i/o error" in str(e).lower() or "database disk image is malformed" in str(e).lower():
+                Log.logger.error(f"连接数据库时遇到磁盘I/O错误: {str(e)}")
+                
+                # 获取数据库文件路径
+                try:
+                    from finhack.library.config import Config
+                    import os
+                    
+                    db_config = Config.get_config('db', db)
+                    if db_config and 'type' in db_config and db_config['type'].lower() == 'sqlite' and 'path' in db_config:
+                        db_path = db_config['path']
+                        # 如果路径是相对路径，转换为绝对路径
+                        if not os.path.isabs(db_path):
+                            db_path = os.path.abspath(os.path.join(os.getcwd(), db_path))
+                        
+                        # 检查并删除可能的WAL文件
+                        wal_path = db_path + "-wal"
+                        shm_path = db_path + "-shm"
+                        
+                        if os.path.exists(wal_path):
+                            try:
+                                os.remove(wal_path)
+                                Log.logger.warning(f"已删除可能损坏的WAL文件: {wal_path}")
+                            except:
+                                pass
+                                
+                        if os.path.exists(shm_path):
+                            try:
+                                os.remove(shm_path)
+                                Log.logger.warning(f"已删除可能损坏的SHM文件: {shm_path}")
+                            except:
+                                pass
+                
+                        # 备份并尝试重新创建数据库
+                        if os.path.exists(db_path):
+                            import time
+                            backup_path = f"{db_path}.bak.{int(time.time())}"
+                            try:
+                                import shutil
+                                shutil.copy2(db_path, backup_path)
+                                Log.logger.warning(f"已备份数据库文件: {db_path} -> {backup_path}")
+                                
+                                # 删除原数据库文件
+                                os.remove(db_path)
+                                Log.logger.warning(f"已删除损坏的数据库文件，将重新创建: {db_path}")
+                                
+                                # 重新获取适配器
+                                from finhack.library.db_adpter.adapter_factory import AdapterFactory
+                                adapter = AdapterFactory.get_adapter(db)
+                                if adapter:
+                                    # 缓存适配器
+                                    DB._adapters[db] = adapter
+                                    return adapter
+                            except Exception as backup_error:
+                                Log.logger.error(f"备份数据库文件失败: {str(backup_error)}")
+                except Exception as config_error:
+                    Log.logger.error(f"处理数据库文件时出错: {str(config_error)}")
+            
+            Log.logger.error(f"获取数据库适配器时出错: {str(e)}")
+            return None
     
     @staticmethod
     def exec(sql: str, connection='default') -> None:

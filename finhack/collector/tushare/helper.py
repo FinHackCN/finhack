@@ -4,10 +4,13 @@ import time
 import datetime
 import traceback
 import pandas as pd
+import os
+import sqlite3
 
 from finhack.library.db import DB
 from finhack.library.alert import alert
 from finhack.library.monitor import tsMonitor
+from finhack.library.config import Config
 import finhack.library.log as Log
 
 class tsSHelper:
@@ -15,6 +18,60 @@ class tsSHelper:
     Tushare数据库辅助类
     使用DB类提供的统一数据库接口，支持DuckDB和MySQL
     """
+    
+    @staticmethod
+    def check_database_directory(db_name):
+        """
+        检查数据库目录是否存在并且有写权限，如果不存在则创建
+        
+        Args:
+            db_name: 数据库配置名称
+            
+        Returns:
+            bool: 目录可用返回True，否则返回False
+        """
+        try:
+            # 获取数据库配置
+            db_config = Config.get_config('db', db_name)
+            
+            # 检查是否为SQLite数据库
+            if db_config.get('type', '').lower() != 'sqlite':
+                return True  # 不是SQLite数据库，不需要检查目录
+            
+            # 获取数据库文件路径
+            db_path = db_config.get('path', '')
+            if not db_path:
+                Log.logger.warning(f"SQLite数据库 {db_name} 配置中未指定path参数")
+                return False
+            
+            # 如果是相对路径，转换为绝对路径
+            if not os.path.isabs(db_path):
+                # 当前工作目录
+                cwd = os.getcwd()
+                abs_db_path = os.path.abspath(os.path.join(cwd, db_path))
+                Log.logger.info(f"数据库 {db_name} 相对路径: {db_path}")
+                Log.logger.info(f"转换为绝对路径: {abs_db_path}")
+                db_path = abs_db_path
+            
+            # 获取数据库目录
+            db_dir = os.path.dirname(db_path)
+            Log.logger.info(f"数据库 {db_name} 目录: {db_dir}")
+            
+            # 检查目录是否存在
+            if not os.path.exists(db_dir):
+                Log.logger.warning(f"数据库目录不存在，创建目录: {db_dir}")
+                os.makedirs(db_dir, exist_ok=True)
+            
+            # 检查目录是否有写权限
+            if not os.access(db_dir, os.W_OK):
+                Log.logger.error(f"数据库目录没有写权限: {db_dir}")
+                return False
+            
+            Log.logger.info(f"数据库目录检查通过: {db_dir}")
+            return True
+        except Exception as e:
+            Log.logger.error(f"检查数据库目录时出错: {str(e)}")
+            return False
     
     def getAllAStockIndex(pro=None, db='default'):
         sql='select * from astock_index_basic'
@@ -41,10 +98,120 @@ class tsSHelper:
     def setIndex(table, db='default'):
         """
         为表创建索引
-        使用DB.set_index统一接口
+        在创建索引前检查字段是否存在，不存在则跳过
+        
+        Args:
+            table: 表名
+            db: 数据库连接名
         """
-        # 直接使用DB类的set_index方法
-        DB.set_index(table, db)
+        try:
+            # 获取数据库适配器
+            adapter = DB.get_adapter(db)
+            if not adapter:
+                Log.logger.error(f"无法获取数据库适配器，跳过为表 {table} 创建索引")
+                return
+                
+            # 判断数据库类型
+            db_type = "unknown"
+            if hasattr(adapter, '__class__') and hasattr(adapter.__class__, '__name__'):
+                adapter_name = adapter.__class__.__name__.lower()
+                Log.logger.debug(f"适配器类名: {adapter_name}")
+                if 'mysql' in adapter_name:
+                    db_type = "mysql"
+                elif 'sqlite' in adapter_name:
+                    db_type = "sqlite"
+                elif 'duckdb' in adapter_name:
+                    db_type = "duckdb"
+            
+            # 通过配置文件检查直接获取的更精确
+            try:
+                from finhack.library.config import Config
+                db_config = Config.get_config(db)
+                if db_config and 'type' in db_config:
+                    if db_config['type'].lower() == 'mysql':
+                        db_type = "mysql"
+                    elif db_config['type'].lower() == 'sqlite':
+                        db_type = "sqlite"
+                    elif db_config['type'].lower() == 'duckdb':
+                        db_type = "duckdb"
+                    
+                    #Log.logger.debug(f"从配置中确定数据库类型: {db_type}")
+            except Exception as config_error:
+                Log.logger.warning(f"从配置获取数据库类型失败: {str(config_error)}")
+                
+            # 额外检查连接字符串
+            try:
+                if hasattr(adapter, 'get_engine'):
+                    engine = adapter.get_engine()
+                    if hasattr(engine, 'url'):
+                        url_str = str(engine.url)
+                        #Log.logger.debug(f"数据库URL: {url_str}")
+                        if 'mysql' in url_str.lower():
+                            db_type = "mysql"
+                        elif 'sqlite' in url_str.lower():
+                            db_type = "sqlite"
+            except Exception as engine_error:
+                Log.logger.warning(f"从引擎URL获取数据库类型失败: {str(engine_error)}")
+                
+            Log.logger.info(f"数据库类型识别结果: {db_type}")
+                
+            # 获取表结构，检查字段是否存在
+            try:
+                # 获取表的字段列表
+                fields = []
+                if hasattr(adapter, 'get_table_columns'):
+                    # 如果适配器有获取列的方法
+                    fields = adapter.get_table_columns(table)
+                else:
+                    # 否则尝试通过查询获取
+                    try:
+                        # MySQL查询
+                        result = DB.select_to_list(f"SHOW COLUMNS FROM {table}", db)
+                        if result:
+                            fields = [row['Field'] for row in result]
+                    except:
+                        try:
+                            # SQLite查询
+                            result = DB.select_to_list(f"PRAGMA table_info({table})", db)
+                            if result:
+                                fields = [row['name'] for row in result]
+                        except Exception as e:
+                            Log.logger.error(f"获取表 {table} 结构失败: {str(e)}")
+                            return
+                
+                if not fields:
+                    Log.logger.warning(f"无法获取表 {table} 的字段信息，跳过创建索引")
+                    return
+                
+                # 要创建索引的字段列表
+                index_fields = ['ts_code', 'end_date', 'trade_date']
+                
+                # 为存在的字段创建索引
+                for field in index_fields:
+                    if field in fields:
+                        try:
+                            # 根据数据库类型使用不同的索引语法
+                            Log.logger.info(f"为表 {table} 创建索引: {field} (数据库类型: {db_type})")
+                            if db_type == "mysql":
+                                # MySQL需要为TEXT/BLOB类型指定长度
+                                index_sql = f"CREATE INDEX idx_{table}_{field} ON {table} ({field}(32))"
+                                Log.logger.debug(f"执行MySQL索引SQL: {index_sql}")
+                                adapter.exec_sql(index_sql)
+                            else:
+                                # SQLite和其他数据库使用通用语法
+                                index_sql = f"CREATE INDEX idx_{table}_{field} ON {table} ({field})"
+                                Log.logger.debug(f"执行通用索引SQL: {index_sql}")
+                                adapter.exec_sql(index_sql)
+                        except Exception as e:
+                            # 索引可能已存在，不影响程序继续执行
+                            Log.logger.warning(f"为表 {table} 创建索引 {field} 时出错: {str(e)}")
+                    else:
+                        Log.logger.info(f"表 {table} 中不存在字段 {field}，跳过创建索引")
+            except Exception as e:
+                Log.logger.error(f"检查表 {table} 结构时出错: {str(e)}")
+        except Exception as e:
+            Log.logger.error(f"为表 {table} 创建索引时出错: {str(e)}")
+            Log.logger.error(traceback.format_exc())
   
     def getAllFund(db='default'):
         sql='select * from fund_basic'
@@ -66,7 +233,27 @@ class tsSHelper:
             bool: 操作成功返回True，否则返回False
         """
         try:
-            DB.exec(f"DROP TABLE IF EXISTS {table}_tmp", db)
+            # 首先检查数据库目录是否可用
+            if not tsSHelper.check_database_directory(db):
+                Log.logger.error(f"{api}: 数据库目录检查失败，无法继续操作")
+                return False
+            
+            # 检查数据库连接是否正常
+            adapter = DB.get_adapter(db)
+            if not adapter:
+                Log.logger.error(f"{api}: 无法获取数据库适配器")
+                return False
+                
+            # 删除临时表(如果存在)
+            Log.logger.info(f"{api}: 正在删除临时表 {table}_tmp...")
+            try:
+                DB.exec(f"DROP TABLE IF EXISTS {table}_tmp", db)
+            except Exception as drop_error:
+                Log.logger.warning(f"{api}: 删除临时表失败: {str(drop_error)}")
+                # 尝试继续执行，可能是临时表不存在
+            
+            # 调用API获取数据
+            Log.logger.info(f"{api}: 正在调用Tushare API获取数据...")
             f = getattr(pro, api)
             
             try:
@@ -78,20 +265,30 @@ class tsSHelper:
                     return False
                 
                 # 预处理数据，确保关键字段为字符串类型
+                Log.logger.info(f"{api}: 正在处理{len(data)}条数据...")
                 for col in data.columns:
                     if col in ['ts_code', 'symbol', 'code', 'ann_date', 'end_date', 'trade_date', 'pre_date', 'actual_date'] or \
                        'code' in col.lower() or 'symbol' in col.lower() or 'date' in col.lower():
                         data[col] = data[col].fillna('').astype(str)
                 
-                # 使用DB类的to_sql方法
+                # 写入临时表
+                Log.logger.info(f"{api}: 正在将数据写入临时表 {table}_tmp...")
                 DB.safe_to_sql(data, f"{table}_tmp", db, index=False, if_exists='replace', chunksize=5000)
                 
+                # 检查临时表是否创建成功
+                if not DB.table_exists(f"{table}_tmp", db):
+                    Log.logger.error(f"{api}: 临时表 {table}_tmp 创建失败")
+                    return False
+                
                 # 使用统一的replace_table方法替换表
+                Log.logger.info(f"{api}: 正在将临时表替换为正式表...")
                 table_to_use = DB.replace_table(table, f"{table}_tmp", db)
                 
                 # 设置索引
+                Log.logger.info(f"{api}: 正在为表 {table_to_use} 创建索引...")
                 tsSHelper.setIndex(table_to_use, db)
                 
+                Log.logger.info(f"{api}: 数据同步完成，共{len(data)}条记录")
                 return True
             except Exception as api_error:
                 if "每天最多访问" in str(api_error) or "每小时最多访问" in str(api_error):
@@ -101,23 +298,41 @@ class tsSHelper:
                     Log.logger.warning(f"{api}: 触发限流，等待重试。\n{str(api_error)}")
                     time.sleep(15)
                     # 重试一次
+                    Log.logger.info(f"{api}: 正在重试获取数据...")
                     data = f()
                     if data is None or data.empty:
                         Log.logger.warning(f"{api}: 重试后仍未获取到任何数据")
                         return False
                     
                     # 预处理数据
+                    Log.logger.info(f"{api}: 正在处理{len(data)}条数据...")
                     for col in data.columns:
                         if col in ['ts_code', 'symbol', 'code', 'ann_date', 'end_date', 'trade_date', 'pre_date', 'actual_date'] or \
                            'code' in col.lower() or 'symbol' in col.lower() or 'date' in col.lower():
                             data[col] = data[col].fillna('').astype(str)
                     
+                    # 写入临时表
+                    Log.logger.info(f"{api}: 正在将数据写入临时表 {table}_tmp...")
                     DB.safe_to_sql(data, f"{table}_tmp", db, index=False, if_exists='replace', chunksize=5000)
+                    
+                    # 检查临时表是否创建成功
+                    if not DB.table_exists(f"{table}_tmp", db):
+                        Log.logger.error(f"{api}: 临时表 {table}_tmp 创建失败")
+                        return False
+                    
+                    # 替换表
+                    Log.logger.info(f"{api}: 正在将临时表替换为正式表...")
                     table_to_use = DB.replace_table(table, f"{table}_tmp", db)
+                    
+                    # 设置索引
+                    Log.logger.info(f"{api}: 正在为表 {table_to_use} 创建索引...")
                     tsSHelper.setIndex(table_to_use, db)
+                    
+                    Log.logger.info(f"{api}: 数据同步完成，共{len(data)}条记录")
                     return True
                 else:
                     Log.logger.error(f"{api}: 调用API失败: {str(api_error)}")
+                    Log.logger.error(traceback.format_exc())
                     return False
         except Exception as e:
             Log.logger.error(f"{api}: 处理数据过程中出错: {str(e)}")
@@ -271,6 +486,19 @@ class tsSHelper:
             table_exists = adapter.table_exists(table)
             
             if not table_exists:
+                Log.logger.warning(f"表 {table} 不存在，返回默认日期")
+                
+                # 尝试清理相关的checkpoint文件
+                try:
+                    from finhack.collector.tushare.astockprice import tsAStockPrice
+                    # 提取API名称（通常是表名中astock_price_之后的部分）
+                    if table.startswith('astock_price_'):
+                        api = table[len('astock_price_'):]
+                        # 重置checkpoint
+                        tsAStockPrice.reset_checkpoint(api, table)
+                except Exception as cp_error:
+                    Log.logger.warning(f"清理checkpoint时出错: {str(cp_error)}")
+                
                 return '20000104'  # 如果表不存在，返回2000年1月4日(A股最早可获取的数据日期)
             
             # 获取最后日期，使用兼容SQLite的语法

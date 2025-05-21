@@ -295,6 +295,9 @@ def loadKline(market='cn_stock', freq='1m', start_date="20200101", end_date="202
                         df = df[mask]
                         
                         if not df.empty:
+                            # 将limit_amount列的空字符串转换为None（会被存储为NULL）
+                            if 'limit_amount' in df.columns:
+                                df['limit_amount'] = df['limit_amount'].replace('', None)
                             code_dfs.append(df)
                     except Exception as e:
                         logging.error(f"Error loading {file_path}: {str(e)}")
@@ -359,6 +362,9 @@ def loadKline(market='cn_stock', freq='1m', start_date="20200101", end_date="202
                         df['time'] = pd.to_datetime(df['time'])
                         if hasattr(df['time'].dt, 'tz') and df['time'].dt.tz is not None:
                             df['time'] = df['time'].dt.tz_localize(None)
+                        # 将limit_amount列的空字符串转换为None（会被存储为NULL）
+                        if 'limit_amount' in df.columns:
+                            df['limit_amount'] = df['limit_amount'].replace('', None)
                         return df
                 except Exception as e:
                     logging.error(f"Error loading {file_path}: {str(e)}")
