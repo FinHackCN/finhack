@@ -57,6 +57,9 @@ class DB:
             else:
                 Log.logger.error(f"无法创建数据库适配器: {db}")
                 return None
+        except ValueError as ve:
+            Log.logger.critical(f"数据库配置错误，导致无法获取适配器: {str(ve)}。程序将终止。")
+            raise
         except Exception as e:
             # 处理可能的SQLite错误
             if "disk i/o error" in str(e).lower() or "database disk image is malformed" in str(e).lower():

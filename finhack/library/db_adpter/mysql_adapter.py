@@ -149,7 +149,7 @@ class MySQLAdapter(DbAdapter):
         return df.to_sql(table_name, engine, index=False, if_exists=if_exists, chunksize=5000)
     
     def safe_to_sql(self, df: pd.DataFrame, table_name: str, **kwargs) -> int:
-        """安全地将DataFrame写入数据库，处理可能的列缺失问题"""
+        """安全地将DataFrame写入数据库，处理可能的列缺失问题。类型转换已移除。"""
         # 空DataFrame检查
         if df.empty or len(df.columns) == 0:
             Log.logger.warning(f"尝试写入空DataFrame到表 {table_name}, 操作已跳过")
@@ -157,55 +157,40 @@ class MySQLAdapter(DbAdapter):
             
         engine = self.get_engine()
         
+        final_to_sql_kwargs = kwargs.copy()
+        final_to_sql_kwargs.setdefault('index', False)
+        final_to_sql_kwargs.setdefault('if_exists', 'append')
+
         try:
-            # 预处理数据，确保类型正确
-            for col in df.columns:
-                # 对于可能包含股票代码/日期的列，强制转为字符串类型
-                if col in ['ts_code', 'symbol', 'code', 'ann_date', 'end_date', 'trade_date', 'pre_date', 'actual_date'] or \
-                   'code' in col.lower() or 'symbol' in col.lower() or 'date' in col.lower():
-                    df[col] = df[col].fillna('').astype(str)
-                    # 将字符串'None'替换为空字符串
-                    df[col] = df[col].replace('None', '')
-                # 对于数值类型的列，将None值替换为0
-                elif 'float' in str(df[col].dtype) or 'int' in str(df[col].dtype):
-                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-                # 对于其他类型的列，确保None值替换为空字符串
-                elif df[col].dtype == 'object':
-                    df[col] = df[col].fillna('').astype(str)
+            # 类型转换循环已从此方法中移除
             
             # 检查表是否存在
             if not self.table_exists(table_name):
                 # 如果表不存在，直接创建表
-                return df.to_sql(table_name, engine, **kwargs)
+                return df.to_sql(table_name, engine, **final_to_sql_kwargs)
             
             # 表存在，获取表的列信息
             try:
                 columns_query = f"SHOW COLUMNS FROM {table_name}"
                 with engine.connect() as conn:
                     result = conn.execute(text(columns_query))
-                    existing_columns = {row[0] for row in result.fetchall()}  # 字段名在第一个位置
+                    existing_columns = {row[0] for row in result.fetchall()}
                 
-                # 检查DataFrame中是否有表中不存在的列
                 missing_columns = [col for col in df.columns if col not in existing_columns]
                 
-                # 如果有缺失的列，添加这些列
                 if missing_columns:
                     for col in missing_columns:
-                        # 获取列的数据类型
-                        col_type = str(df[col].dtype)
+                        col_type_str = str(df[col].dtype)
                         sql_type = "VARCHAR(255)"  # 默认类型
-                        
-                        # 根据pandas数据类型映射到SQL类型
-                        if "int" in col_type:
+                        if "int" in col_type_str:
                             sql_type = "BIGINT"
-                        elif "float" in col_type:
+                        elif "float" in col_type_str:
                             sql_type = "DOUBLE"
-                        elif "datetime" in col_type:
+                        elif "datetime" in col_type_str:
                             sql_type = "DATETIME"
-                        elif "bool" in col_type:
-                            sql_type = "BOOLEAN"
+                        elif "bool" in col_type_str:
+                            sql_type = "BOOLEAN" # MySQL supports BOOLEAN (alias for TINYINT(1))
                         
-                        # 添加列
                         alter_query = f"ALTER TABLE {table_name} ADD COLUMN `{col}` {sql_type}"
                         try:
                             with engine.connect() as conn:
@@ -213,43 +198,30 @@ class MySQLAdapter(DbAdapter):
                                 conn.commit()
                             Log.logger.info(f"成功添加列 {col} 到表 {table_name}")
                         except Exception as add_col_error:
-                            # 如果添加列失败，记录错误但继续处理其他列
-                            Log.logger.error(f"添加列 {col} 失败: {str(add_col_error)}")
-                            # 如果是列已存在错误，忽略它
+                            # 如果添加列失败（且不是因为列已存在），记录错误并抛出异常
                             if "Duplicate column" not in str(add_col_error):
+                                Log.logger.error(f"添加列 {col} 到表 {table_name} 失败: {str(add_col_error)}")
                                 raise
+                            else:
+                                Log.logger.warning(f"尝试添加已存在的列 {col} 到表 {table_name}: {str(add_col_error)}")
             except Exception as e:
-                Log.logger.warning(f"获取表 {table_name} 的列信息失败: {str(e)}")
-                # 继续尝试写入，让数据库报具体错误
+                Log.logger.warning(f"获取表 {table_name} 的列信息或添加列时失败: {str(e)}")
+                # 继续尝试写入，让数据库处理或引发更具体的错误
             
             # 尝试写入数据
-            return df.to_sql(table_name, engine, **kwargs)
+            return df.to_sql(table_name, engine, **final_to_sql_kwargs)
                 
         except Exception as e:
             error_str = str(e)
-            # 检查是否是"Unknown column"错误
+            # 检查是否是"Unknown column"错误 (MySQL specific)
             unknown_col_match = re.search(r"Unknown column '([^']+)'", error_str)
             
             if unknown_col_match:
                 missing_column = unknown_col_match.group(1)
-                Log.logger.warning(f"表 {table_name} 中缺少列 {missing_column}，尝试添加该列")
+                Log.logger.warning(f"写入时表 {table_name} 中缺少列 {missing_column}，尝试添加该列")
                 
-                # 获取列的数据类型，如果列在DataFrame中
                 if missing_column in df.columns:
-                    col_type = str(df[missing_column].dtype)
-                    sql_type = "VARCHAR(255)"  # 默认类型
-                    
-                    # 根据pandas数据类型映射到SQL类型
-                    if "int" in col_type:
-                        sql_type = "BIGINT"
-                    elif "float" in col_type:
-                        sql_type = "DOUBLE"
-                    elif "datetime" in col_type:
-                        sql_type = "DATETIME"
-                    elif "bool" in col_type:
-                        sql_type = "BOOLEAN"
-                    
-                    # 添加缺失的列
+                    sql_type = "VARCHAR(255)"
                     try:
                         with engine.connect() as conn:
                             alter_query = f"ALTER TABLE {table_name} ADD COLUMN `{missing_column}` {sql_type}"
@@ -258,15 +230,16 @@ class MySQLAdapter(DbAdapter):
                         Log.logger.info(f"成功添加列 {missing_column} 到表 {table_name}")
                         
                         # 重试写入操作
-                        return df.to_sql(table_name, engine, **kwargs)
+                        return df.to_sql(table_name, engine, **final_to_sql_kwargs)
                     except Exception as add_col_error:
-                        Log.logger.error(f"添加列失败: {str(add_col_error)}")
-                        raise
+                        Log.logger.error(f"重试时添加列 {missing_column} 失败: {str(add_col_error)}")
+                        raise # 添加列失败，重新抛出异常
                 else:
-                    Log.logger.error(f"未知列 {missing_column} 不在DataFrame中")
-                    raise
+                    Log.logger.error(f"DataFrame 中不包含尝试添加的未知列 {missing_column}")
+                    raise # 列不在DataFrame中，无法修复，重新抛出原始异常
             else:
-                # 如果不是列缺失错误，则抛出原始异常
+                # 如果不是我们可以处理的"Unknown column"错误，则重新抛出原始异常
+                Log.logger.error(f"MySQL写入DataFrame异常: {str(e)}")
                 raise
     
     @dbMonitor
