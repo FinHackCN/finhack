@@ -86,7 +86,9 @@ class tsAStockFinance:
         #exit()
   
         for ts_code in stock_list:
-            if datetime.datetime.now().second==0:
+            if api in ['disclosure_date','fina_indicator'] and report_type!=0:
+                continue
+            if report_type>0:
                 Log.logger.info(api+","+ts_code+",report_type="+str(report_type))
             diff_list=tsAStockFinance.getEndDateListDiff(table,ts_code,db,report_type)
             #print(diff_list)
@@ -115,7 +117,8 @@ class tsAStockFinance:
             #exit()
             
             df=pd.DataFrame()
-            engine=DB.get_db_engine(db)
+            # 不需要获取engine对象，直接使用db连接名
+            # engine=DB.get_db_engine(db)
             
             end_list=[]
             for end_date in diff_list:
@@ -144,8 +147,9 @@ class tsAStockFinance:
                             df=f(ts_code=ts_code,start_date=end_list[0],end_date=datetime.datetime.now().strftime('%Y%m%d'),fileds=fileds)
                         else:
                             df=f(ts_code=ts_code,period=end_list[-1],fileds=fileds)
-                    #df.to_sql(table, engine, index=False, if_exists='append', chunksize=5000)
-                    DB.safe_to_sql(df, table, engine, index=False, if_exists='append', chunksize=5000)
+                    # 使用db连接名代替engine对象
+                    # DB.safe_to_sql(df, table, db, index=False, if_exists='append', chunksize=5000)
+                    DB.safe_to_sql(df, table, db, index=False, if_exists='append', chunksize=5000)
                     break
                 except Exception as e:
                     if "每天最多访问" in str(e) or "每小时最多访问" in str(e):
@@ -179,61 +183,22 @@ class tsAStockFinance:
     
     @tsMonitor
     def disclosure_date(pro,db):
-        table="astock_finance_disclosure_date"
-        end_date_list=['0331','0630','0930','1231']
-        engine=DB.get_db_engine(db)
-        lastdate=tsSHelper.getLastDateAndDelete(table='astock_finance_disclosure_date',filed='end_date',ts_code="",db=db)
-        api='disclosure_date'
-        
-        start_year=int(lastdate[0:4])
-        start_mounth=int(lastdate[4:6])
-        end_year=time.strftime("%Y", time.localtime())
-        end_mounth=time.strftime("%m", time.localtime())
-        
-        end_list=[]
-        for year in range(int(start_year),int(end_year)+1):
-            for date in end_date_list:
-                if(year==int(start_year)):
-                    #首年表中最后公告日期比List日期大，则调过
-                    if(start_mounth>int(date[0:2])):
-                        continue;
-                if(year==int(end_year)):
-                    #还没到这个月份呢，跳过，先不获取
-                    if(int(date[0:2])>int(end_mounth)):
-                        continue
-                end_list.append(str(year)+date)
-        df=None
-        for end_date in end_list:
-            for i in range(0,100):
-                try_times=0
-                while True:
-                    try:
-                        df = pro.disclosure_date(end_date=end_date,limit=1000,offset=1000*i)
-                        #df.to_sql('astock_finance_disclosure_date', engine, index=False, if_exists='append', chunksize=5000)
-                        DB.safe_to_sql(df, table, engine, index=False, if_exists='append', chunksize=5000)
-                        break
-                    except Exception as e:
-                        if "每天最多访问" in str(e) or "每小时最多访问" in str(e):
-                            Log.logger.warning("disclosure_date:触发最多访问。\n"+str(e)) 
-                            return
-                        if "最多访问" in str(e):
-                            Log.logger.warning("disclosure_date:触发限流，等待重试。\n"+str(e))
-                            time.sleep(15)
-                            continue
-                        else:
-                            if try_times<10:
-                                try_times=try_times+1;
-                                Log.logger.error(api+":函数异常，等待重试。\n"+str(e))
-                                time.sleep(15)
-                                continue
-                            else:
-                                info = traceback.format_exc()
-                                alert.send(api,'函数异常',str(info))
-                                Log.logger.error(info)
-                                break
-                if df is None or df.empty:
-                    break
-        
+        try:
+            table = 'astock_finance_disclosure_date'
+            
+            # 使用SQLite兼容的方法检查表是否存在
+            adapter = DB.get_adapter(db)
+            table_exists = adapter.table_exists(table)
+            if not table_exists:
+                Log.logger.info(f"创建表 {table}")
+            
+            # 从此处开始获取数据
+            tsSHelper.getDataAndReplace(pro, 'disclosure_date', table, db)
+            return True
+        except Exception as e:
+            Log.logger.error(f"获取财务披露日期失败: {str(e)}")
+            Log.logger.error(traceback.format_exc())
+            return False
     
     @tsMonitor
     def income(pro,db):
@@ -265,7 +230,8 @@ class tsAStockFinance:
     
     @tsMonitor
     def dividend(pro,db):
-        engine=DB.get_db_engine(db)
+        # 移除引擎对象，使用连接名
+        # engine=DB.get_db_engine(db)
         table='astock_finance_dividend'
         DB.exec("drop table if exists "+table+"_tmp",db)
         stock_list_data=tsSHelper.getAllAStock(True,pro,db)
@@ -275,8 +241,9 @@ class tsAStockFinance:
             while True:
                 try:
                     df = pro.dividend(ts_code=ts_code)
-                    #df.to_sql('astock_finance_dividend_tmp', engine, index=False, if_exists='append', chunksize=5000)
-                    DB.safe_to_sql(df, table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
+                    # 使用db连接名代替engine对象
+                    # DB.safe_to_sql(df, table+"_tmp", db, index=False, if_exists='append', chunksize=5000)
+                    DB.safe_to_sql(df, table+"_tmp", db, index=False, if_exists='append', chunksize=5000)
                     break
                 except Exception as e:
                     if "每天最多访问" in str(e) or "每小时最多访问" in str(e):

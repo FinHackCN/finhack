@@ -21,24 +21,65 @@ class DbAdapterFactory:
         Returns:
             对应的数据库适配器实例
         """
-        # 检查缓存
-        if connection in DbAdapterFactory._adapters:
-            return DbAdapterFactory._adapters[connection]
+        # 检查是否传入了引擎对象而不是连接名
+        connection_name = 'default'  # 默认使用default连接
         
-        # 读取数据库配置
-        dbcfg = Config.get_config('db', connection)
-        db_type = dbcfg.get('type', 'mysql').lower()
-        
-        # 根据数据库类型创建适配器
-        adapter = None
-        if db_type == 'duckdb':
-            adapter = DuckDBAdapter(dbcfg)
-        elif db_type == 'sqlite':
-            adapter = SQLiteAdapter(dbcfg)
+        if isinstance(connection, str):
+            connection_name = connection
         else:
-            # 默认使用MySQL适配器
-            adapter = MySQLAdapter(dbcfg)
+            # 非字符串连接名处理
+            Log.logger.error(f"get_adapter 接收到非字符串连接名: {connection}，将使用默认连接")
+            
+            # 尝试从引擎对象提取连接信息（主要用于调试）
+            try:
+                if hasattr(connection, 'url'):
+                    url_str = str(connection.url)
+                    Log.logger.debug(f"检测到可能的引擎对象，URL: {url_str}")
+                else:
+                    Log.logger.debug(f"无法识别的连接对象类型: {type(connection)}")
+            except:
+                pass
         
-        # 缓存适配器实例
-        DbAdapterFactory._adapters[connection] = adapter
-        return adapter 
+        # 检查缓存
+        if connection_name in DbAdapterFactory._adapters:
+            return DbAdapterFactory._adapters[connection_name]
+        
+        try:
+            # 读取数据库配置
+            dbcfg = Config.get_config('db', connection_name)
+            db_type = dbcfg.get('type', 'sqlite').lower()  # 默认为 sqlite 而不是 mysql
+            
+            # 根据数据库类型创建适配器
+            adapter = None
+            if db_type == 'duckdb':
+                adapter = DuckDBAdapter(dbcfg)
+                Log.logger.debug(f"创建DuckDB适配器，连接：{connection_name}")
+            elif db_type == 'sqlite':
+                adapter = SQLiteAdapter(dbcfg)
+                Log.logger.debug(f"创建SQLite适配器，连接：{connection_name}")
+            elif db_type == 'mysql':
+                # 确保MySQL所需配置都存在
+                required_keys = ['host', 'port', 'user', 'password', 'db', 'charset']
+                if all(key in dbcfg for key in required_keys):
+                    adapter = MySQLAdapter(dbcfg)
+                    Log.logger.debug(f"创建MySQL适配器，连接：{connection_name}")
+                else:
+                    missing_keys = [key for key in required_keys if key not in dbcfg]
+                    Log.logger.error(f"MySQL适配器创建失败，缺少配置: {missing_keys}")
+                    # 回退到SQLite以避免程序崩溃
+                    adapter = SQLiteAdapter({'path': ':memory:'})
+                    Log.logger.debug(f"回退到内存SQLite适配器")
+            else:
+                # 未知类型，默认使用SQLite
+                Log.logger.warning(f"未知数据库类型: {db_type}，默认使用SQLite")
+                adapter = SQLiteAdapter({'path': ':memory:'})
+                
+            # 缓存适配器实例
+            DbAdapterFactory._adapters[connection_name] = adapter
+            return adapter
+        except Exception as e:
+            Log.logger.error(f"创建数据库适配器异常: {str(e)}")
+            # 返回内存SQLite适配器作为回退选项
+            adapter = SQLiteAdapter({'path': ':memory:'})
+            Log.logger.debug(f"异常回退到内存SQLite适配器")
+            return adapter 

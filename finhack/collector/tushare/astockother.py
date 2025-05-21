@@ -23,7 +23,8 @@ class tsAStockOther:
     @tsMonitor
     def report_rc(pro,db):
         table="astock_other_report_rc"
-        engine=DB.get_db_engine(db)
+        # 不需要获取engine对象，直接使用db连接名
+        # engine = DB.get_db_engine(db)
         if True:
             try_times=0
             while True:
@@ -33,7 +34,7 @@ class tsAStockOther:
                     lastdate=tsSHelper.getLastDateAndDelete('astock_other_report_rc','report_date',ts_code='',db=db)
                     df =pro.report_rc(start_date=lastdate, end_date=today)
                     #df.to_sql('astock_other_report_rc', engine, index=False, if_exists='append', chunksize=5000)
-                    DB.safe_to_sql(df, table, engine, index=False, if_exists='append', chunksize=5000)
+                    DB.safe_to_sql(df, table, db, index=False, if_exists='append', chunksize=5000)
                     break
                 except Exception as e:
                     if "每天最多访问" in str(e) or "每小时最多访问" in str(e):
@@ -97,7 +98,8 @@ class tsAStockOther:
     #感觉tushare的这个接口好像有问题
         table='astock_other_cyq_chips'
         DB.exec("drop table if exists "+table+"_tmp",db)
-        engine=DB.get_db_engine(db)
+        # 不需要获取engine对象，直接使用db连接名
+        # engine = DB.get_db_engine(db)
         data=tsSHelper.getAllAStock(True,pro,db)
         stock_list=data['ts_code'].tolist()
         
@@ -107,7 +109,7 @@ class tsAStockOther:
                 try:
                     df = pro.cyq_chips(ts_code=ts_code)
                     #df.to_sql('astock_other_cyq_chips_tmp', engine, index=False, if_exists='append', chunksize=5000)
-                    DB.safe_to_sql(df, table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
+                    DB.safe_to_sql(df, table+"_tmp", db, index=False, if_exists='append', chunksize=5000)
                     break
                 except Exception as e:
                     if "每天最多访问" in str(e) or "每小时最多访问" in str(e):
