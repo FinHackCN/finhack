@@ -50,7 +50,7 @@ class BacktestTrader:
         self.last_trades: Dict[str, List] = {}
         pass
         
-    def add_strategy(self, strategy_config: Dict[str, Any]):
+    def add_strategy(self, strategy_name:str):
         """
         添加策略
         
@@ -62,15 +62,20 @@ class BacktestTrader:
                 - initial_cash: 初始资金
                 - params: 策略参数
         """
-        adapter_id = strategy_config['adapter_id']
+
+
+        print(strategy_name)
+        strategy_info=strategy_name.split(".")
+        adapter_id = strategy_info[0]
+        strategy_class = strategy_info[1]
         
         # 创建账户
+        strategy_config={} #待补充
         initial_cash = strategy_config.get('initial_cash', getattr(self.args, 'cash', 1000000))
         self.trade_center.create_account(adapter_id, initial_cash)
         
         # 加载策略类
-        strategy_path = strategy_config['strategy_path']
-        strategy_class = strategy_config.get('strategy_class', 'Strategy')
+        strategy_path = STRATEGIES_DIR+strategy_name.replace(".","/")+".py"
         
         # 动态导入策略模块
         spec = importlib.util.spec_from_file_location("strategy", strategy_path)
@@ -98,15 +103,12 @@ class BacktestTrader:
         self.logger.info(f"Added strategy {adapter_id} from {strategy_path}")
         
     def run(self):
-        print("run")
         """运行回测"""
         self.logger.info("Starting backtest...")
         
         # 获取交易日历
         trading_calendar = self.data_center.get_calendar()
-        print(trading_calendar)
-        exit()
-        
+
         # 过滤到回测时间范围内的交易日
         start = datetime.strptime(self.start_date, "%Y%m%d")
         end = datetime.strptime(self.end_date, "%Y%m%d")
@@ -115,6 +117,11 @@ class BacktestTrader:
             if start <= datetime.strptime(date, "%Y%m%d") <= end
         ]
         
+        # 添加策略
+        strategy_list = self.args.strategies.split(",")
+        for strategy in strategy_list:
+            self.add_strategy(strategy)
+
         # 初始化事件中心
         self.event_center.initialize(trading_calendar)
         
@@ -123,6 +130,7 @@ class BacktestTrader:
         while True:
             # 获取下一个事件
             event = self.event_center.get_next_event()
+            
             if event is None:
                 break
                 
@@ -132,6 +140,11 @@ class BacktestTrader:
             # 分发事件
             self.event_center.dispatch_event(event, self.trade_center, self.strategies)
             
+            print(self.trade_center)
+            print(self.strategies)
+            exit()
+
+
             # 检查订单和成交更新
             if event.event_type == EventType.BAR:
                 self.event_center.check_order_trade_updates(
