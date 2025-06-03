@@ -12,7 +12,7 @@ from finhack.trader.default.default_trader import DefaultTrader
 from flask import Flask, send_from_directory,render_template,request
 import re
 class DefaultServer:
-    def run(self):
+    def run(self,args):
         app = Flask(__name__,
                     template_folder=REPORTS_DIR,
                     static_folder=REPORTS_DIR+'static/')

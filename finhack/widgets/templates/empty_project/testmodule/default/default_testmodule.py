@@ -17,7 +17,7 @@ from finhack.trader.default.context import context,g
 from finhack.trader.default.calendar import Calendar
 class DefaultTestmodule():
     #finhack testmodule run
-    def __init__(self):
+    def __init__(self,args):
         pass
     def run(self):
         Log.logger.debug("----%s----" % (__file__))

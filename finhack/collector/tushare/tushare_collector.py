@@ -27,7 +27,7 @@ import os
 import sqlite3
 
 class TushareCollector:
-    def __init__(self):
+    def __init__(self,args):
         self.thread_list = []
         self.max_thread_runtime = 12 * 60 * 60  # 12小时，单位为秒
         # 用于跟踪各个数据表的获取状态

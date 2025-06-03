@@ -301,19 +301,67 @@ class DataCenter:
             return np.array([])
             
     def get_calendar(self, market: str = "cn_stock") -> List[str]:
-        """获取交易日历"""
+        """
+        获取交易日历
+        
+        Args:
+            market: 市场代码，支持 cn_stock, cn_index, cn_fund, cn_cb, cn_future, hk_stock 等
+            
+        Returns:
+            交易日期字符串列表，格式为 YYYYMMDD
+        """
         try:
-            # TODO: 实现交易日历获取逻辑
-            # 暂时返回简单的示例
-            from finhack.library.db import DB
-            cal = DB.select_to_df(
-                "select cal_date from astock_trade_cal where is_open=1 "
-                "and exchange='SSE' order by cal_date asc", 'tushare'
-            )
-            return cal['cal_date'].tolist()
+            # 构建CSV文件路径
+            market_dir = f"{DATA_DIR}/market"
+            calendar_file = f"{market_dir}/reference/{market}/{market}_calendar.csv"
+            
+            # 检查文件是否存在
+            if not os.path.exists(calendar_file):
+                self.logger.warning(f"Calendar file not found: {calendar_file}")
+                return []
+            
+            # 读取CSV文件
+            df = pd.read_csv(calendar_file)
+            
+            # 根据CSV文件的列名获取交易日期
+            # 通常CSV文件包含 cal_date 和 is_open 列
+            if 'cal_date' in df.columns and 'is_open' in df.columns:
+                # 过滤出开市日期
+                trading_days = df[df['is_open'] == 1]['cal_date'].tolist()
+            elif 'cal_date' in df.columns:
+                # 如果没有is_open列，假设所有日期都是交易日
+                trading_days = df['cal_date'].tolist()
+            elif 'date' in df.columns:
+                # 如果列名是date
+                if 'is_open' in df.columns:
+                    trading_days = df[df['is_open'] == 1]['date'].tolist()
+                else:
+                    trading_days = df['date'].tolist()
+            else:
+                # 如果列结构不明确，取第一列作为日期列
+                first_col = df.columns[0]
+                if len(df.columns) > 1:
+                    # 有多列时，假设第二列是开市标识
+                    second_col = df.columns[1]
+                    trading_days = df[df[second_col] == 1][first_col].tolist()
+                else:
+                    trading_days = df[first_col].tolist()
+            
+            # 确保日期格式为字符串
+            trading_days = [str(date).replace('-', '').replace('/', '') for date in trading_days]
+            
+            # 过滤出8位数字格式的日期
+            trading_days = [date for date in trading_days if len(date) == 8 and date.isdigit()]
+            
+            # 按日期排序
+            trading_days.sort()
+            
+            self.logger.info(f"Loaded {len(trading_days)} trading days for market {market}")
+            return trading_days
+            
         except Exception as e:
-            self.logger.error(f"Error getting calendar: {str(e)}")
-            return []
+            self.logger.error(f"Error loading calendar for market {market}: {str(e)}")
+
             
     def _generate_cache_key(self, *args) -> str:
         """生成缓存键"""

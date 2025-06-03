@@ -48,27 +48,80 @@ class BaseLoader():
         self.module_path="finhack."+self.module_name+"."+self.vendor+"."+self.vendor+'_'+self.module_name
         self.user_module_path=BASE_DIR+"/"+self.module_name+"/"+self.vendor+"/"+self.vendor+'_'+self.module_name+".py"
         self.module = ClassLoader.get_module(module_path=self.module_path,user_module_path=self.user_module_path)
+        Log.logger.debug(f"module_path:{self.module_path}")
+        Log.logger.debug(f"user_module_path:{self.user_module_path}")
         try:
-            self.klass = getattr(self.module, self.vendor.capitalize()+self.module_name.capitalize())()
+            Log.logger.debug(f"klass:{self.vendor.capitalize()+self.module_name.capitalize()}")
+            
+            # 分步处理：先获取类，再实例化
+            class_name = self.vendor.capitalize() + self.module_name.capitalize()
+            
+            # 第一步：检查类是否存在
+            try:
+                klass_type = getattr(self.module, class_name)
+                Log.logger.debug(f"成功找到类: {class_name}")
+            except AttributeError as e:
+                Log.logger.error(f"找不到类 '{class_name}' 在模块 {self.module}")
+                Log.logger.error(f"模块中可用的类和函数: {[name for name in dir(self.module) if not name.startswith('_')]}")
+                raise AttributeError(f"模块 {self.module.__name__} 中不存在类 '{class_name}'") from e
+            
+            # 第二步：尝试实例化类
+            try:
+                self.klass = klass_type(self.args)
+                Log.logger.debug(f"成功实例化类: {class_name}")
+            except Exception as e:
+                Log.logger.error(f"实例化类 '{class_name}' 时出错: {str(e)}")
+                Log.logger.error(f"错误类型: {type(e).__name__}")
+                Log.logger.error("类实例化失败，可能的原因:")
+                Log.logger.error("1. 类的__init__方法有错误")
+                Log.logger.error("2. 类依赖的模块或包未正确导入")
+                Log.logger.error("3. 类初始化需要必要的参数但未提供")
+                Log.logger.error("完整错误信息:")
+                traceback.print_exc()
+                raise Exception(f"类 '{class_name}' 实例化失败: {str(e)}") from e
             self.klass.args=self.args
+            Log.logger.debug(f"klass object:{self.klass}")
+            
+        except AttributeError as e:
+            # 处理类不存在的情况
+            class_name = self.vendor.capitalize() + self.module_name.capitalize()
+            Log.logger.error(f"类 '{class_name}' 不存在")
+            Log.logger.error(f"模块路径: {self.module_path}")
+            Log.logger.error(f"用户模块路径: {self.user_module_path}")
+            
+            if hasattr(self.module, '__file__'):
+                Log.logger.error(f"实际加载的模块文件: {self.module.__file__}")
+            
+            # 检查文件是否存在
+            module_file_path = self.module_path.replace('.', '/') + ".py"
+            if not os.path.exists(module_file_path) and not os.path.exists(self.user_module_path):
+                Log.logger.error(f"模块文件均不存在:")
+                Log.logger.error(f"  - 系统模块: {module_file_path}")
+                Log.logger.error(f"  - 用户模块: {self.user_module_path}")
+            
+            Log.logger.error(f"请检查:")
+            Log.logger.error(f"1. 类名是否正确: {class_name}")
+            Log.logger.error(f"2. 模块文件是否存在且语法正确")
+            Log.logger.error(f"3. 类是否正确定义并导出")
+            Log.logger.error(f"4. 包是否正确安装")
+            
+            print("完整错误追踪:", file=sys.stderr)
+            traceback.print_exc()
+            exit()
+            
         except Exception as e:
-            if "has no attribute" in str(e) and self.vendor.capitalize()+self.module_name.capitalize() in str(e):
-                if os.path.exists(self.module_path) or os.path.exists(self.user_module_path):
-                    Log.logger.error( self.vendor.capitalize()+self.module_name.capitalize()+"类不存在")
-                elif os.path.exists(self.module_path) and os.path.exists(self.user_module_path):
-                    Log.logger.error(self.module_path.replace('.','/')+".py，"+self.user_module_path+"均不存在")
-                else:
-                    class_name=self.vendor.capitalize()+self.module_name.capitalize()
-                    Log.logger.error(str(e))
-                    Log.logger.error("self.module_path:"+self.module_path+"不存在")
-                    Log.logger.error("self.user_module_path:"+self.user_module_path+"不存在")
-
-                    Log.logger.error(f"请检查是否存在{class_name}相关文件，是否在包名错误、包未使用pip安装、包中有错误语法或引用等问题")
-                    Log.logger.error(f"提示：可重点关注{self.user_module_path}，以及对应类名{class_name}")
-                    print("Traceback:", file=sys.stderr)
-                    traceback.print_tb(e.__traceback__)
-                exit()
-        
+            # 处理其他类型的异常
+            class_name = self.vendor.capitalize() + self.module_name.capitalize()
+            Log.logger.error(f"加载类 '{class_name}' 时发生未知错误: {str(e)}")
+            Log.logger.error(f"错误类型: {type(e).__name__}")
+            Log.logger.error("请检查:")
+            Log.logger.error("1. 模块文件语法是否正确")
+            Log.logger.error("2. 模块依赖是否完整")
+            Log.logger.error("3. 类定义是否正确")
+            
+            print("完整错误追踪:", file=sys.stderr)
+            traceback.print_exc()
+            exit()
         
     def background(self,args):
         pass
