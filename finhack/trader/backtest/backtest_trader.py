@@ -6,6 +6,7 @@ from typing import Dict, List, Any, Optional
 from datetime import datetime
 import pandas as pd
 import json
+from runtime.constant import *
 
 from .EventCenter import EventCenter, EventType
 from .TradeCenter import TradeCenter
@@ -16,23 +17,28 @@ from .Analyzer import Analyzer
 class BacktestTrader:
     """回测交易器，整合所有组件运行回测"""
     
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self,args):
         """
         初始化回测器
         
         Args:
-            config: 回测配置
+            args: 回测参数，从配置文件中读取
         """
-        self.config = config
         self.logger = logging.getLogger(__name__)
         
+        # 从args中获取配置信息
+        self.start_date = getattr(args, 'start_date', '20200101')
+        self.end_date = getattr(args, 'end_date', '20231231') 
+        self.frequency = getattr(args, 'frequency', '1d')
+        self.cache_enabled = getattr(args, 'cache_enabled', True)
+        
         # 初始化组件
-        self.data_center = DataCenter(cache_enabled=config.get('cache_enabled', True))
+        self.data_center = DataCenter(cache_enabled=self.cache_enabled)
         self.trade_center = TradeCenter(self.data_center)
         self.event_center = EventCenter(
-            start_date=config['start_date'],
-            end_date=config['end_date'],
-            frequency=config.get('frequency', '1d')
+            start_date=self.start_date,
+            end_date=self.end_date,
+            frequency=self.frequency
         )
         self.analyzer = Analyzer()
         
@@ -42,6 +48,7 @@ class BacktestTrader:
         # 订单和成交记录缓存（用于检测变化）
         self.last_orders: Dict[str, List] = {}
         self.last_trades: Dict[str, List] = {}
+        pass
         
     def add_strategy(self, strategy_config: Dict[str, Any]):
         """
@@ -58,7 +65,7 @@ class BacktestTrader:
         adapter_id = strategy_config['adapter_id']
         
         # 创建账户
-        initial_cash = strategy_config.get('initial_cash', 1000000)
+        initial_cash = strategy_config.get('initial_cash', getattr(self.args, 'cash', 1000000))
         self.trade_center.create_account(adapter_id, initial_cash)
         
         # 加载策略类
@@ -91,15 +98,18 @@ class BacktestTrader:
         self.logger.info(f"Added strategy {adapter_id} from {strategy_path}")
         
     def run(self):
+        print("run")
         """运行回测"""
         self.logger.info("Starting backtest...")
         
         # 获取交易日历
         trading_calendar = self.data_center.get_calendar()
+        print(trading_calendar)
+        exit()
         
         # 过滤到回测时间范围内的交易日
-        start = datetime.strptime(self.config['start_date'], "%Y%m%d")
-        end = datetime.strptime(self.config['end_date'], "%Y%m%d")
+        start = datetime.strptime(self.start_date, "%Y%m%d")
+        end = datetime.strptime(self.end_date, "%Y%m%d")
         trading_calendar = [
             date for date in trading_calendar
             if start <= datetime.strptime(date, "%Y%m%d") <= end
@@ -178,7 +188,7 @@ class BacktestTrader:
             }
             
             # 保存报告
-            report_path = self.config.get('report_path', './backtest_report.json')
+            report_path = getattr(self.args, 'report_path', './backtest_report.json')
             report_dir = os.path.dirname(report_path)
             if report_dir:
                 os.makedirs(report_dir, exist_ok=True)

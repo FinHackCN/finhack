@@ -107,7 +107,7 @@ class LightgbmTrainer(Trainer):
                         break
 
         
-    def run(self):
+    def run(self,args):
         args=global_var.args
         return self.start_train(
             market=args.market,

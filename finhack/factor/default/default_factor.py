@@ -15,7 +15,7 @@ import tracemalloc
 from finhack.library.db import DB
 
 class DefaultFactor:
-    def __init__(self):
+    def __init__(self,args):
         pass
 
     def run(self):

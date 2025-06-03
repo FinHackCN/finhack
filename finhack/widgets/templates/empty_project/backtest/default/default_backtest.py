@@ -17,7 +17,7 @@ import re
 from finhack.core.classes.dictobj import DictObj
 
 class DefaultBacktest():
-    def __init__(self):
+    def __init__(self,args):
         pass
 
 
