@@ -29,6 +29,7 @@ class tsFuntures:
             #data.to_sql(table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
             DB.safe_to_sql(data, table+"_tmp", db, index=False, if_exists='append', chunksize=5000)
         
+<<<<<<< HEAD
         # 获取数据库适配器类型
         adapter = DB.get_adapter(db)
         adapter_type = adapter.__class__.__name__
@@ -78,6 +79,22 @@ class tsFuntures:
             DB.exec('rename table '+table+'_tmp to '+table+';',db);
             DB.exec("drop table if exists "+table+'_old',db)
             table_to_use = table
+=======
+        # 使用通用的DB.replace_table方法
+        # DB.replace_table 会处理不同数据库的表替换逻辑，并返回最终使用的表名
+        table_to_use = DB.replace_table(target_table=table, source_table=f"{table}_tmp", connection=db)
+
+        if table_to_use == table:
+            Log.logger.info(f"成功将临时表 {table}_tmp 替换为/更新到 {table}.")
+        elif table_to_use == f"{table}_tmp":
+            Log.logger.warning(f"表替换失败，将使用临时表 {table_to_use} 作为最终表.")
+        elif not table_to_use: 
+            Log.logger.error(f"表替换操作 {table} <= {table}_tmp 失败，未返回有效表名。")
+            table_to_use = f"{table}_tmp" # Fallback to temporary table
+            Log.logger.warning(f"回退使用临时表: {table_to_use}")
+        else: 
+            Log.logger.warning(f"表替换操作 {table} <= {table}_tmp 完成，最终表名为 {table_to_use} (可能为备份表或非预期状态).")
+>>>>>>> bc3e25579f73c3b1d441b341c68d65f101a476c5
         
         tsSHelper.setIndex(table_to_use,db)
             
@@ -99,6 +116,7 @@ class tsFuntures:
             #data.to_sql(table+"_tmp", engine, index=False, if_exists='append', chunksize=5000)
             DB.safe_to_sql(data, table+"_tmp", db, index=False, if_exists='append', chunksize=5000)
         
+<<<<<<< HEAD
         # 获取数据库适配器类型
         adapter = DB.get_adapter(db)
         adapter_type = adapter.__class__.__name__
@@ -148,6 +166,22 @@ class tsFuntures:
             DB.exec('rename table '+table+'_tmp to '+table+';',db);
             DB.exec("drop table if exists "+table+'_old',db)
             table_to_use = table
+=======
+        # 使用通用的DB.replace_table方法
+        # DB.replace_table 会处理不同数据库的表替换逻辑，并返回最终使用的表名
+        table_to_use = DB.replace_table(target_table=table, source_table=f"{table}_tmp", connection=db)
+
+        if table_to_use == table:
+            Log.logger.info(f"成功将临时表 {table}_tmp 替换为/更新到 {table}.")
+        elif table_to_use == f"{table}_tmp":
+            Log.logger.warning(f"表替换失败，将使用临时表 {table_to_use} 作为最终表.")
+        elif not table_to_use: 
+            Log.logger.error(f"表替换操作 {table} <= {table}_tmp 失败，未返回有效表名。")
+            table_to_use = f"{table}_tmp" # Fallback to temporary table
+            Log.logger.warning(f"回退使用临时表: {table_to_use}")
+        else: 
+            Log.logger.warning(f"表替换操作 {table} <= {table}_tmp 完成，最终表名为 {table_to_use} (可能为备份表或非预期状态).")
+>>>>>>> bc3e25579f73c3b1d441b341c68d65f101a476c5
         
         tsSHelper.setIndex(table_to_use,db)
             
