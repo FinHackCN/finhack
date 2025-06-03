@@ -424,25 +424,25 @@ class TushareCollector:
             Log.logger.info("获取涨跌停股票...")
             self.mTread(tsAStockPrice, 'limit_list', 'astock_basic')
             
-            # 获取沪深港通资金流向
-            Log.logger.info("获取沪深港通资金流向...")
-            self.mTread(tsAStockPrice, 'moneyflow_hsgt', 'astock_basic')
+            # # 获取沪深港通资金流向
+            # Log.logger.info("获取沪深港通资金流向...")
+            # self.mTread(tsAStockPrice, 'moneyflow_hsgt', 'astock_basic')
             
-            # 获取沪深股通十大成交股
-            Log.logger.info("获取沪深股通十大成交股...")
-            self.mTread(tsAStockPrice, 'hsgt_top10', 'astock_basic')
+            # # 获取沪深股通十大成交股
+            # Log.logger.info("获取沪深股通十大成交股...")
+            # self.mTread(tsAStockPrice, 'hsgt_top10', 'astock_basic')
             
-            # 获取港股通十大成交股
-            Log.logger.info("获取港股通十大成交股...")
-            self.mTread(tsAStockPrice, 'ggt_top10', 'astock_basic')
+            # # 获取港股通十大成交股
+            # Log.logger.info("获取港股通十大成交股...")
+            # self.mTread(tsAStockPrice, 'ggt_top10', 'astock_basic')
             
-            # 获取沪深港股通持股明细
-            Log.logger.info("获取沪深港股通持股明细...")
-            self.mTread(tsAStockPrice, 'hk_hold', 'astock_basic')
+            # # 获取沪深港股通持股明细
+            # Log.logger.info("获取沪深港股通持股明细...")
+            # self.mTread(tsAStockPrice, 'hk_hold', 'astock_basic')
             
-            # 获取港股通每日成交统计
-            Log.logger.info("获取港股通每日成交统计...")
-            self.mTread(tsAStockPrice, 'ggt_daily', 'astock_basic')
+            # # 获取港股通每日成交统计
+            # Log.logger.info("获取港股通每日成交统计...")
+            # self.mTread(tsAStockPrice, 'ggt_daily', 'astock_basic')
             
             # 暂时不获取的数据
             # self.mTread(tsAStockPrice,'ggt_monthly')

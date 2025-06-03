@@ -625,9 +625,10 @@ class tsAStockPrice:
         use_new_api = False
         if lastdate > "20210101":
             use_new_api = True
-            Log.logger.info(f"limit_list: 使用新接口 limit_list_d，从 {lastdate} 开始获取数据")
+            #Log.logger.info(f"limit_list: 使用新接口 limit_list_d，从 {lastdate} 开始获取数据")
         else:
-            Log.logger.info(f"limit_list: 使用旧接口 limit_list，从 {lastdate} 开始获取数据")
+            pass
+            #Log.logger.info(f"limit_list: 使用旧接口 limit_list，从 {lastdate} 开始获取数据")
         
         # 设置起止日期
         start_date = lastdate
