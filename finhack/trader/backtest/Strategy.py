@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 import logging
+from .EventCenter import EventType
 
 
 class Strategy(ABC):
@@ -45,21 +46,21 @@ class Strategy(ABC):
         if hasattr(self, 'on_bar'):
             self.event_center.register_event_handler(
                 self.adapter_id, 
-                self.event_center.EventType.BAR,
+                EventType.BAR,
                 self.on_bar
             )
             
         if hasattr(self, 'on_market_open'):
             self.event_center.register_event_handler(
                 self.adapter_id,
-                self.event_center.EventType.MARKET_OPEN,
+                EventType.MARKET_OPEN,
                 self.on_market_open
             )
             
         if hasattr(self, 'on_market_close'):
             self.event_center.register_event_handler(
                 self.adapter_id,
-                self.event_center.EventType.MARKET_CLOSE,
+                EventType.MARKET_CLOSE,
                 self.on_market_close
             )
             

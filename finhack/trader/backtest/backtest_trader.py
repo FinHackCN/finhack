@@ -140,9 +140,9 @@ class BacktestTrader:
             # 分发事件
             self.event_center.dispatch_event(event, self.trade_center, self.strategies)
             
-            print(self.trade_center)
-            print(self.strategies)
-            exit()
+            # print(self.trade_center)
+            # print(self.strategies)
+            # exit()
 
 
             # 检查订单和成交更新
@@ -215,8 +215,11 @@ class BacktestTrader:
             print(f"\n{'='*60}")
             print(f"Backtest Summary for {adapter_id}")
             print(f"{'='*60}")
-            print(f"Initial Cash: {account.initial_cash:,.2f}")
-            print(f"Final Value: {account.total_value:,.2f}")
+            # 确保数值类型，防止字符串格式化错误
+            initial_cash = float(account.initial_cash) if account.initial_cash is not None else 0.0
+            final_value = float(account.total_value) if account.total_value is not None else 0.0
+            print(f"Initial Cash: {initial_cash:,.2f}")
+            print(f"Final Value: {final_value:,.2f}")
             print(f"Total Return: {stats.get('total_return', 0):.2%}")
             print(f"Annual Return: {stats.get('annual_return', 0):.2%}")
             print(f"Sharpe Ratio: {stats.get('sharpe_ratio', 0):.2f}")

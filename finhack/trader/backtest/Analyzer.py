@@ -13,21 +13,25 @@ class Analyzer:
         
     def calculate_statistics(self, account: Any, trades: List[Any]) -> Dict[str, float]:
         """
-        计算统计指标
+        计算回测统计指标
         
         Args:
-            account: 账户对象
-            trades: 成交记录列表
+            account: 账户信息
+            trades: 交易记录列表
             
         Returns:
             统计指标字典
         """
         stats = {}
         
-        # 基础收益指标
-        initial_value = account.initial_cash
-        final_value = account.total_value
-        total_return = (final_value - initial_value) / initial_value
+        # 基础收益指标 - 确保数值类型
+        initial_value = float(account.initial_cash) if account.initial_cash is not None else 0.0
+        final_value = float(account.total_value) if account.total_value is not None else 0.0
+        
+        if initial_value > 0:
+            total_return = (final_value - initial_value) / initial_value
+        else:
+            total_return = 0.0
         stats['total_return'] = total_return
         
         # 计算年化收益（假设252个交易日）
@@ -72,12 +76,12 @@ class Analyzer:
                 'max_consecutive_losses': 0,
             })
             
-        # 账户统计
-        stats['total_commission'] = account.total_commission
-        stats['total_tax'] = account.total_tax
-        stats['total_slippage'] = account.total_slippage
-        stats['final_cash'] = account.cash
-        stats['final_market_value'] = account.market_value
+        # 账户统计 - 确保数值类型
+        stats['total_commission'] = float(account.total_commission) if account.total_commission is not None else 0.0
+        stats['total_tax'] = float(account.total_tax) if account.total_tax is not None else 0.0
+        stats['total_slippage'] = float(account.total_slippage) if account.total_slippage is not None else 0.0
+        stats['final_cash'] = float(account.cash) if account.cash is not None else 0.0
+        stats['final_market_value'] = float(account.market_value) if account.market_value is not None else 0.0
         
         return stats
         
@@ -88,7 +92,7 @@ class Analyzer:
             
         # 按日期分组计算每日净值
         daily_values = {}
-        current_value = account.initial_cash
+        current_value = float(account.initial_cash) if account.initial_cash is not None else 0.0
         
         for trade in trades:
             date = trade.trade_time.date()
@@ -96,13 +100,13 @@ class Analyzer:
             # 计算该笔交易的盈亏
             if trade.side.value == "sell":
                 # 卖出产生盈亏
-                pnl = (trade.price * trade.quantity - 
-                       trade.commission - trade.tax - trade.slippage)
+                pnl = (float(trade.price) * float(trade.quantity) - 
+                       float(trade.commission) - float(trade.tax) - float(trade.slippage))
                 current_value += pnl
             else:
                 # 买入消耗资金
-                cost = (trade.price * trade.quantity + 
-                       trade.commission + trade.tax + trade.slippage)
+                cost = (float(trade.price) * float(trade.quantity) + 
+                       float(trade.commission) + float(trade.tax) + float(trade.slippage))
                 current_value -= cost
                 
             daily_values[date] = current_value
