@@ -3,15 +3,27 @@ import time
 import datetime
 import traceback
 import pandas as pd
-
+import threading
+import pickle
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import functools
 from finhack.library.db import DB
 from finhack.library.alert import alert
 from finhack.library.monitor import tsMonitor
 from finhack.collector.tushare.helper import tsSHelper
 import finhack.library.log as Log
 
+# 导入常量定义
+try:
+    from runtime.constant import CACHE_DIR
+except ImportError:
+    # 如果导入失败，使用相对路径
+    CACHE_DIR = "data/cache/"
+
 class tsAStockFinance:
     
+    @functools.lru_cache(maxsize=128)
     def getPeriodList(db):
         lastdate_sql="select max(end_date) as max from astock_finance_disclosure_date"
         lastdate=DB.select_to_df(lastdate_sql,db)
@@ -32,7 +44,7 @@ class tsAStockFinance:
                     plist.append(p)
         return plist
 
-    
+    @functools.lru_cache(maxsize=128)
     def getEndDateListDiff(table,ts_code,db,report_type=0):
         table_sql="select end_date from "+table+" where ts_code='"+ts_code+"'"
         if(report_type>0):
@@ -60,7 +72,11 @@ class tsAStockFinance:
         return diff_list
         
         
-  
+    #比较数据完整性: 这个方法比较两个数据源中记录的数量：
+    #table_count: 目标财务数据表中已存在的记录数量
+    #disclosure_count: 财务披露日期表中应该有的记录数量
+    #如果table_count小于disclosure_count，则返回True，表示需要获取更多数据
+    @functools.lru_cache(maxsize=128)
     def getLastDateCountDiff(table,end_date,ts_code,db,report_type=0):
         table_sql="select * from "+table+" where ts_code='"+ts_code+"' and end_date='"+end_date+"'"
         if(report_type>0):
@@ -77,24 +93,94 @@ class tsAStockFinance:
         return table_count<disclosure_count
 
    
-    
+    @functools.lru_cache(maxsize=128)
+    def getFinanceStockList(pro, db, table, report_type=0):
+        def check_stock(ts_code):
+            #Log.logger.info(f"检查股票{ts_code}在{table}-{report_type}是否需要更新")
+            """检查单个股票是否需要更新"""
+            try:
+                diff_list = tsAStockFinance.getEndDateListDiff(table, ts_code, db, report_type)
+                if diff_list and all(date < '20010101' for date in diff_list):
+                    #Log.logger.debug(f"跳过{ts_code}在{api}的更新，{diff_list}")
+                    return None  # 返回None表示跳过
+
+                lastdate_sql="select max(end_date) as max from "+table+" where ts_code='"+ts_code+"'"
+                if(report_type>0):
+                    lastdate_sql=lastdate_sql+" and report_type="+str(report_type)
+                lastdate=DB.select_to_df(lastdate_sql,db)
+                if(type(lastdate) == bool or lastdate.empty):
+                    lastdate='20000321'
+                else:
+                    lastdate=lastdate['max'].tolist()[0]
+                if lastdate==None:
+                    lastdate='20000321'
+                diff_count=tsAStockFinance.getLastDateCountDiff(table,lastdate,ts_code,db,report_type)
+                end_list=[]
+                for end_date in diff_list:
+                    if(lastdate>end_date):
+                        continue
+                    end_list.append(end_date)
+                if len(end_list)>0:
+                    return ts_code  # 返回股票代码表示需要处理
+                else:
+                    return None
+                return ts_code  # 返回股票代码表示需要处理
+            except Exception as e:
+                Log.logger.error(f"检查股票{ts_code}时出错: {str(e)}")
+                return None
+        
+        stock_list_data = tsSHelper.getAllAStock(True, pro, db)
+        all_stock_list = stock_list_data['ts_code'].tolist()
+        thread_count=3
+        Log.logger.info(f"开始使用{thread_count}个线程筛选{table}-{report_type}需要更新的股票，总数: {len(all_stock_list)}")
+        
+        return_list = []
+        
+        # 使用10个线程并行处理股票筛选
+        with ThreadPoolExecutor(max_workers=thread_count, thread_name_prefix="StockFilter") as executor:
+            # 提交所有股票检查任务
+            futures = {executor.submit(check_stock, ts_code): ts_code for ts_code in all_stock_list}
+            
+            # 收集结果
+            for future in as_completed(futures):
+                ts_code = futures[future]
+                try:
+                    result = future.result()
+                    if result is not None:  # 如果返回的不是None，说明需要处理
+                        return_list.append(result)
+                except Exception as e:
+                    Log.logger.error(f"处理股票{ts_code}时出现异常: {str(e)}")
+        
+        Log.logger.info(f"{table}-{report_type}筛选完成，需要更新的股票数量: {len(return_list)}/{len(all_stock_list)}")
+        print(return_list)
+
+        
+        return return_list
+
+
+
     def getFinance(pro,api,table,fileds,db,report_type=0):
-        stock_list_data=tsSHelper.getAllAStock(True,pro,db)
-        stock_list=stock_list_data['ts_code'].tolist()
-        #stock_list=['002624.SZ']
-        #print(len(stock_list))
-        #exit()
-  
+        # 使用多线程筛选需要处理的股票列表
+        stock_list = tsAStockFinance.getFinanceStockList(pro, db, table, report_type)
+        
+        Log.logger.info(f"{api} - 开始处理 {len(stock_list)} 只股票，report_type={report_type}")
+        
         for ts_code in stock_list:
             if api in ['disclosure_date','fina_indicator'] and report_type!=0:
                 continue
             if report_type>0:
                 Log.logger.info(api+","+ts_code+",report_type="+str(report_type))
             diff_list=tsAStockFinance.getEndDateListDiff(table,ts_code,db,report_type)
-            #print(diff_list)
-            #exit()
+
+            # 如果diff_list中的所有元素都小于'20010101'，则跳过当前股票
+            if diff_list and all(date < '20010101' for date in diff_list):
+                #Log.logger.info(f"跳过{ts_code}在{api}的更新，{diff_list}")
+                continue
             
             lastdate_sql="select max(end_date) as max from "+table+" where ts_code='"+ts_code+"'"
+
+
+
             if(report_type>0):
                 lastdate_sql=lastdate_sql+" and report_type="+str(report_type)
             lastdate=DB.select_to_df(lastdate_sql,db)
@@ -105,6 +191,10 @@ class tsAStockFinance:
             if lastdate==None:
                 lastdate='20000321'
             diff_count=tsAStockFinance.getLastDateCountDiff(table,lastdate,ts_code,db,report_type)
+
+
+
+
             if(diff_count):
                 sql="delete from "+table+" where ts_code='"+ts_code+"' and end_date='"+lastdate+"'"
                 if(report_type>0):
@@ -120,6 +210,9 @@ class tsAStockFinance:
             # 不需要获取engine对象，直接使用db连接名
             # engine=DB.get_db_engine(db)
             
+
+
+            
             end_list=[]
             for end_date in diff_list:
                 if(lastdate>end_date):
@@ -130,6 +223,13 @@ class tsAStockFinance:
                 continue
             f = getattr(pro, api)
             try_times=0
+
+            # print(ts_code)
+            # print("diff_list:",diff_list)
+            # print("lastdate:",lastdate)
+            # print("diff_count:",diff_count)
+            # print("end_list:",end_list)
+            # exit()
             while True:
                 try:
                     # print(lastdate)
@@ -203,20 +303,80 @@ class tsAStockFinance:
     @tsMonitor
     def income(pro,db):
         fileds="ts_code,ann_date,f_ann_date,end_date,report_type,comp_type,end_type,basic_eps,diluted_eps,total_revenue,revenue,int_income,prem_earned,comm_income,n_commis_income,n_oth_income,n_oth_b_income,prem_income,out_prem,une_prem_reser,reins_income,n_sec_tb_income,n_sec_uw_income,n_asset_mg_income,oth_b_income,fv_value_chg_gain,invest_income,ass_invest_income,forex_gain,total_cogs,oper_cost,int_exp,comm_exp,biz_tax_surchg,sell_exp,admin_exp,fin_exp,assets_impair_loss,prem_refund,compens_payout,reser_insur_liab,div_payt,reins_exp,oper_exp,compens_payout_refu,insur_reser_refu,reins_cost_refund,other_bus_cost,operate_profit,non_oper_income,non_oper_exp,nca_disploss,total_profit,income_tax,n_income,n_income_attr_p,minority_gain,oth_compr_income,t_compr_income,compr_inc_attr_p,compr_inc_attr_m_s,ebit,ebitda,insurance_exp,undist_profit,distable_profit,rd_exp,fin_exp_int_exp,fin_exp_int_inc,transfer_surplus_rese,transfer_housing_imprest,transfer_oth,adj_lossgain,withdra_legal_surplus,withdra_legal_pubfund,withdra_biz_devfund,withdra_rese_fund,withdra_oth_ersu,workers_welfare,distr_profit_shrhder,prfshare_payable_dvd,comshare_payable_dvd,capit_comstock_div,net_after_nr_lp_correct,credit_impa_loss,net_expo_hedging_benefits,oth_impair_loss_assets,total_opcost,amodcost_fin_assets,oth_income,asset_disp_income,continued_net_profit,end_net_profit,update_flag"
-        for i in  [1,6]:
-            tsAStockFinance.getFinance(pro,'income','astock_finance_income',fileds,db,i)
+        
+        def process_report_type(report_type):
+            try:
+                Log.logger.info(f"开始获取利润表数据，report_type={report_type}")
+                tsAStockFinance.getFinance(pro,'income','astock_finance_income',fileds,db,report_type)
+                Log.logger.info(f"完成获取利润表数据，report_type={report_type}")
+                return f"income report_type={report_type} 完成"
+            except Exception as e:
+                Log.logger.error(f"获取利润表数据失败，report_type={report_type}: {str(e)}")
+                return f"income report_type={report_type} 失败: {str(e)}"
+        
+        # 使用线程池并行处理 report_type=1 和 report_type=6
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="Income") as executor:
+            futures = {executor.submit(process_report_type, i): i for i in [1, 6]}
+            
+            for future in as_completed(futures):
+                report_type = futures[future]
+                try:
+                    result = future.result()
+                    Log.logger.info(f"利润表任务完成: {result}")
+                except Exception as e:
+                    Log.logger.error(f"利润表任务异常 report_type={report_type}: {str(e)}")
     
     @tsMonitor
     def balancesheet(pro,db):
         fileds="ts_code,ann_date,f_ann_date,end_date,report_type,comp_type,end_type,total_share,cap_rese,undistr_porfit,surplus_rese,special_rese,money_cap,trad_asset,notes_receiv,accounts_receiv,oth_receiv,prepayment,div_receiv,int_receiv,inventories,amor_exp,nca_within_1y,sett_rsrv,loanto_oth_bank_fi,premium_receiv,reinsur_receiv,reinsur_res_receiv,pur_resale_fa,oth_cur_assets,total_cur_assets,fa_avail_for_sale,htm_invest,lt_eqt_invest,invest_real_estate,time_deposits,oth_assets,lt_rec,fix_assets,cip,const_materials,fixed_assets_disp,produc_bio_assets,oil_and_gas_assets,intan_assets,r_and_d,goodwill,lt_amor_exp,defer_tax_assets,decr_in_disbur,oth_nca,total_nca,cash_reser_cb,depos_in_oth_bfi,prec_metals,deriv_assets,rr_reins_une_prem,rr_reins_outstd_cla,rr_reins_lins_liab,rr_reins_lthins_liab,refund_depos,ph_pledge_loans,refund_cap_depos,indep_acct_assets,client_depos,client_prov,transac_seat_fee,invest_as_receiv,total_assets,lt_borr,st_borr,cb_borr,depos_ib_deposits,loan_oth_bank,trading_fl,notes_payable,acct_payable,adv_receipts,sold_for_repur_fa,comm_payable,payroll_payable,taxes_payable,int_payable,div_payable,oth_payable,acc_exp,deferred_inc,st_bonds_payable,payable_to_reinsurer,rsrv_insur_cont,acting_trading_sec,acting_uw_sec,non_cur_liab_due_1y,oth_cur_liab,total_cur_liab,bond_payable,lt_payable,specific_payables,estimated_liab,defer_tax_liab,defer_inc_non_cur_liab,oth_ncl,total_ncl,depos_oth_bfi,deriv_liab,depos,agency_bus_liab,oth_liab,prem_receiv_adva,depos_received,ph_invest,reser_une_prem,reser_outstd_claims,reser_lins_liab,reser_lthins_liab,indept_acc_liab,pledge_borr,indem_payable,policy_div_payable,total_liab,treasury_share,ordin_risk_reser,forex_differ,invest_loss_unconf,minority_int,total_hldr_eqy_exc_min_int,total_hldr_eqy_inc_min_int,total_liab_hldr_eqy,lt_payroll_payable,oth_comp_income,oth_eqt_tools,oth_eqt_tools_p_shr,lending_funds,acc_receivable,st_fin_payable,payables,hfs_assets,hfs_sales,cost_fin_assets,fair_value_fin_assets,cip_total,oth_pay_total,long_pay_total,debt_invest,oth_debt_invest,oth_eq_invest,oth_illiq_fin_assets,oth_eq_ppbond,receiv_financing,use_right_assets,lease_liab,contract_assets,contract_liab,accounts_receiv_bill,accounts_pay,oth_rcv_total,fix_assets_total,update_flag"
-        for i in [1,6]:
-            tsAStockFinance.getFinance(pro,'balancesheet','astock_finance_balancesheet',fileds,db,i)
+        
+        def process_report_type(report_type):
+            try:
+                Log.logger.info(f"开始获取资产负债表数据，report_type={report_type}")
+                tsAStockFinance.getFinance(pro,'balancesheet','astock_finance_balancesheet',fileds,db,report_type)
+                Log.logger.info(f"完成获取资产负债表数据，report_type={report_type}")
+                return f"balancesheet report_type={report_type} 完成"
+            except Exception as e:
+                Log.logger.error(f"获取资产负债表数据失败，report_type={report_type}: {str(e)}")
+                return f"balancesheet report_type={report_type} 失败: {str(e)}"
+        
+        # 使用线程池并行处理 report_type=1 和 report_type=6
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="Balance") as executor:
+            futures = {executor.submit(process_report_type, i): i for i in [1, 6]}
+            
+            for future in as_completed(futures):
+                report_type = futures[future]
+                try:
+                    result = future.result()
+                    Log.logger.info(f"资产负债表任务完成: {result}")
+                except Exception as e:
+                    Log.logger.error(f"资产负债表任务异常 report_type={report_type}: {str(e)}")
     
     @tsMonitor
     def cashflow(pro,db):
         fileds=""
-        for i in  [1,6]:
-            tsAStockFinance.getFinance(pro,'cashflow','astock_finance_cashflow',fileds,db,i)
+        
+        def process_report_type(report_type):
+            try:
+                Log.logger.info(f"开始获取现金流量表数据，report_type={report_type}")
+                tsAStockFinance.getFinance(pro,'cashflow','astock_finance_cashflow',fileds,db,report_type)
+                Log.logger.info(f"完成获取现金流量表数据，report_type={report_type}")
+                return f"cashflow report_type={report_type} 完成"
+            except Exception as e:
+                Log.logger.error(f"获取现金流量表数据失败，report_type={report_type}: {str(e)}")
+                return f"cashflow report_type={report_type} 失败: {str(e)}"
+        
+        # 使用线程池并行处理 report_type=1 和 report_type=6
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="Cashflow") as executor:
+            futures = {executor.submit(process_report_type, i): i for i in [1, 6]}
+            
+            for future in as_completed(futures):
+                report_type = futures[future]
+                try:
+                    result = future.result()
+                    Log.logger.info(f"现金流量表任务完成: {result}")
+                except Exception as e:
+                    Log.logger.error(f"现金流量表任务异常 report_type={report_type}: {str(e)}")
     
     @tsMonitor
     def forecast(pro,db):
@@ -231,42 +391,41 @@ class tsAStockFinance:
     @tsMonitor
     def dividend(pro,db):
         # 移除引擎对象，使用连接名
-        # engine=DB.get_db_engine(db)
-        table='astock_finance_dividend'
-        DB.exec("drop table if exists "+table+"_tmp",db)
-        stock_list_data=tsSHelper.getAllAStock(True,pro,db)
-        stock_list=stock_list_data['ts_code'].tolist()
-        for ts_code in stock_list:
-            try_times=0
-            while True:
-                try:
-                    df = pro.dividend(ts_code=ts_code)
-                    # 使用db连接名代替engine对象
-                    # DB.safe_to_sql(df, table+"_tmp", db, index=False, if_exists='append', chunksize=5000)
-                    DB.safe_to_sql(df, table+"_tmp", db, index=False, if_exists='append', chunksize=5000)
-                    break
-                except Exception as e:
-                    if "每天最多访问" in str(e) or "每小时最多访问" in str(e):
-                        Log.logger.warning("dividend:触发最多访问。\n"+str(e)) 
-                        return
-                    if "最多访问" in str(e):
-                        Log.logger.warning("dividend:触发限流，等待重试。\n"+str(e))
-                        time.sleep(15)
-                        continue
-                    else:
-                        if try_times<10:
-                            try_times=try_times+1;
-                            Log.logger.warning("dividend:函数异常，等待重试。\n"+str(e))
-                            time.sleep(15)
-                            continue
-                        else:
-                            info = traceback.format_exc()
-                            alert.send('dividend','函数异常',str(info))
-                            Log.logger.error(info)
-        DB.exec('rename table '+table+' to '+table+'_old;',db);
-        DB.exec('rename table '+table+'_tmp to '+table+';',db);
-        DB.exec("drop table if exists "+table+'_old',db)
-        tsSHelper.setIndex(table,db)
+        tsSHelper.getDataWithLastDate(pro,'dividend','astock_finance_dividend',db,'ann_date')
+        # table='astock_finance_dividend'
+        # stock_list_data=tsSHelper.getAllAStock(True,pro,db)
+        # stock_list=stock_list_data['ts_code'].tolist()
+        # for ts_code in stock_list:
+        #     try_times=0
+        #     while True:
+        #         try:
+        #             df = pro.dividend(ts_code=ts_code)
+        #             # 使用db连接名代替engine对象
+        #             # DB.safe_to_sql(df, table+"_tmp", db, index=False, if_exists='append', chunksize=5000)
+        #             DB.safe_to_sql(df, table+"_tmp", db, index=False, if_exists='append', chunksize=5000)
+        #             break
+        #         except Exception as e:
+        #             if "每天最多访问" in str(e) or "每小时最多访问" in str(e):
+        #                 Log.logger.warning("dividend:触发最多访问。\n"+str(e)) 
+        #                 return
+        #             if "最多访问" in str(e):
+        #                 Log.logger.warning("dividend:触发限流，等待重试。\n"+str(e))
+        #                 time.sleep(15)
+        #                 continue
+        #             else:
+        #                 if try_times<10:
+        #                     try_times=try_times+1;
+        #                     Log.logger.warning("dividend:函数异常，等待重试。\n"+str(e))
+        #                     time.sleep(15)
+        #                     continue
+        #                 else:
+        #                     info = traceback.format_exc()
+        #                     alert.send('dividend','函数异常',str(info))
+        #                     Log.logger.error(info)
+        # DB.exec('rename table '+table+' to '+table+'_old;',db);
+        # DB.exec('rename table '+table+'_tmp to '+table+';',db);
+        # DB.exec("drop table if exists "+table+'_old',db)
+        # tsSHelper.setIndex(table,db)
             
     @tsMonitor
     def fina_indicator(pro,db):

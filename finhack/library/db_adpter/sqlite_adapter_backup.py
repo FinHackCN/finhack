@@ -14,9 +14,6 @@ from finhack.library.monitor import dbMonitor
 class SQLiteAdapter(DbAdapter):
     """SQLite数据库适配器实现，增强并发支持"""
     
-    # 高性能模式配置
-    HIGH_PERFORMANCE_MODE = True  # 启用高性能多线程模式
-    
     def __init__(self, config):
         """
         初始化SQLite适配器
@@ -28,19 +25,10 @@ class SQLiteAdapter(DbAdapter):
         
         self.db_path = config.get('path', ':memory:')
         
-        # 高性能模式下的优化配置
-        if self.HIGH_PERFORMANCE_MODE:
-            # 设置连接超时和重试参数 - 为多线程优化
-            self.timeout = config.get('timeout', 120.0)  # 进一步增加连接超时时间(秒)
-            self.max_retries = config.get('max_retries', 5)  # 增加重试次数
-            self.retry_delay = config.get('retry_delay', 0.05)  # 进一步减少重试间隔
-            self.busy_timeout = config.get('busy_timeout', 120000)  # 2分钟忙等待
-        else:
-            # 标准模式配置
-            self.timeout = config.get('timeout', 30.0)
-            self.max_retries = config.get('max_retries', 5)
-            self.retry_delay = config.get('retry_delay', 1.0)
-            self.busy_timeout = config.get('busy_timeout', 30000)
+        # 设置连接超时和重试参数
+        self.timeout = config.get('timeout', 30.0)  # 连接超时时间(秒)
+        self.max_retries = config.get('max_retries', 5)  # 最大重试次数
+        self.retry_delay = config.get('retry_delay', 1.0)  # 重试间隔(秒)
         
         # 非内存数据库需要检测路径
         if self.db_path not in (':memory:', ''):
@@ -52,18 +40,14 @@ class SQLiteAdapter(DbAdapter):
                 os.makedirs(parent_dir, exist_ok=True)
     
     def get_engine(self):
-        """获取SQLAlchemy引擎，优化多线程支持和连接池配置"""
+        """获取SQLAlchemy引擎，增加连接超时和池大小配置"""
         try:
             uri = f"sqlite:///{self.db_path}"
             return create_engine(
                 uri,
-                connect_args={
-                    'timeout': self.timeout,
-                    'check_same_thread': False  # 允许多线程使用同一连接
-                },
-                pool_pre_ping=True,
-                pool_recycle=3600,  # 1小时后回收连接
-                echo=False  # 生产环境关闭SQL回显
+                connect_args={'timeout': self.timeout},
+                # SQLite只支持简单的连接池配置，移除不支持的参数
+                pool_pre_ping=True
             )
         except Exception as e:
             Log.logger.error(f"获取SQLAlchemy引擎异常: {str(e)}")
@@ -77,34 +61,20 @@ class SQLiteAdapter(DbAdapter):
         
         while retries <= self.max_retries:
             try:
-                conn = sqlite3.connect(
-                    self.db_path, 
-                    timeout=self.timeout,
-                    check_same_thread=False  # 允许多线程访问同一连接
-                )
+                conn = sqlite3.connect(self.db_path, timeout=self.timeout)
                 
-                # 尝试执行数据库优化设置，启用WAL模式以支持多线程并发
+                # 尝试执行数据库优化设置，使用安全模式而非WAL模式
                 try:
                     # 启用外键支持
                     conn.execute("PRAGMA foreign_keys = ON")
-                    # 启用WAL模式，支持并发读写，大幅减少锁冲突
-                    conn.execute("PRAGMA journal_mode = WAL")
-                    # 设置为异步模式，进一步提高性能
-                    conn.execute("PRAGMA synchronous = OFF")
+                    # 使用DELETE模式而非WAL模式，更安全但速度稍慢
+                    conn.execute("PRAGMA journal_mode = DELETE")
+                    # 降低同步级别以提高性能，但保持基本安全
+                    conn.execute("PRAGMA synchronous = NORMAL")
                     # 增加缓存大小
-                    conn.execute("PRAGMA cache_size = 20000")
+                    conn.execute("PRAGMA cache_size = 10000")
                     # 临时文件存储在内存中
                     conn.execute("PRAGMA temp_store = MEMORY")
-                    # 设置忙等待超时（毫秒）
-                    conn.execute(f"PRAGMA busy_timeout = {int(self.busy_timeout)}")
-                    # 启用内存映射提高性能
-                    conn.execute("PRAGMA mmap_size = 268435456")  # 256MB
-                    # 优化页面大小
-                    conn.execute("PRAGMA page_size = 4096")
-                    # WAL自动检查点设置
-                    conn.execute("PRAGMA wal_autocheckpoint = 1000")
-                    # 锁定模式设置为NORMAL，允许并发
-                    conn.execute("PRAGMA locking_mode = NORMAL")
                 except Exception as pragma_error:
                     # 如果设置PRAGMA失败，记录错误但不中断连接
                     Log.logger.warning(f"设置数据库PRAGMA参数失败: {str(pragma_error)}")
@@ -113,34 +83,17 @@ class SQLiteAdapter(DbAdapter):
                 conn.row_factory = sqlite3.Row
                 return conn, conn.cursor()
             except sqlite3.OperationalError as e:
-                # 数据库锁定或繁忙，使用指数退避重试策略
+                # 数据库锁定或繁忙，重试
                 if "database is locked" in str(e) or "database is busy" in str(e):
                     retries += 1
                     last_error = e
                     if retries <= self.max_retries:
-                        # 指数退避：每次重试延迟时间翻倍
-                        backoff_delay = self.retry_delay * (2 * (retries - 1))
-                        Log.logger.debug(f"数据库锁定，指数退避重试 ({retries}/{self.max_retries})，延迟 {backoff_delay:.3f}秒: {str(e)}")
-                        time.sleep(backoff_delay)
+                        Log.logger.warning(f"数据库锁定，等待重试 ({retries}/{self.max_retries}): {str(e)}")
+                        time.sleep(self.retry_delay)
                         continue
                     else:
-                        Log.logger.warning(f"数据库锁定，重试次数超限，继续尝试: {str(e)}")
-                        # 最后一次尝试：使用最长延迟
-                        time.sleep(self.retry_delay * 10)
-                        try:
-                            conn = sqlite3.connect(
-                                self.db_path, 
-                                timeout=self.timeout * 2,  # 双倍超时
-                                check_same_thread=False
-                            )
-                            # 简化的PRAGMA设置
-                            conn.execute("PRAGMA journal_mode = WAL")
-                            conn.execute(f"PRAGMA busy_timeout = {int(self.busy_timeout * 2)}")
-                            conn.row_factory = sqlite3.Row
-                            return conn, conn.cursor()
-                        except:
-                            pass
-                        break
+                        Log.logger.error(f"数据库锁定，重试次数超限: {str(e)}")
+                        raise
                 elif "disk i/o error" in str(e).lower() or "database disk image is malformed" in str(e).lower():
                     Log.logger.error(f"数据库文件损坏或磁盘错误: {str(e)}")
                     # 尝试恢复数据库或创建新的数据库
@@ -181,43 +134,20 @@ class SQLiteAdapter(DbAdapter):
     
     @dbMonitor
     def exec_sql(self, sql: str) -> None:
-        """执行SQL语句，兼容MySQL和SQLite语法差异，增强重试机制"""
+        """执行SQL语句，兼容MySQL和SQLite语法差异"""
         # 预处理SQL，确保兼容SQLite语法
         sql = self._adapt_sql_for_sqlite(sql)
         
-        max_retries = 100
-        for attempt in range(max_retries):
-            conn, cursor = None, None
-            try:
-                conn, cursor = self.get_connection()
-                
-                # 对于批量操作，使用事务
-                if any(keyword in sql.upper() for keyword in ['INSERT', 'UPDATE', 'DELETE']) and 'CREATE' not in sql.upper():
-                    cursor.execute("BEGIN IMMEDIATE")
-                
-                cursor.execute(sql)
-                conn.commit()
-                Log.logger.debug(f"成功执行SQL: {sql[:100]}...")
-                return
-                
-            except Exception as e:
-                if conn:
-                    try:
-                        conn.rollback()
-                    except:
-                        pass
-                
-                if attempt < max_retries - 1 and ("database is locked" in str(e) or "database is busy" in str(e)):
-                    backoff_delay = 0.1 * (2 * attempt)
-                    Log.logger.warning(f"执行SQL失败，重试 {attempt + 1}/{max_retries}，延迟 {backoff_delay:.3f}秒: {str(e)}")
-                    time.sleep(backoff_delay)
-                    continue
-                else:
-                    Log.logger.error(f"SQLite执行SQL错误: {str(e)}\nSQL: {sql}")
-                    raise
-            finally:
-                if conn:
-                    conn.close()
+        conn, cursor = self.get_connection()
+        try:
+            cursor.execute(sql)
+            conn.commit()
+        except Exception as e:
+            Log.logger.error(f"SQLite执行SQL错误: {str(e)}\nSQL: {sql}")
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
     
     def _adapt_sql_for_sqlite(self, sql: str) -> str:
         """将MySQL语法的SQL转换为SQLite兼容的语法"""
@@ -308,43 +238,25 @@ class SQLiteAdapter(DbAdapter):
         return None
     
     def to_sql(self, df: pd.DataFrame, table_name: str, if_exists='append', **kwargs) -> int:
-        """将DataFrame写入数据库，增强错误处理和重试机制"""
+        """将DataFrame写入数据库"""
         # 空DataFrame检查
         if df.empty or len(df.columns) == 0:
             Log.logger.warning(f"尝试写入空DataFrame到表 {table_name}, 操作已跳过")
             return 0
         
-        max_retries = 100
-        for attempt in range(max_retries):
-            try:
-                engine = self.get_engine()
-                # 显式设置index=False，确保不传递conn参数给pandas
-                kwargs.pop('connection', None)  # 移除可能存在的connection参数
-                kwargs.pop('con', None)  # 移除可能存在的con参数
-                
-                # 确保正确设置参数
-                kwargs.update({
-                    'index': False,
-                    'if_exists': if_exists,
-                    'chunksize': kwargs.get('chunksize', 1000),  # 减小批次大小减少锁定时间
-                    'method': 'multi'  # 使用批量插入
-                })
-                
-                result = df.to_sql(table_name, engine, **kwargs)
-                Log.logger.debug(f"成功写入 {len(df)} 条记录到表 {table_name}")
-                return result if result is not None else len(df)
-                
-            except Exception as e:
-                if attempt < max_retries - 1 and ("database is locked" in str(e) or "database is busy" in str(e)):
-                    backoff_delay = 0.1 * (2 *  attempt)
-                    Log.logger.warning(f"写入DataFrame到表 {table_name} 失败，重试 {attempt + 1}/{max_retries}，延迟 {backoff_delay:.3f}秒: {str(e)}")
-                    time.sleep(backoff_delay)
-                    continue
-                else:
-                    Log.logger.error(f"写入DataFrame到表 {table_name} 最终失败: {str(e)}")
-                    raise
+        engine = self.get_engine()
+        # 显式设置index=False，确保不传递conn参数给pandas
+        kwargs.pop('connection', None)  # 移除可能存在的connection参数
+        kwargs.pop('con', None)  # 移除可能存在的con参数
         
-        return 0
+        # 确保正确设置参数
+        kwargs.update({
+            'index': False,
+            'if_exists': if_exists,
+            'chunksize': kwargs.get('chunksize', 5000)
+        })
+        
+        return df.to_sql(table_name, engine, **kwargs)
     
     def safe_to_sql(self, df: pd.DataFrame, table_name: str, **kwargs) -> int:
         """安全地将DataFrame写入数据库，处理可能的列缺失问题。类型转换已移除。"""
@@ -352,6 +264,8 @@ class SQLiteAdapter(DbAdapter):
         if df.empty or len(df.columns) == 0:
             Log.logger.warning(f"尝试写入空DataFrame到表 {table_name}, 操作已跳过")
             return 0
+        
+        engine = self.get_engine()
         
         final_to_sql_kwargs = kwargs.copy()
         final_to_sql_kwargs.setdefault('index', False)
@@ -361,7 +275,7 @@ class SQLiteAdapter(DbAdapter):
         try:
             # 检查表是否存在，不存在则直接写入
             if not self.table_exists(table_name):
-                return self.to_sql(df, table_name, **final_to_sql_kwargs)
+                return df.to_sql(table_name, engine, **final_to_sql_kwargs)
                 
             # 表存在，获取表的列信息
             conn_for_pragma, _ = self.get_connection() # Need a direct connection for PRAGMA
@@ -397,7 +311,7 @@ class SQLiteAdapter(DbAdapter):
                 if conn_for_pragma:
                     conn_for_pragma.close()
             
-            return self.to_sql(df, table_name, **final_to_sql_kwargs)
+            return df.to_sql(table_name, engine, **final_to_sql_kwargs)
 
         except Exception as e:
             error_str = str(e)
@@ -429,7 +343,7 @@ class SQLiteAdapter(DbAdapter):
                             Log.logger.info(f"成功添加列 {missing_column} 到表 {table_name}")
                             
                             # 重试写入
-                            return self.to_sql(df, table_name, **final_to_sql_kwargs)
+                            return df.to_sql(table_name, engine, **final_to_sql_kwargs)
                         except Exception as add_error:
                             if conn_for_add: conn_for_add.rollback()
                             Log.logger.error(f"重试时添加列 {missing_column} 失败: {str(add_error)}")
@@ -628,72 +542,22 @@ class SQLiteAdapter(DbAdapter):
             return False, source_table
     
     def get_table_columns(self, table_name: str) -> list:
-        """获取表的列名列表"""
-        try:
-            sql = f"PRAGMA table_info({table_name})"
-            results = self.select_to_list(sql)
-            return [row['name'] for row in results]
-        except Exception as e:
-            Log.logger.error(f"获取表{table_name}列信息失败: {str(e)}")
-            return []
-
-    def get_database_info(self) -> dict:
-        """获取数据库配置信息，用于调试和性能分析"""
-        try:
-            conn, cursor = self.get_connection()
-            info = {}
-            try:
-                # 检查当前数据库模式
-                cursor.execute("PRAGMA journal_mode")
-                info['journal_mode'] = cursor.fetchone()[0]
-                
-                cursor.execute("PRAGMA synchronous")
-                info['synchronous'] = cursor.fetchone()[0]
-                
-                cursor.execute("PRAGMA cache_size")
-                info['cache_size'] = cursor.fetchone()[0]
-                
-                cursor.execute("PRAGMA busy_timeout")
-                info['busy_timeout'] = cursor.fetchone()[0]
-                
-                cursor.execute("PRAGMA locking_mode")
-                info['locking_mode'] = cursor.fetchone()[0]
-                
-                info['high_performance_mode'] = self.HIGH_PERFORMANCE_MODE
-                info['timeout'] = self.timeout
-                info['max_retries'] = self.max_retries
-                info['retry_delay'] = self.retry_delay
-                info['busy_timeout_config'] = self.busy_timeout
-                
-            finally:
-                conn.close()
+        """
+        获取表的列名列表
+        
+        Args:
+            table_name: 表名
             
-            Log.logger.info(f"SQLite数据库配置: {info}")
-            return info
+        Returns:
+            列名列表
+        """
+        try:
+            engine = self.get_engine()
+            with engine.connect() as conn:
+                query = f"PRAGMA table_info({table_name})"
+                result = conn.execute(text(query)).fetchall()
+                columns = [row[1] for row in result]  # 列名在索引1的位置
+                return columns
         except Exception as e:
-            Log.logger.error(f"获取数据库信息失败: {str(e)}")
-            return {}
-
-    def create_temp_table_safe(self, table_name: str, create_sql: str) -> bool:
-        """安全创建临时表，专门处理高并发环境下的表创建"""
-        max_retries = 100
-        for attempt in range(max_retries):
-            try:
-                # 先检查表是否已存在
-                if self.table_exists(table_name):
-                    self.exec_sql(f"DROP TABLE {table_name}")
-                
-                # 创建表
-                self.exec_sql(create_sql)
-                Log.logger.debug(f"成功创建临时表: {table_name}")
-                return True
-                
-            except Exception as e:
-                if attempt < max_retries - 1 and ("database is locked" in str(e) or "database is busy" in str(e)):
-                    backoff_delay = 0.2 * (2 * attempt)
-                    Log.logger.warning(f"创建临时表 {table_name} 失败，重试 {attempt + 1}/{max_retries}，延迟 {backoff_delay:.3f}秒")
-                    time.sleep(backoff_delay)
-                    continue
-                else:
-                    Log.logger.error(f"创建临时表 {table_name} 最终失败: {str(e)}")
-                    return False 
+            Log.logger.error(f"获取表 {table_name} 的列失败: {str(e)}")
+            return [] 
