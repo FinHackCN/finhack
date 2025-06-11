@@ -25,6 +25,7 @@ import traceback
 import pandas as pd
 import os
 import sqlite3
+from runtime.constant import *
 
 class TushareCollector:
     def __init__(self,args):
@@ -42,16 +43,6 @@ class TushareCollector:
             'fx_basic': True               # 外汇基本信息
         }
 
-        self.dependency_status = {
-            'astock_basic': False,           # 股票基本信息
-            'astock_trade_cal': False,      # 交易日历
-            'astock_index_basic': False,    # 指数基本信息
-            'astock_finance_disclosure_date': False,  # 财务披露日期
-            'fund_basic': False,            # 基金基本信息
-            'cb_basic': False,              # 可转债基本信息
-            'hk_basic': True,              # 港股基本信息
-            'fx_basic': True               # 外汇基本信息
-        }     
 
     def check_dependency(self, table_name):
         """检查依赖表是否存在，如果不存在但是有创建该表的功能则尝试创建"""
@@ -467,6 +458,8 @@ class TushareCollector:
                 Log.logger.error("获取财务数据失败：财务披露日期数据不存在")
                 return False
                 
+
+
             # 获取利润表
             Log.logger.info("获取利润表...")
             self.mTread(tsAStockFinance, 'income', 'astock_finance_disclosure_date')
@@ -549,9 +542,9 @@ class TushareCollector:
             Log.logger.info("获取概念股分类...")
             self.mTread(tsAStockMarket, 'concept', 'astock_basic')
             
-            # 获取概念股列表
-            Log.logger.info("获取概念股列表...")
-            self.mTread(tsAStockMarket, 'concept_detail', 'astock_basic')
+            # # 获取概念股列表
+            # Log.logger.info("获取概念股列表...")
+            # self.mTread(tsAStockMarket, 'concept_detail', 'astock_basic')
             
             # 获取限售股解禁
             Log.logger.info("获取限售股解禁...")

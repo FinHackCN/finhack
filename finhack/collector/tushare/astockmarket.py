@@ -64,11 +64,11 @@ class tsAStockMarket:
     
     @tsMonitor
     def block_trade(pro,db):
-        tsSHelper.getDataWithLastDate(pro,'block_trade','astock_market_block_trade',db)
+        tsSHelper.getDataWithLastDate(pro=pro, api='block_trade', table='astock_market_block_trade', db=db, filed='trade_date', ts_code='')
     
     @tsMonitor
     def stk_holdernumber(pro,db):
-        tsSHelper.getDataWithCodeAndClear(pro,'stk_holdernumber','astock_market_stk_holdernumber',db)
+        tsSHelper.getDataWithLastDate(pro=pro, api='stk_holdernumber', table='astock_market_stk_holdernumber', db=db, filed='ann_date', ts_code='')
     
     # @tsMonitor
     # def stk_surv(pro,db):
@@ -76,7 +76,7 @@ class tsAStockMarket:
     
     @tsMonitor
     def stk_holdertrade(pro,db):
-        tsSHelper.getDataWithLastDate(pro,'stk_holdertrade','astock_market_stk_holdertrade',db,'ann_date')
+        tsSHelper.getDataWithLastDate(pro=pro, api='stk_holdertrade', table='astock_market_stk_holdertrade', db=db, filed='ann_date', ts_code='')
     
     # @tsMonitor
     # def broker_recommend(pro,db):
