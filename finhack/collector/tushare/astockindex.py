@@ -3,6 +3,9 @@ import time
 import datetime
 import traceback
 import pandas as pd
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from threading import Lock
 
 from finhack.library.db import DB
 from finhack.library.alert import alert
@@ -28,60 +31,120 @@ class tsAStockIndex:
     
         return [item.strftime(format) for item in date_list]    
 
+    # 添加线程锁用于保护共享资源
+    _lock = Lock()
+
+    @staticmethod
+    def _process_index_daily_worker(pro, db, index_list, today):
+        """
+        线程工作函数，处理指数日线数据
+        """
+        table = "astock_index_daily"
+        
+        for ts_code in index_list:
+            try:
+                lastdate = tsSHelper.getLastDateAndDelete('astock_index_daily', 'trade_date', ts_code=ts_code, db=db)
+                try_times = 0
+                
+                while True:
+                    try:
+                        df = pro.index_daily(ts_code=ts_code, start_date=lastdate, end_date=today)
+                        if not df.empty:
+                            # 使用线程锁保护数据库写入操作
+                            with tsAStockIndex._lock:
+                                DB.safe_to_sql(df, table, db, index=False, if_exists='append', chunksize=5000)
+                        break
+                    except Exception as e:
+                        if "每天最多访问" in str(e) or "每小时最多访问" in str(e):
+                            Log.logger.warning(f"线程处理{ts_code}时触发最多访问限制: {str(e)}")
+                            return
+                        if "最多访问" in str(e):
+                            Log.logger.warning(f'线程处理{ts_code}时触发限流，等待重试: {str(e)}')
+                            time.sleep(15)
+                            continue
+                        else:
+                            if try_times < 10:
+                                try_times += 1
+                                Log.logger.error(f"线程处理{ts_code}时函数异常，等待重试: {str(e)}")
+                                time.sleep(15)
+                                continue
+                            else:
+                                info = traceback.format_exc()
+                                alert.send('index_daily', f'线程处理{ts_code}异常', str(info))
+                                Log.logger.error(f'线程处理{ts_code}异常: {info}')
+                                break
+            except Exception as e:
+                Log.logger.error(f"处理指数{ts_code}时发生未预期的错误: {str(e)}")
+                continue
+
+    @tsMonitor
+    def index_daily(pro, db):
+        # 先检查 000001.SH 的最后日期来决定执行次数
+        check_lastdate = tsSHelper.getLastDateAndDelete('astock_index_daily', 'trade_date', ts_code='000001.SH', db=db)
+        
+        if check_lastdate == '20000101':
+            n = 3  # 如果是初始日期，执行3遍
+            Log.logger.info("检测到初始状态(000001.SH的最后日期为20000101)，将执行3轮数据获取")
+        else:
+            n = 1  # 否则执行1遍
+            Log.logger.info("检测到正常状态，将执行1轮数据获取")
+        
+        # 获取所有指数列表
+        data = tsSHelper.getAllAStockIndex(pro, db)
+        index_list = data['ts_code'].tolist()
+        today = datetime.datetime.now().strftime("%Y%m%d")
+        
+        # 执行指定次数的数据获取
+        for round_num in range(n):
+            Log.logger.info(f"开始第{round_num + 1}轮数据获取，共{n}轮")
+            
+            # 将指数列表分成3个部分，每个线程处理一部分
+            chunk_size = len(index_list) // 3
+            if chunk_size == 0:
+                chunk_size = 1
+            
+            index_chunks = [
+                index_list[i:i + chunk_size] 
+                for i in range(0, len(index_list), chunk_size)
+            ]
+            
+            # 如果分割后超过3个块，将多余的合并到前面的块中
+            while len(index_chunks) > 3:
+                index_chunks[2].extend(index_chunks.pop())
+            
+            Log.logger.info(f"将{len(index_list)}个指数分配给3个线程处理")
+            
+            # 使用线程池执行
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                futures = []
+                for i, chunk in enumerate(index_chunks):
+                    if chunk:  # 确保块不为空
+                        future = executor.submit(
+                            tsAStockIndex._process_index_daily_worker, 
+                            pro, db, chunk, today
+                        )
+                        futures.append(future)
+                        Log.logger.info(f"线程{i+1}开始处理{len(chunk)}个指数")
+                
+                # 等待所有线程完成
+                for i, future in enumerate(futures):
+                    try:
+                        future.result()
+                        Log.logger.info(f"线程{i+1}处理完成")
+                    except Exception as e:
+                        Log.logger.error(f"线程{i+1}执行出错: {str(e)}")
+            
+            Log.logger.info(f"第{round_num + 1}轮数据获取完成")
+            
+            # 如果需要执行多轮，在轮次之间添加适当延迟
+            if round_num < n - 1:
+                Log.logger.info("等待10秒后开始下一轮...")
+                time.sleep(10)
 
     @tsMonitor
     def index_basic(pro,db):
         tsSHelper.getDataAndReplace(pro,'index_basic','astock_index_basic',db)
     
-    @tsMonitor
-    def index_daily(pro,db):
-        data=tsSHelper.getAllAStockIndex(pro,db)
-        index_list=data['ts_code'].tolist()
-        table="astock_index_daily"
-        #正常执行一遍，第一次要执行3遍
-        n=1
-        while n>0:        
-            for ts_code in index_list:
-                lastdate=tsSHelper.getLastDateAndDelete('astock_index_daily','trade_date',ts_code=ts_code,db=db)
-                # 不需要获取engine对象，直接使用db连接名
-                # engine = DB.get_db_engine(db)   
-                today = datetime.datetime.now()
-                today=today.strftime("%Y%m%d")
-                try_times=0
-                if ts_code=='000001.SH' and lastdate=='20000101':
-                    first=True
-                    n=2
-                else:
-                    n=n-1
-                while True:
-                    try:
-                        df=pro.index_daily(ts_code=ts_code, start_date=lastdate, end_date=today)
-                        if(not df.empty):
-                            #res = df.to_sql('astock_index_daily', engine, index=False, if_exists='append', chunksize=5000)
-                            DB.safe_to_sql(df, table, db, index=False, if_exists='append', chunksize=5000)
-                            
-                        break
-                    except Exception as e:
-                        if "每天最多访问" in str(e) or "每小时最多访问" in str(e):
-                            Log.logger.warning("index_daily':触发最多访问。\n"+str(e)) 
-                            return
-                        if "最多访问" in str(e):
-                            Log.logger.warning('index_daily'+":触发限流，等待重试。\n"+str(e))
-                            time.sleep(15)
-                            continue
-                        else:
-                            if try_times<10:
-                                try_times=try_times+1;
-                                Log.logger.error("index_daily:函数异常，等待重试。\n"+str(e))
-                                time.sleep(15)
-                                continue
-                            else:                        
-                                info = traceback.format_exc()
-                                alert.send('index_daily','函数异常',str(info))
-                                Log.logger.error('index_daily'+"\n"+info)
-                                break                
-                
-
     @tsMonitor
     def index_weekly(pro,db):
         tsSHelper.getDataWithLastDate(pro,'index_weekly','astock_index_weekly',db)
