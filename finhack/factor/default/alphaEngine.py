@@ -794,26 +794,35 @@ class alphaEngine():
             alpha_name = alpha_item["name"]
             formula = alpha_item["formula"]
 
+            Log.logger.info(f"开始计算Alpha因子: {alpha_name}")
+            Log.logger.info(f"计算参数 - market: {market}, freq: {freq}, start_date: {start_date}, end_date: {end_date}")
+            Log.logger.info(f"原始公式: {formula}")
+
             pd.options.display.max_rows = 100
             t1=time.time()
+            
+            # 公式预处理
+            original_formula = formula
             formula=formula.replace("||"," | ")
             formula=formula.replace("&&"," & ")
             formula=formula.replace("^"," ** ")
             formula=formula.replace("\n"," ")
+            
+            Log.logger.debug(f"公式预处理后: {formula}")
 
             if '?' in formula:
                 formula=ternary_trans(formula)
+                Log.logger.debug(f"三元运算符转换后: {formula}")
 
             col_list=alphaEngine.get_col_list(formula)
-
+            Log.logger.info(f"公式依赖的列: {col_list}")
 
             time_ranges = factorManager.timeSplit(start_date, end_date, freq)
-            print(f"时间范围拆分为 {len(time_ranges)} 个区间")
-            print(time_ranges)
+            Log.logger.info(f"时间范围拆分为 {len(time_ranges)} 个区间: {time_ranges}")
                 
             # 遍历时间区间
             for i, (range_start, range_end) in enumerate(time_ranges):
-                print(f"处理时间区间: {range_start} - {range_end}")
+                Log.logger.info(f"处理Alpha时间区间 [{i+1}/{len(time_ranges)}]: {range_start} - {range_end}")
                     
                 # 判断当前是否为最后一个time_ranges元素
                 is_last_range = (i == len(time_ranges) - 1)
@@ -822,23 +831,22 @@ class alphaEngine():
                 if not is_last_range:
                     should_skip = True
                     factor_info = factorManager.inspectFactor(alpha_name, market=market, freq=freq,start_date=range_start, end_date=range_end,only_exists=True)
-                        # print(factor_info)
                     if not factor_info["exists"]:
-                            # 只要有一个因子不存在，就不跳过
                         should_skip = False
-        
+                        Log.logger.debug(f"Alpha因子 {alpha_name} 在时间区间 {range_start}-{range_end} 不存在，需要计算")
+                    else:
+                        Log.logger.debug(f"Alpha因子 {alpha_name} 在时间区间 {range_start}-{range_end} 已存在")
                         
                     if should_skip:
-                        print(f"时间区间 {range_start} - {range_end} 的因子已存在，跳过计算")
+                        Log.logger.info(f"时间区间 {range_start} - {range_end} 的Alpha因子已存在，跳过计算")
                         continue
                     
-                    # 加载该时间区间的依赖字段数据
-                    # 根据频率调整起始日期，确保有足够的历史数据用于计算
+                # 加载该时间区间的依赖字段数据
+                # 根据频率调整起始日期，确保有足够的历史数据用于计算
                 adjusted_start_date = factorManager.adjustStartDateByFreq(range_start, freq)
-                print(f"原始起始日期: {range_start}, 调整后的起始日期: {adjusted_start_date}")
-            
-
+                Log.logger.info(f"调整Alpha计算窗口 - 原始: {range_start}, 调整后: {adjusted_start_date}")
                 
+                Log.logger.info(f"开始加载Alpha依赖数据 - 字段: {[s.replace('$', '', 1) for s in col_list]}")
                 df = factorManager.loadFactors(
                             matrix_list=[s.replace('$', '', 1) for s in col_list],
                             vector_list=[],
@@ -850,38 +858,85 @@ class alphaEngine():
                             cache=True  # 使用缓存加速
                 )
 
-                print(df)
+                Log.logger.info(f"成功加载Alpha数据 - 数据量: {len(df)}, 列数: {len(df.columns)}")
+                Log.logger.debug(f"数据列名: {list(df.columns)}")
+                Log.logger.debug(f"数据索引信息: {df.index.names if hasattr(df.index, 'names') else 'Simple Index'}")
+                
+                if len(df) > 0:
+                    Log.logger.debug(f"Alpha数据样本:\n{df.head()}")
 
                 if df.empty:
-                    Log.logger.warning(f"数据为空，无法计算alpha: {alpha_name}")
+                    Log.logger.warning(f"Alpha数据为空，无法计算: {alpha_name}")
                     return {"name": alpha_name, "result": pd.DataFrame()}
                 
                 try:
+                    Log.logger.debug("开始处理Alpha公式中的列名替换")
+                    processed_formula = formula
                     for col in col_list:
-                        formula=formula.replace(col,"df['%s']" % (col[1:]))
-                        df[col[1:]]=df[col[1:]].astype(float)
+                        clean_col = col[1:]  # 移除$符号
+                        if clean_col not in df.columns:
+                            Log.logger.error(f"Alpha计算缺少必需的列: {clean_col}")
+                            Log.logger.error(f"可用的列: {list(df.columns)}")
+                            Log.logger.error(f"公式: {original_formula}")
+                            continue
+                        
+                        processed_formula = processed_formula.replace(col, f"df['{clean_col}']")
+                        df[clean_col] = df[clean_col].astype(float)
+                        Log.logger.debug(f"列 {col} -> df['{clean_col}']，数据类型转换为float")
+                        
                 except KeyError as e:
-                    Log.logger.error("%s error:%s" % (formula,str(e))) 
+                    Log.logger.error(f"Alpha公式处理错误 - {alpha_name}: {str(e)}")
+                    Log.logger.error(f"原始公式: {original_formula}")
+                    Log.logger.error(f"处理后公式: {processed_formula}")
+                    Log.logger.error(f"可用列: {list(df.columns)}")
                     continue
 
-    
-                Log.logger.info(alpha_name+"计算公式:"+formula)
-                res=eval(formula)
+                Log.logger.info(f"{alpha_name} 最终计算公式: {processed_formula}")
+                
+                try:
+                    Log.logger.debug("开始执行Alpha公式计算")
+                    res = eval(processed_formula)
+                    Log.logger.info(f"Alpha公式计算完成，结果类型: {type(res)}")
+                    
+                    if hasattr(res, 'shape'):
+                        Log.logger.debug(f"计算结果形状: {res.shape}")
+                    elif hasattr(res, '__len__'):
+                        Log.logger.debug(f"计算结果长度: {len(res)}")
+                        
+                except Exception as e:
+                    Log.logger.error(f"Alpha公式执行失败 - {alpha_name}: {str(e)}")
+                    Log.logger.error(f"公式: {processed_formula}")
+                    Log.logger.error(f"数据信息: {len(df)} rows, columns: {list(df.columns)}")
+                    traceback.print_exc()
+                    continue
 
                 # 创建结果DataFrame
                 result_df = pd.DataFrame()
                 
-                # 检查res是否为Series或DataFrame，并相应处理
-                if isinstance(res, pd.Series):
-                    # 将Series转换为DataFrame，列名为alpha_name
-                    result_df = pd.DataFrame({alpha_name: res})
-                elif isinstance(res, pd.DataFrame):
-                    # 如果已经是DataFrame，重命名列为alpha_name
-                    if len(res.columns) == 1:
-                        result_df = res.rename(columns={res.columns[0]: alpha_name})
+                try:
+                    # 检查res是否为Series或DataFrame，并相应处理
+                    if isinstance(res, pd.Series):
+                        Log.logger.debug("将Series结果转换为DataFrame")
+                        result_df = pd.DataFrame({alpha_name: res})
+                    elif isinstance(res, pd.DataFrame):
+                        Log.logger.debug("处理DataFrame结果")
+                        if len(res.columns) == 1:
+                            result_df = res.rename(columns={res.columns[0]: alpha_name})
+                        else:
+                            Log.logger.debug(f"DataFrame有多列({len(res.columns)})，选择第一列")
+                            result_df = pd.DataFrame({alpha_name: res.iloc[:, 0]})
                     else:
-                        # 如果有多列，选择第一列并重命名
-                        result_df = pd.DataFrame({alpha_name: res.iloc[:, 0]})
+                        Log.logger.warning(f"未知的结果类型: {type(res)}，尝试转换为DataFrame")
+                        result_df = pd.DataFrame({alpha_name: res})
+                        
+                    Log.logger.info(f"结果DataFrame创建成功，数据量: {len(result_df)}")
+                    
+                except Exception as e:
+                    Log.logger.error(f"创建结果DataFrame失败: {str(e)}")
+                    Log.logger.error(f"结果类型: {type(res)}")
+                    if hasattr(res, 'shape'):
+                        Log.logger.error(f"结果形状: {res.shape}")
+                    traceback.print_exc()
                 
                 # 过滤结果，确保只保存在指定日期范围内的数据
                 if not result_df.empty:
@@ -910,9 +965,10 @@ class alphaEngine():
                             try:
                                 # 尝试将times转换为datetime
                                 times = pd.to_datetime(times)
+                                Log.logger.debug("成功将Alpha结果时间索引转换为datetime类型")
                             except Exception as e:
-                                print(f"无法将时间索引转换为datetime: {str(e)}")
-                                print("跳过日期过滤，使用原始数据")
+                                Log.logger.error(f"无法将Alpha结果时间索引转换为datetime: {str(e)}")
+                                Log.logger.error("跳过日期过滤，使用原始数据")
                                 continue
                         
                         # 统一时区处理
@@ -921,7 +977,7 @@ class alphaEngine():
                         if hasattr(times, 'tz') and times.tz is not None:
                             has_tz = True
                             tz_info = times.tz
-                            print(f"检测到时区信息: {tz_info}")
+                            Log.logger.debug(f"检测到Alpha结果时区信息: {tz_info}")
                         
                         # 2. 转换输入的日期为datetime对象
                         start_datetime = pd.to_datetime(current_start_date)
@@ -957,21 +1013,21 @@ class alphaEngine():
                         
                         # 如果过滤后结果为空，则记录警告
                         if filtered_df.empty and not result_df.empty:
-                            print(f"警告：过滤后没有符合日期范围 {current_start_date} 到 {current_end_date} 的数据")
-                            print(f"时间范围信息: start={start_datetime}, end={end_datetime}")
-                            print(f"样本时间: {times.iloc[0] if hasattr(times, 'iloc') else times[0]}")
+                            Log.logger.warning(f"Alpha日期过滤后没有符合范围 {current_start_date} - {current_end_date} 的数据")
+                            Log.logger.warning(f"时间范围: {start_datetime} - {end_datetime}")
+                            Log.logger.warning(f"样本时间: {times.iloc[0] if hasattr(times, 'iloc') else times[0]}")
                         else:
-                            print(f"日期过滤前数据量: {len(result_df)}, 过滤后数据量: {len(filtered_df)}")
+                            Log.logger.info(f"Alpha日期过滤: {len(result_df)} -> {len(filtered_df)} 条记录")
                             result_df = filtered_df
                     except Exception as e:
-                        print(f"日期过滤过程出错: {str(e)}")
-                        print("跳过日期过滤，使用原始数据")
-                        # 添加更详细的错误信息
-                        print(f"本批次范围 - 开始日期: {current_start_date}, 结束日期: {current_end_date}")
+                        Log.logger.error(f"Alpha日期过滤过程出错: {str(e)}")
+                        Log.logger.error(f"当前处理区间: {current_start_date} - {current_end_date}")
                         if 'times' in locals():
-                            print(f"时间数据类型: {type(times)}")
-                            print(f"时区信息: {getattr(times, 'tz', None)}")
-                            print(f"样本时间: {times.iloc[0] if hasattr(times, 'iloc') else times[0] if len(times) > 0 else None}")
+                            Log.logger.error(f"时间数据类型: {type(times)}")
+                            Log.logger.error(f"时区信息: {getattr(times, 'tz', None)}")
+                            if len(times) > 0:
+                                Log.logger.error(f"样本时间: {times.iloc[0] if hasattr(times, 'iloc') else times[0]}")
+                        Log.logger.error("跳过日期过滤，使用原始数据")
                         traceback.print_exc()
                 
                 # 整理结果的索引结构
@@ -981,16 +1037,42 @@ class alphaEngine():
                     result_df = result_df.reset_index(drop=False)
                 
                 # 排序和设置索引
-                result_df = result_df.sort_values(by=['time', 'code'])
-                result_df = result_df.set_index(['time', 'code'])
+                try:
+                    result_df = result_df.sort_values(by=['time', 'code'])
+                    result_df = result_df.set_index(['time', 'code'])
+                    Log.logger.debug("成功设置Alpha结果的时间和代码索引")
+                except Exception as e:
+                    Log.logger.error(f"设置Alpha结果索引时出错: {str(e)}")
+                    Log.logger.error(f"结果DataFrame列名: {list(result_df.columns)}")
+                    if 'time' not in result_df.columns:
+                        Log.logger.error("结果中缺少time列")
+                    if 'code' not in result_df.columns:
+                        Log.logger.error("结果中缺少code列")
+                    traceback.print_exc()
                 
                 # 保存因子数据
-                factorManager.saveFactors(result_df, [alpha_name], market, freq)
+                try:
+                    Log.logger.info(f"开始保存Alpha因子数据: {alpha_name}")
+                    factorManager.saveFactors(result_df, [alpha_name], market, freq)
+                    Log.logger.info(f"Alpha因子数据保存完成: {alpha_name}")
+                except Exception as e:
+                    Log.logger.error(f"保存Alpha因子数据失败: {str(e)}")
+                    Log.logger.error(f"因子名: {alpha_name}, 数据量: {len(result_df)}")
+                    traceback.print_exc()
                 
-                print(f"计算因子 {alpha_name} 成功，结果数据量: {len(result_df)}")
+                Log.logger.info(f"计算Alpha因子 {alpha_name} 成功，最终数据量: {len(result_df)}")
+                if len(result_df) > 0:
+                    Log.logger.debug(f"Alpha结果数据样本:\n{result_df.head()}")
+                
+                computation_time = time.time() - t1
+                Log.logger.info(f"Alpha因子 {alpha_name} 计算耗时: {computation_time:.2f} 秒")
                 
                 return {"name": alpha_name, "result": result_df}
+                
         except Exception as e:
-            Log.logger.error(f"计算alpha因子 {alpha_item['name']} 失败: {str(e)}")
+            Log.logger.error(f"计算Alpha因子 {alpha_item['name']} 失败: {str(e)}")
+            Log.logger.error(f"Alpha项信息: {alpha_item}")
+            Log.logger.error(f"计算参数: market={market}, freq={freq}, start_date={start_date}, end_date={end_date}")
+            traceback.print_exc()
             return {"name": alpha_item["name"], "result": pd.DataFrame()}
         

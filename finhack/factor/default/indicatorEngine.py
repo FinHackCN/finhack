@@ -386,7 +386,6 @@ class indicatorEngine():
         
         print(f"指标组计算完成")
 
-    #这里的list是同代码返回的字段，本意是希望只需要计算一次，但后来发现还有不同参数的情况
     def computeIndicator(market, freq, indicator_list, process_num="auto", start_date="", end_date="", code_list=[], save=True):
         """
         计算指标，支持按时间分块计算
@@ -403,30 +402,38 @@ class indicatorEngine():
         """
         # 理论上不应该出现空的指标列表，但为了安全起见，还是加上判断
         if not indicator_list:
-            print("指标列表为空，无需计算")
+            Log.logger.warning("指标列表为空，无需计算")
             return
             
         try:
-            print(f"计算指标: {indicator_list}")
+            Log.logger.info(f"开始计算指标: {indicator_list}")
+            Log.logger.info(f"计算参数 - market: {market}, freq: {freq}, start_date: {start_date}, end_date: {end_date}")
             
             # 处理 end_date 为 'now' 的情况
             if end_date == 'now':
                 end_date = datetime.datetime.now().strftime("%Y%m%d")
+                Log.logger.debug(f"end_date调整为当前日期: {end_date}")
                 
             # 1. 获取指标的计算函数和依赖关系
             indicator = indicator_list[0]  # 取第一个指标作为代表
+            Log.logger.debug(f"分析指标信息，代表指标: {indicator}")
+            
             module_name, func_name, indicator_code, return_fields, referenced_fields = indicatorEngine.getIndicatorInfo(indicator, market, freq)
 
             if not module_name or not func_name:
-                print(f"无法获取指标信息: {indicator}")
+                Log.logger.error(f"无法获取指标信息: {indicator}")
+                Log.logger.error(f"module_name: {module_name}, func_name: {func_name}")
                 return
                 
-            print("依赖字段:", referenced_fields)
+            Log.logger.info(f"指标计算信息 - 模块: {module_name}, 函数: {func_name}")
+            Log.logger.info(f"返回字段: {return_fields}")
+            Log.logger.info(f"依赖字段: {referenced_fields}")
             
             # 2. 加载指标计算函数
             try:
                 # 定义文件路径
                 file_path = f"{INDICATORS_DIR}/{market}/x{freq}/{module_name}.py"
+                Log.logger.debug(f"尝试加载指标模块文件: {file_path}")
                 
                 # 使用importlib.util更精确地加载模块
                 import importlib.util
@@ -438,24 +445,27 @@ class indicatorEngine():
                 func = getattr(module, func_name, None)
                 
                 if func is None:
-                    print(f"无法找到指标函数: {func_name}")
+                    Log.logger.error(f"无法找到指标函数: {func_name} 在模块 {module_name}")
                     return
+                    
+                Log.logger.debug(f"成功加载指标函数: {func_name}")
             except Exception as e:
-                print(f"加载指标模块或函数失败: {str(e)}")
+                Log.logger.error(f"加载指标模块或函数失败: {str(e)}")
+                Log.logger.error(f"文件路径: {file_path}")
                 traceback.print_exc()
                 return
 
             # 3. 确定模块类型
             module_type = module_name.split('_')[0]  # mix, ts, cs等
+            Log.logger.info(f"指标模块类型: {module_type}")
             
             # 4. 使用timeSplit进行时间拆分
             time_ranges = factorManager.timeSplit(start_date, end_date, freq)
-            print(f"时间范围拆分为 {len(time_ranges)} 个区间")
-            print(time_ranges)
+            Log.logger.info(f"时间范围拆分为 {len(time_ranges)} 个区间: {time_ranges}")
             
             # 遍历时间区间
             for i, (range_start, range_end) in enumerate(time_ranges):
-                print(f"处理时间区间: {range_start} - {range_end}")
+                Log.logger.info(f"处理时间区间 [{i+1}/{len(time_ranges)}]: {range_start} - {range_end}")
                 
                 # 判断当前是否为最后一个time_ranges元素
                 is_last_range = (i == len(time_ranges) - 1)
@@ -465,21 +475,23 @@ class indicatorEngine():
                     should_skip = True
                     for indicator in indicator_list:
                         factor_info = factorManager.inspectFactor(indicator, market=market, freq=freq,start_date=range_start, end_date=range_end,only_exists=True)
-                        # print(factor_info)
                         if not factor_info["exists"]:
-                            # 只要有一个因子不存在，就不跳过
                             should_skip = False
+                            Log.logger.debug(f"因子 {indicator} 在时间区间 {range_start}-{range_end} 不存在，需要计算")
                             break
+                        else:
+                            Log.logger.debug(f"因子 {indicator} 在时间区间 {range_start}-{range_end} 已存在")
                     
                     if should_skip:
-                        print(f"时间区间 {range_start} - {range_end} 的因子已存在，跳过计算")
+                        Log.logger.info(f"时间区间 {range_start} - {range_end} 的所有因子已存在，跳过计算")
                         continue
                 
                 # 加载该时间区间的依赖字段数据
                 # 根据频率调整起始日期，确保有足够的历史数据用于计算
                 adjusted_start_date = factorManager.adjustStartDateByFreq(range_start, freq)
-                print(f"原始起始日期: {range_start}, 调整后的起始日期: {adjusted_start_date}")
-                
+                Log.logger.info(f"调整计算窗口 - 原始: {range_start}, 调整后: {adjusted_start_date}")
+
+                Log.logger.info(f"开始加载依赖数据 - 字段: {referenced_fields}")
                 df_ref = factorManager.loadFactors(
                         matrix_list=referenced_fields,
                         vector_list=[],
@@ -491,82 +503,155 @@ class indicatorEngine():
                         cache=True  # 使用缓存加速
                 )
 
-                
-                #exit()
-                    
                 if df_ref.empty:
                     if module_type != "mix":
-                        print(f"时间区间 {range_start} - {range_end} 无数据")
+                        Log.logger.warning(f"时间区间 {range_start} - {range_end} 无数据，跳过计算")
                         continue
-                    if len(df_ref.index)>0:
-                        df_ref['placeholder']=0
-                print(f"加载数据量: {len(df_ref)}")
-                print(df_ref)
+                    else:
+                        Log.logger.info("mix模块类型，为空数据添加占位符")
+                        df_ref['placeholder'] = 0
+                        
+                Log.logger.info(f"成功加载数据 - 数据量: {len(df_ref)}, 列数: {len(df_ref.columns)}")
+                Log.logger.debug(f"数据列名: {list(df_ref.columns)}")
+                Log.logger.debug(f"数据索引信息: {df_ref.index.names if hasattr(df_ref.index, 'names') else 'Simple Index'}")
+                
+                # 显示数据结构的样本
+                if len(df_ref) > 0:
+                    Log.logger.debug(f"数据样本:\n{df_ref.head()}")
+                
                 # 根据模块类型计算指标
                 result_df = None
 
                 if module_type == "mix":
-                    # 混合因子，单次计算
-                    result_df = func(df_ref,[range_start, range_end])
+                    Log.logger.info("执行mix类型指标计算")
+                    try:
+                        result_df = func(df_ref, [range_start, range_end])
+                        Log.logger.info(f"mix指标计算完成，结果数据量: {len(result_df) if result_df is not None else 0}")
+                    except Exception as e:
+                        Log.logger.error(f"mix指标计算失败: {str(e)}")
+                        Log.logger.error(f"函数: {func_name}, 参数: df_ref({len(df_ref)} rows), [{range_start}, {range_end}]")
+                        traceback.print_exc()
+                        
                 elif module_type == "ts":
+                    Log.logger.info("执行时间序列(ts)类型指标计算")
                     # 时间序列因子，对每个股票代码分别计算
                     if code_list:
                         stocks = code_list
+                        Log.logger.debug(f"使用指定的股票代码列表: {len(stocks)} 只股票")
                     else:
                         # 检查df_ref是否为MultiIndex
                         if isinstance(df_ref.index, pd.MultiIndex) and 'code' in df_ref.index.names:
                             stocks = df_ref.index.get_level_values('code').unique().tolist()
+                            Log.logger.debug(f"从MultiIndex中获取股票代码: {len(stocks)} 只股票")
                         else:
                             # 如果不是MultiIndex或没有code级别，检查是否有code列
                             if 'code' in df_ref.columns:
                                 stocks = df_ref['code'].unique().tolist()
+                                Log.logger.debug(f"从code列中获取股票代码: {len(stocks)} 只股票")
                             else:
-                                print("警告：无法从df_ref中获取股票代码列表，数据结构不符合预期")
-                                print(f"索引名称: {df_ref.index.names}")
-                                print(f"列名: {df_ref.columns.tolist()}")
+                                Log.logger.error("无法从df_ref中获取股票代码列表，数据结构不符合预期")
+                                Log.logger.error(f"索引名称: {df_ref.index.names}")
+                                Log.logger.error(f"列名: {list(df_ref.columns)}")
                                 stocks = []
                         
+                    Log.logger.info(f"准备计算 {len(stocks)} 只股票的时间序列指标")
+                    if len(stocks) > 0:
+                        Log.logger.debug(f"股票代码样本: {stocks[:5]}{'...' if len(stocks) > 5 else ''}")
+                        
                     code_results = []
-                    params=indicator.split('_')[:-1]
-                    # print("df_ref:")
-                    # print(df_ref)
+                    params = indicator.split('_')[:-1]
+                    Log.logger.debug(f"指标参数: {params}")
 
-                    for code in stocks:
-                        code_df = df_ref.xs(code, level='code')
-                        if not code_df.empty:
-                            try:
+                    for idx, code in enumerate(stocks):
+                        Log.logger.debug(f"计算股票 [{idx+1}/{len(stocks)}]: {code}")
+                        try:
+                            code_df = df_ref.xs(code, level='code')
+                            Log.logger.debug(f"股票 {code} 数据量: {len(code_df)}, 列数: {len(code_df.columns)}")
+                            Log.logger.debug(f"股票 {code} 可用列: {list(code_df.columns)}")
+                            
+                            if not code_df.empty:
                                 # 创建DataFrame的副本而非引用，避免SettingWithCopyWarning
                                 code_df_copy = code_df.copy()
+                                
+                                # 检查必需的列是否存在
+                                missing_columns = [col for col in referenced_fields if col not in code_df_copy.columns]
+                                if missing_columns:
+                                    Log.logger.warning(f"股票 {code} 缺少必需的列: {missing_columns}")
+                                    Log.logger.warning(f"可用的列: {list(code_df_copy.columns)}")
+                                    continue
+                                
+                                Log.logger.debug(f"调用指标函数 {func_name} 计算股票 {code}")
                                 code_result = func(code_df_copy, params)
-                                code_result['code'] = code
-                                code_results.append(code_result)
-                            except Exception as e:
-                                print(f"计算股票 {code} 的时间序列指标失败: {str(e)}")
+                                
+                                if code_result is not None and not code_result.empty:
+                                    code_result['code'] = code
+                                    code_results.append(code_result)
+                                    Log.logger.debug(f"股票 {code} 计算成功，结果数据量: {len(code_result)}")
+                                else:
+                                    Log.logger.warning(f"股票 {code} 计算结果为空")
+                            else:
+                                Log.logger.warning(f"股票 {code} 的数据为空，跳过计算")
+                                
+                        except Exception as e:
+                            Log.logger.error(f"计算股票 {code} 的时间序列指标失败: {str(e)}")
+                            Log.logger.error(f"指标: {indicator_list}, 函数: {func_name}")
+                            Log.logger.error(f"股票 {code} 数据结构:")
+                            if 'code_df' in locals():
+                                Log.logger.error(f"  - 数据量: {len(code_df)}")
+                                Log.logger.error(f"  - 列名: {list(code_df.columns)}")
+                                Log.logger.error(f"  - 索引: {code_df.index.names if hasattr(code_df.index, 'names') else 'Simple Index'}")
+                                Log.logger.error(f"  - 数据类型: {code_df.dtypes.to_dict()}")
+                                if len(code_df) > 0:
+                                    Log.logger.error(f"  - 样本数据:\n{code_df.head(3)}")
+                            Log.logger.error(f"参数: {params}")
+                            traceback.print_exc()
                         
                     if code_results:
                         result_df = pd.concat(code_results)
+                        Log.logger.info(f"时间序列指标计算完成，成功计算 {len(code_results)} 只股票，总数据量: {len(result_df)}")
+                    else:
+                        Log.logger.warning("时间序列指标计算完成，但没有任何股票计算成功")
+                        
                 elif module_type == "cs":
-                        # 横截面因子，对每个交易日分别计算
+                    Log.logger.info("执行横截面(cs)类型指标计算")
+                    # 横截面因子，对每个交易日分别计算
                     dates = df_ref.index.get_level_values('time').unique().tolist()
+                    Log.logger.info(f"准备计算 {len(dates)} 个交易日的横截面指标")
                         
                     date_results = []
-                    params=indicator.split('_')[:-1]
-                    for date in dates:
-                        date_df = df_ref.xs(date, level='time')
-                        if not date_df.empty:
-                            try:
+                    params = indicator.split('_')[:-1]
+                    Log.logger.debug(f"指标参数: {params}")
+                    
+                    for idx, date in enumerate(dates):
+                        Log.logger.debug(f"计算日期 [{idx+1}/{len(dates)}]: {date}")
+                        try:
+                            date_df = df_ref.xs(date, level='time')
+                            if not date_df.empty:
                                 date_result = func(date_df, params)
-                                date_result['time'] = date
-                                date_results.append(date_result)
-                            except Exception as e:
-                                print(f"计算日期 {date} 的横截面指标失败: {str(e)}")
+                                if date_result is not None and not date_result.empty:
+                                    date_result['time'] = date
+                                    date_results.append(date_result)
+                                    Log.logger.debug(f"日期 {date} 计算成功，结果数据量: {len(date_result)}")
+                            else:
+                                Log.logger.warning(f"日期 {date} 的数据为空，跳过计算")
+                        except Exception as e:
+                            Log.logger.error(f"计算日期 {date} 的横截面指标失败: {str(e)}")
+                            Log.logger.error(f"指标: {indicator_list}, 函数: {func_name}, 参数: {params}")
+                            traceback.print_exc()
                         
                     if date_results:
                         result_df = pd.concat(date_results)
+                        Log.logger.info(f"横截面指标计算完成，成功计算 {len(date_results)} 个交易日，总数据量: {len(result_df)}")
+                    else:
+                        Log.logger.warning("横截面指标计算完成，但没有任何交易日计算成功")
                 else:
-                    print(f"未知因子类型: {module_type}")
+                    Log.logger.error(f"未知指标类型: {module_type}")
+                    
                 # 处理指标结果 - 重命名和 shift
                 if result_df is not None and not result_df.empty:
+                    Log.logger.info("开始处理指标计算结果")
+                    Log.logger.debug(f"原始结果列名: {list(result_df.columns)}")
+                    
                     # 处理每个指标的重命名和shift
                     for indicator in indicator_list:
                         parts = indicator.split('_')
@@ -578,16 +663,19 @@ class indicatorEngine():
                             suffix = '_'.join(parts[1:]) if len(parts) > 1 else '0'
                             new_column_name = f"{factor_name}_{suffix}"
                             
-                            # 重命名列
+                            Log.logger.debug(f"重命名列: {factor_name} -> {new_column_name}")
                             result_df.rename(columns={factor_name: new_column_name}, inplace=True)
                             
                             # 检查是否需要shift
                             if len(parts) > 1 and parts[-1] != '0':
                                 shift_value = int(parts[-1])
+                                Log.logger.debug(f"对列 {new_column_name} 执行shift操作，偏移量: {shift_value}")
                                 result_df[new_column_name] = result_df[new_column_name].shift(shift_value)
+                        else:
+                            Log.logger.warning(f"计算结果中未找到预期的列: {factor_name}")
+                            Log.logger.warning(f"可用的列: {list(result_df.columns)}")
                     
-                    # 如果计算成功且需要保存
-                    print(result_df)
+                    Log.logger.info(f"结果处理完成，最终列名: {list(result_df.columns)}")
                     
                     # 过滤结果，确保只保存在指定日期范围内的数据
                     if not result_df.empty:
@@ -616,9 +704,10 @@ class indicatorEngine():
                                 try:
                                     # 尝试将times转换为datetime
                                     times = pd.to_datetime(times)
+                                    Log.logger.debug("成功将时间索引转换为datetime类型")
                                 except Exception as e:
-                                    print(f"无法将时间索引转换为datetime: {str(e)}")
-                                    print("跳过日期过滤，使用原始数据")
+                                    Log.logger.error(f"无法将时间索引转换为datetime: {str(e)}")
+                                    Log.logger.error("跳过日期过滤，使用原始数据")
                                     raise
                             
                             # 统一时区处理
@@ -627,7 +716,7 @@ class indicatorEngine():
                             if hasattr(times, 'tz') and times.tz is not None:
                                 has_tz = True
                                 tz_info = times.tz
-                                print(f"检测到时区信息: {tz_info}")
+                                Log.logger.debug(f"检测到时区信息: {tz_info}")
                             
                             # 2. 转换输入的日期为datetime对象
                             start_datetime = pd.to_datetime(current_start_date)
@@ -663,23 +752,24 @@ class indicatorEngine():
                             
                             # 如果过滤后结果为空，则记录警告
                             if filtered_df.empty and not result_df.empty:
-                                print(f"警告：过滤后没有符合日期范围 {current_start_date} 到 {current_end_date} 的数据")
-                                print(f"时间范围信息: start={start_datetime}, end={end_datetime}")
-                                print(f"样本时间: {times.iloc[0] if hasattr(times, 'iloc') else times[0]}")
+                                Log.logger.warning(f"日期过滤后没有符合范围 {current_start_date} - {current_end_date} 的数据")
+                                Log.logger.warning(f"时间范围: {start_datetime} - {end_datetime}")
+                                Log.logger.warning(f"样本时间: {times.iloc[0] if hasattr(times, 'iloc') else times[0]}")
                             else:
-                                print(f"日期过滤前数据量: {len(result_df)}, 过滤后数据量: {len(filtered_df)}")
+                                Log.logger.info(f"日期过滤: {len(result_df)} -> {len(filtered_df)} 条记录")
                                 result_df = filtered_df
                         except Exception as e:
-                            print(f"日期过滤过程出错: {str(e)}")
-                            print("跳过日期过滤，使用原始数据")
-                            # 添加更详细的错误信息
-                            print(f"本批次范围 - 开始日期: {current_start_date}, 结束日期: {current_end_date}")
+                            Log.logger.error(f"日期过滤过程出错: {str(e)}")
+                            Log.logger.error(f"当前处理区间: {current_start_date} - {current_end_date}")
                             if 'times' in locals():
-                                print(f"时间数据类型: {type(times)}")
-                                print(f"时区信息: {getattr(times, 'tz', None)}")
-                                print(f"样本时间: {times.iloc[0] if hasattr(times, 'iloc') else times[0] if len(times) > 0 else None}")
+                                Log.logger.error(f"时间数据类型: {type(times)}")
+                                Log.logger.error(f"时区信息: {getattr(times, 'tz', None)}")
+                                if len(times) > 0:
+                                    Log.logger.error(f"样本时间: {times.iloc[0] if hasattr(times, 'iloc') else times[0]}")
+                            Log.logger.error("跳过日期过滤，使用原始数据")
                             traceback.print_exc()
                     
+                    # 整理索引结构
                     if 'time' in result_df.columns:
                         result_df = result_df.reset_index(drop=True)
                     else:
@@ -688,15 +778,21 @@ class indicatorEngine():
                     result_df = result_df.set_index(['time', 'code'])
 
                     if save:
+                        Log.logger.info("开始保存因子数据")
                         factorManager.saveFactors(result_df, indicator_list, market, freq)
+                        Log.logger.info("因子数据保存完成")
                     
-                    print(f"计算指标组 {indicator_list} 成功，结果数据量: {len(result_df)}")
-                    print(result_df)
-                    # exit()
+                    Log.logger.info(f"指标组 {indicator_list} 计算成功，最终数据量: {len(result_df)}")
+                    if len(result_df) > 0:
+                        Log.logger.debug(f"结果数据样本:\n{result_df.head()}")
+                else:
+                    Log.logger.warning(f"指标组 {indicator_list} 计算结果为空")
+                    
         except Exception as e:
-            print(f"指标计算过程出现未预期异常: {str(e)}")
+            Log.logger.error(f"指标计算过程出现未预期异常: {str(e)}")
+            Log.logger.error(f"指标列表: {indicator_list}")
+            Log.logger.error(f"计算参数: market={market}, freq={freq}, start_date={start_date}, end_date={end_date}")
             traceback.print_exc()
-    
 
 
     def computeIndicatorByCode():
