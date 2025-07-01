@@ -446,48 +446,48 @@ class TushareCollector:
 
 
     def getAStockFinance(self):
-        """获取A股财务数据，依赖于股票基本信息和财务披露日期"""
+        """获取A股财务数据，结合VIP接口和传统方法"""
         try:
-            # 获取财务披露日期
+            # 首先获取财务披露日期（基础依赖数据）
             Log.logger.info("获取财务披露日期...")
             tsAStockFinance.disclosure_date(self.pro, self.db)
             self.dependency_status['astock_finance_disclosure_date'] = True
             
             # 检查财务披露日期是否获取成功
             if not self.check_dependency('astock_finance_disclosure_date'):
-                Log.logger.error("获取财务数据失败：财务披露日期数据不存在")
-                return False
-                
-
-
-            # 获取利润表
-            Log.logger.info("获取利润表...")
-            self.mTread(tsAStockFinance, 'income', 'astock_finance_disclosure_date')
+                Log.logger.warning("财务披露日期数据不存在，VIP接口可能仍能正常工作")
             
-            # 获取资产负债表
-            Log.logger.info("获取资产负债表...")
-            self.mTread(tsAStockFinance, 'balancesheet', 'astock_finance_disclosure_date')
+            Log.logger.info("开始使用VIP接口获取主要财务数据")
             
-            # 获取现金流量表
-            Log.logger.info("获取现金流量表...")
-            self.mTread(tsAStockFinance, 'cashflow', 'astock_finance_disclosure_date')
+            # 获取利润表（VIP接口）
+            Log.logger.info("获取利润表（VIP接口）...")
+            tsAStockFinance.income_vip(self.pro, self.db)
             
-            # 获取业绩预告
-            Log.logger.info("获取业绩预告...")
-            self.mTread(tsAStockFinance, 'forecast', 'astock_finance_disclosure_date')
+            # 获取资产负债表（VIP接口）
+            Log.logger.info("获取资产负债表（VIP接口）...")
+            tsAStockFinance.balancesheet_vip(self.pro, self.db)
             
-            # 获取业绩快报
-            Log.logger.info("获取业绩快报...")
-            self.mTread(tsAStockFinance, 'express', 'astock_finance_disclosure_date')
+            # 获取现金流量表（VIP接口）
+            Log.logger.info("获取现金流量表（VIP接口）...")
+            tsAStockFinance.cashflow_vip(self.pro, self.db)
             
-            # 获取财务指标数据
-            Log.logger.info("获取财务指标数据...")
-            self.mTread(tsAStockFinance, 'fina_indicator', 'astock_finance_disclosure_date')
+            # 获取业绩预告（VIP接口）
+            Log.logger.info("获取业绩预告（VIP接口）...")
+            tsAStockFinance.forecast_vip(self.pro, self.db)
             
-            # 获取财务审计意见
-            Log.logger.info("获取财务审计意见...")
-            self.mTread(tsAStockFinance, 'fina_audit', 'astock_finance_disclosure_date')
+            # 获取业绩快报（VIP接口）
+            Log.logger.info("获取业绩快报（VIP接口）...")
+            tsAStockFinance.express_vip(self.pro, self.db)
             
+            # 获取财务指标数据（VIP接口）
+            Log.logger.info("获取财务指标数据（VIP接口）...")
+            tsAStockFinance.fina_indicator_vip(self.pro, self.db)
+            
+            # 获取财务审计意见（VIP接口）
+            Log.logger.info("获取财务审计意见（VIP接口）...")
+            tsAStockFinance.fina_audit_vip(self.pro, self.db)
+            
+            # 保留原有的其他方法（传统方法）
             # 获取主营业务构成
             Log.logger.info("获取主营业务构成...")
             self.mTread(tsAStockFinance, 'fina_mainbz', 'astock_finance_disclosure_date')
@@ -495,6 +495,14 @@ class TushareCollector:
             # 获取分红送股数据
             Log.logger.info("获取分红送股数据...")
             self.mTread(tsAStockFinance, 'dividend', 'astock_finance_disclosure_date')
+            
+            # 获取前十大股东
+            Log.logger.info("获取前十大股东...")
+            self.mTread(tsAStockFinance, 'top10_holders', 'astock_finance_disclosure_date')
+            
+            # 获取前十大流通股东
+            Log.logger.info("获取前十大流通股东...")
+            self.mTread(tsAStockFinance, 'top10_floatholders', 'astock_finance_disclosure_date')
             
             return True
         except Exception as e:
@@ -561,14 +569,6 @@ class TushareCollector:
             # 获取股东增减持
             Log.logger.info("获取股东增减持...")
             self.mTread(tsAStockMarket, 'stk_holdertrade', 'astock_basic')
-            
-            # 获取前十大股东
-            Log.logger.info("获取前十大股东...")
-            self.mTread(tsAStockFinance, 'top10_holders', 'astock_basic')
-            
-            # 获取前十大流通股东
-            Log.logger.info("获取前十大流通股东...")
-            self.mTread(tsAStockFinance, 'top10_floatholders', 'astock_basic')
             
             return True
         except Exception as e:

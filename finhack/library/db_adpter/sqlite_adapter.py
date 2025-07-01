@@ -30,17 +30,17 @@ class SQLiteAdapter(DbAdapter):
         
         # 高性能模式下的优化配置
         if self.HIGH_PERFORMANCE_MODE:
-            # 设置连接超时和重试参数 - 为多线程优化
-            self.timeout = config.get('timeout', 120.0)  # 进一步增加连接超时时间(秒)
-            self.max_retries = config.get('max_retries', 5)  # 增加重试次数
-            self.retry_delay = config.get('retry_delay', 0.05)  # 进一步减少重试间隔
-            self.busy_timeout = config.get('busy_timeout', 120000)  # 2分钟忙等待
+            # 设置连接超时和重试参数 - 为多线程优化，确保类型转换
+            self.timeout = float(config.get('timeout', 120.0))  # 进一步增加连接超时时间(秒)
+            self.max_retries = int(config.get('max_retries', 5))  # 增加重试次数
+            self.retry_delay = float(config.get('retry_delay', 0.05))  # 进一步减少重试间隔
+            self.busy_timeout = int(config.get('busy_timeout', 120000))  # 2分钟忙等待
         else:
             # 标准模式配置
-            self.timeout = config.get('timeout', 30.0)
-            self.max_retries = config.get('max_retries', 5)
-            self.retry_delay = config.get('retry_delay', 1.0)
-            self.busy_timeout = config.get('busy_timeout', 30000)
+            self.timeout = float(config.get('timeout', 30.0))
+            self.max_retries = int(config.get('max_retries', 5))
+            self.retry_delay = float(config.get('retry_delay', 1.0))
+            self.busy_timeout = int(config.get('busy_timeout', 30000))
         
         # 非内存数据库需要检测路径
         if self.db_path not in (':memory:', ''):
@@ -58,7 +58,7 @@ class SQLiteAdapter(DbAdapter):
             return create_engine(
                 uri,
                 connect_args={
-                    'timeout': self.timeout,
+                    'timeout': float(self.timeout),  # 确保 timeout 是浮点数
                     'check_same_thread': False  # 允许多线程使用同一连接
                 },
                 pool_pre_ping=True,
@@ -449,9 +449,15 @@ class SQLiteAdapter(DbAdapter):
     
     @dbMonitor
     def truncate_table(self, table: str) -> bool:
-        """截断表"""
+        """截断表 - 增加表存在性检查"""
         try:
+            # 先检查表是否存在
+            if not self.table_exists(table):
+                Log.logger.warning(f"尝试截断不存在的表 {table}，操作跳过")
+                return True  # 表不存在时返回True，因为目标已达到（表为空）
+            
             self.exec_sql(f"DELETE FROM {table}")
+            Log.logger.info(f"成功截断表 {table}")
             return True
         except Exception as e:
             Log.logger.error(f"截断表 {table} 失败: {str(e)}")
