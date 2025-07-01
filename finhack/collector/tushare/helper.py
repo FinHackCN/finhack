@@ -421,7 +421,14 @@ class tsSHelper:
             
     
     def getDataWithCodeAndClear(pro, api, table, db):
-        DB.exec(f"DROP TABLE IF EXISTS {table}_tmp", db)
+        # 安全地删除临时表（如果存在）
+        try:
+            adapter = DB.get_adapter(db)
+            if adapter.table_exists(f"{table}_tmp"):
+                DB.exec(f"DROP TABLE IF EXISTS {table}_tmp", db)
+                Log.logger.debug(f"已删除临时表 {table}_tmp")
+        except Exception as e:
+            Log.logger.warning(f"删除临时表 {table}_tmp 时出错: {str(e)}")
         data = tsSHelper.getAllAStock(True, pro, db)
         stock_list = data['ts_code'].tolist()
         f = getattr(pro, api)

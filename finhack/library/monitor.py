@@ -136,6 +136,9 @@ class dbMonitor:
                             # 获取源表名参数（通常是第二个参数）
                             source_table = args[1] if len(args) > 1 else None
                             return (False, source_table)
+                        elif func_name == 'get_connection':
+                            # get_connection 方法应该抛出异常而不是返回None
+                            raise e
                         else:
                             return None
             return res

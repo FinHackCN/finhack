@@ -316,10 +316,20 @@ class DuckDBAdapter(DbAdapter):
     
     @dbMonitor
     def truncate_table(self, table: str) -> bool:
-        """截断表"""
-        # DuckDB不支持TRUNCATE，使用DELETE代替
-        self.exec_sql(f"DELETE FROM {table}")
-        return True
+        """截断表 - 增加表存在性检查"""
+        try:
+            # 先检查表是否存在
+            if not self.table_exists(table):
+                Log.logger.warning(f"尝试截断不存在的表 {table}，操作跳过")
+                return True  # 表不存在时返回True，因为目标已达到（表为空）
+            
+            # DuckDB不支持TRUNCATE，使用DELETE代替
+            self.exec_sql(f"DELETE FROM {table}")
+            Log.logger.info(f"成功截断表 {table}")
+            return True
+        except Exception as e:
+            Log.logger.error(f"截断表 {table} 失败: {str(e)}")
+            return False
     
     @dbMonitor
     def delete(self, sql: str) -> None:

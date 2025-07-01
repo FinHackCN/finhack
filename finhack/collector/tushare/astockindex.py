@@ -330,7 +330,14 @@ class tsAStockIndex:
     @tsMonitor
     def index_member(pro,db):
         table='astock_index_member'
-        DB.exec("drop table if exists "+table+"_tmp",db)
+        # 安全地删除临时表（如果存在）
+        try:
+            adapter = DB.get_adapter(db)
+            if adapter.table_exists(f"{table}_tmp"):
+                DB.exec("drop table if exists "+table+"_tmp",db)
+                Log.logger.debug(f"已删除临时表 {table}_tmp")
+        except Exception as e:
+            Log.logger.warning(f"删除临时表 {table}_tmp 时出错: {str(e)}")
         # 不需要获取engine对象，直接使用db连接名
         # engine = DB.get_db_engine(db)
         sql='select * from astock_index_classify'
@@ -366,9 +373,10 @@ class tsAStockIndex:
                             alert.send('astock_index_member','函数异常',str(info))
                             Log.logger.error(info)  
 
-        DB.exec('rename table '+table+' to '+table+'_old;',db)
-        DB.exec('rename table '+table+'_tmp to '+table+';',db)
-        DB.exec("drop table if exists "+table+'_old',db)
+        # 使用统一的replace_table方法替换表，该方法会检查表是否存在
+        table_to_use = DB.replace_table(table, table+"_tmp", db)
+        if table_to_use != table:
+            Log.logger.warning(f"表替换可能未完全成功，当前使用表: {table_to_use}")
         tsSHelper.setIndex(table,db)
     
     # @tsMonitor

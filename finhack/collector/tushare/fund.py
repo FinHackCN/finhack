@@ -15,7 +15,14 @@ class tsFund:
     def fund_basic(pro, db):
         try:
             table='fund_basic'
-            DB.exec("drop table if exists "+table+"_tmp", db)
+            # 安全地删除临时表（如果存在）
+            try:
+                adapter = DB.get_adapter(db)
+                if adapter.table_exists(f"{table}_tmp"):
+                    DB.exec("drop table if exists "+table+"_tmp", db)
+                    Log.logger.debug(f"已删除临时表 {table}_tmp")
+            except Exception as e:
+                Log.logger.warning(f"删除临时表 {table}_tmp 时出错: {str(e)}")
             
             # 交易所场内基金
             data=pro.fund_basic(market='E', status='D')
