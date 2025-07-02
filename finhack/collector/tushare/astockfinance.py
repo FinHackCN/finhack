@@ -495,8 +495,8 @@ class tsAStockFinance:
                         else:
                             df=f(ts_code=ts_code,period=end_list[-1],fileds=fileds)
                     # 使用db连接名代替engine对象
-                    # DB.safe_to_sql(df, table, db, index=False, if_exists='append', chunksize=5000)
-                    DB.safe_to_sql(df, table, db, index=False, if_exists='append', chunksize=5000)
+                    # 使用动态chunksize，避免SQLite "too many SQL variables"错误
+                    DB.safe_to_sql(df, table, db, index=False, if_exists='append')
                     
                     # 如果是表创建者且首次写入成功，标记表已创建完成
                     if 'is_table_creator' in locals() and is_table_creator and not first_write_success:
@@ -865,8 +865,8 @@ class tsAStockFinance:
                         df = api_func(period=period)
                     
                     if df is not None and not df.empty:
-                        # 保存数据
-                        DB.safe_to_sql(df, table_name, db, index=False, if_exists='append', chunksize=5000)
+                        # 保存数据，使用动态chunksize避免SQLite参数限制
+                        DB.safe_to_sql(df, table_name, db, index=False, if_exists='append')
                         Log.logger.info(f"{api_name}_vip - 成功获取并保存期间 {period} 的数据，共 {len(df)} 条记录")
                         
                         # 创建索引
