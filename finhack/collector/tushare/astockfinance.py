@@ -105,8 +105,16 @@ class TableStateManager:
             time.sleep(1)  # 等待1秒后重试
         
         Log.logger.warning(f"等待表 {table_name} 创建超时")
+        
+        # 超时后强制清除creating状态，防止死锁
+        with self._lock:
+            if db in self._table_status and table_name in self._table_status[db]:
+                self._table_status[db][table_name] = {'exists': False, 'creating': False}
+                Log.logger.warning(f"已清除表 {table_name} 的creating状态")
+        
         return False
     
+
     def clear_cache(self, db=None, table_name=None):
         """清除缓存"""
         with self._lock:
@@ -126,6 +134,8 @@ class TableStateManager:
 table_state_manager = TableStateManager()
 
 class tsAStockFinance:
+    
+
     
     @staticmethod
     def _ensure_disclosure_table(pro, db):
@@ -167,24 +177,36 @@ class tsAStockFinance:
                     plist.append(p)
         return plist
 
-    def getEndDateListDiff(table,ts_code,db,report_type=0):
+    def getEndDateListDiff(table,ts_code,db,report_type=0,table_exists=None,disclosure_table_exists=None):
         """
         获取需要更新的end_date列表，支持线程安全的表状态管理
         确保公告表存在，如果目标表不存在则获取全量数据
+        
+        Args:
+            table: 表名
+            ts_code: 股票代码
+            db: 数据库连接名
+            report_type: 报告类型
+            table_exists: 表是否存在的状态（如果已知可传入，避免重复检查）
+            disclosure_table_exists: 公告表是否存在的状态（如果已知可传入，避免重复检查）
         """
-        # 使用全局表状态管理器检查表状态
-        if table_state_manager.is_table_creating(db, table):
-            Log.logger.info(f"表 {table} 正在创建中，等待创建完成...")
-            table_exists = table_state_manager.wait_for_table_creation(db, table)
-        else:
-            table_exists = table_state_manager.is_table_exists(db, table)
+        # 如果表存在状态未知，则进行检查
+        if table_exists is None:
+            # 使用全局表状态管理器检查表状态
+            if table_state_manager.is_table_creating(db, table):
+                Log.logger.info(f"表 {table} 正在创建中，等待创建完成...")
+                table_exists = table_state_manager.wait_for_table_creation(db, table)
+            else:
+                table_exists = table_state_manager.is_table_exists(db, table)
         
         table_list = []
         disclosure_list = []
         
-        # 首先检查公告表是否存在
-        adapter = DB.get_adapter(db)
-        disclosure_table_exists = adapter.table_exists('astock_finance_disclosure_date')
+        # 如果公告表存在状态未知，则进行检查
+        if disclosure_table_exists is None:
+            # 首先检查公告表是否存在
+            adapter = DB.get_adapter(db)
+            disclosure_table_exists = adapter.table_exists('astock_finance_disclosure_date')
         
         # 如果目标表存在，查询已有数据
         if table_exists:
@@ -197,8 +219,6 @@ class tsAStockFinance:
                     table_list=table_df['end_date'].unique().tolist()
             except Exception as e:
                 Log.logger.warning(f"查询目标表 {table} 数据时出错: {str(e)}")
-        else:
-            Log.logger.info(f"表 {table} 不存在，将获取全量数据")
         
         # 查询披露日期数据（如果公告表存在）
         if disclosure_table_exists:
@@ -209,15 +229,15 @@ class tsAStockFinance:
                     disclosure_list=disclosure_df['end_date'].unique().tolist()
             except Exception as e:
                 Log.logger.warning(f"查询公告表数据时出错: {str(e)}")
-        else:
-            Log.logger.warning(f"公告表 astock_finance_disclosure_date 不存在，将使用全量期间列表")
         
         # 决定使用全量数据的条件：
         # 1. 目标表不存在
         # 2. 目标表存在但没有数据
         # 3. 公告表不存在或没有披露数据
         if not table_exists or len(table_list) == 0 or not disclosure_table_exists or len(disclosure_list) == 0:
-            Log.logger.info(f"触发全量数据获取条件 - 目标表存在:{table_exists}, 目标表数据:{len(table_list)}, 公告表存在:{disclosure_table_exists}, 公告数据:{len(disclosure_list)}")
+            # 只在表存在状态未知时才输出详细日志，避免重复输出
+            if table_exists is None or disclosure_table_exists is None:
+                Log.logger.info(f"触发全量数据获取条件 - 目标表存在:{table_exists}, 目标表数据:{len(table_list)}, 公告表存在:{disclosure_table_exists}, 公告数据:{len(disclosure_list)}")
             disclosure_list=tsAStockFinance.getPeriodList(db)
             
         diff_list = set(disclosure_list)-set(table_list)
@@ -232,16 +252,26 @@ class tsAStockFinance:
     #table_count: 目标财务数据表中已存在的记录数量
     #disclosure_count: 财务披露日期表中应该有的记录数量
     #如果table_count小于disclosure_count，则返回True，表示需要获取更多数据
-    def getLastDateCountDiff(table,end_date,ts_code,db,report_type=0):
+    def getLastDateCountDiff(table,end_date,ts_code,db,report_type=0,table_exists=None):
         """
         比较表中数据数量与披露数据数量，支持线程安全的表状态管理
+        
+        Args:
+            table: 表名
+            end_date: 结束日期
+            ts_code: 股票代码
+            db: 数据库连接名
+            report_type: 报告类型
+            table_exists: 表是否存在的状态（如果已知可传入，避免重复检查）
         """
-        # 使用全局表状态管理器检查表状态
-        if table_state_manager.is_table_creating(db, table):
-            Log.logger.debug(f"表 {table} 正在创建中，等待创建完成...")
-            table_exists = table_state_manager.wait_for_table_creation(db, table)
-        else:
-            table_exists = table_state_manager.is_table_exists(db, table)
+        # 如果表存在状态未知，则进行检查
+        if table_exists is None:
+            # 使用全局表状态管理器检查表状态
+            if table_state_manager.is_table_creating(db, table):
+                Log.logger.debug(f"表 {table} 正在创建中，等待创建完成...")
+                table_exists = table_state_manager.wait_for_table_creation(db, table)
+            else:
+                table_exists = table_state_manager.is_table_exists(db, table)
         
         table_count = 0
         if table_exists:
@@ -265,34 +295,50 @@ class tsAStockFinance:
 
    
     def getFinanceStockList(pro, db, table, report_type=0):
+        # 首先在开始处理之前检查表是否存在
+        if table_state_manager.is_table_creating(db, table):
+            Log.logger.info(f"表 {table} 正在创建中，等待创建完成...")
+            table_exists = table_state_manager.wait_for_table_creation(db, table)
+        else:
+            table_exists = table_state_manager.is_table_exists(db, table)
+        
+        # 检查公告表是否存在
+        adapter = DB.get_adapter(db)
+        disclosure_table_exists = adapter.table_exists('astock_finance_disclosure_date')
+        
+        # 获取所有股票列表
+        stock_list_data = tsSHelper.getAllAStock(True, pro, db)
+        all_stock_list = stock_list_data['ts_code'].tolist()
+        
+        # 如果表不存在或公告表不存在，直接返回所有股票进行全量获取
+        if not table_exists or not disclosure_table_exists:
+            Log.logger.info(f"表 {table} 不存在或公告表不存在，将对所有 {len(all_stock_list)} 只股票进行全量数据获取")
+            return all_stock_list
+        
+        # 表存在，进行差异化筛选
         def check_stock(ts_code):
             #Log.logger.info(f"检查股票{ts_code}在{table}-{report_type}是否需要更新")
             """检查单个股票是否需要更新"""
             try:
-                diff_list = tsAStockFinance.getEndDateListDiff(table, ts_code, db, report_type)
+                # 传入已知的表状态，避免重复检查
+                diff_list = tsAStockFinance.getEndDateListDiff(table, ts_code, db, report_type, table_exists, disclosure_table_exists)
                 if diff_list and all(date < '20010101' for date in diff_list):
                     #Log.logger.debug(f"跳过{ts_code}在{api}的更新，{diff_list}")
                     return None  # 返回None表示跳过
 
-                # 使用全局表状态管理器检查表状态
-                if table_state_manager.is_table_creating(db, table):
-                    Log.logger.debug(f"表 {table} 正在创建中，等待创建完成...")
-                    table_exists = table_state_manager.wait_for_table_creation(db, table)
-                else:
-                    table_exists = table_state_manager.is_table_exists(db, table)
-                
+                # 表已存在，直接查询最后日期
                 lastdate = '20000321'  # 默认值
-                if table_exists:
-                    lastdate_sql="select max(end_date) as max from "+table+" where ts_code='"+ts_code+"'"
-                    if(report_type>0):
-                        lastdate_sql=lastdate_sql+" and report_type="+str(report_type)
-                    lastdate_df=DB.select_to_df(lastdate_sql,db)
-                    if(type(lastdate_df) != bool and not lastdate_df.empty):
-                        lastdate_value = lastdate_df['max'].tolist()[0]
-                        if lastdate_value is not None:
-                            lastdate = lastdate_value
+                lastdate_sql="select max(end_date) as max from "+table+" where ts_code='"+ts_code+"'"
+                if(report_type>0):
+                    lastdate_sql=lastdate_sql+" and report_type="+str(report_type)
+                lastdate_df=DB.select_to_df(lastdate_sql,db)
+                if(type(lastdate_df) != bool and not lastdate_df.empty):
+                    lastdate_value = lastdate_df['max'].tolist()[0]
+                    if lastdate_value is not None:
+                        lastdate = lastdate_value
                 
-                diff_count=tsAStockFinance.getLastDateCountDiff(table,lastdate,ts_code,db,report_type)
+                # 传入已知的表状态
+                diff_count=tsAStockFinance.getLastDateCountDiff(table,lastdate,ts_code,db,report_type,table_exists)
                 end_list=[]
                 for end_date in diff_list:
                     if(lastdate>end_date):
@@ -306,14 +352,12 @@ class tsAStockFinance:
                 Log.logger.error(f"检查股票{ts_code}时出错: {str(e)}")
                 return None
         
-        stock_list_data = tsSHelper.getAllAStock(True, pro, db)
-        all_stock_list = stock_list_data['ts_code'].tolist()
         thread_count=3
         Log.logger.info(f"开始使用{thread_count}个线程筛选{table}-{report_type}需要更新的股票，总数: {len(all_stock_list)}")
         
         return_list = []
         
-        # 使用10个线程并行处理股票筛选
+        # 使用多线程并行处理股票筛选
         with ThreadPoolExecutor(max_workers=thread_count, thread_name_prefix="StockFilter") as executor:
             # 提交所有股票检查任务
             futures = {executor.submit(check_stock, ts_code): ts_code for ts_code in all_stock_list}
@@ -400,24 +444,26 @@ class tsAStockFinance:
         # 用于跟踪是否已成功写入第一批数据（仅当是表创建者时使用）
         first_write_success = False
         
+        # 在开始处理股票之前，获取表的存在状态，避免在循环中重复检查
+        current_table_exists = table_state_manager.is_table_exists(db, table)
+        adapter = DB.get_adapter(db)
+        current_disclosure_table_exists = adapter.table_exists('astock_finance_disclosure_date')
+        
         for ts_code in stock_list:
             if api in ['disclosure_date','fina_indicator'] and report_type!=0:
                 continue
             if report_type>0:
                 Log.logger.info(api+","+ts_code+",report_type="+str(report_type))
-            diff_list=tsAStockFinance.getEndDateListDiff(table,ts_code,db,report_type)
+            # 传入已知的表状态，避免重复检查
+            diff_list=tsAStockFinance.getEndDateListDiff(table,ts_code,db,report_type,current_table_exists,current_disclosure_table_exists)
 
             # 如果diff_list中的所有元素都小于'20010101'，则跳过当前股票
             if diff_list and all(date < '20010101' for date in diff_list):
                 #Log.logger.info(f"跳过{ts_code}在{api}的更新，{diff_list}")
                 continue
             
-            # 使用全局表状态管理器检查表状态，避免查询不存在的表
-            if table_state_manager.is_table_creating(db, table):
-                Log.logger.debug(f"表 {table} 正在创建中，等待创建完成...")
-                table_exists = table_state_manager.wait_for_table_creation(db, table)
-            else:
-                table_exists = table_state_manager.is_table_exists(db, table)
+            # 使用已知的表状态，避免重复查询
+            table_exists = current_table_exists
             
             lastdate = '20000321'  # 默认值
             if table_exists:
@@ -429,7 +475,8 @@ class tsAStockFinance:
                     lastdate_value = lastdate_df['max'].tolist()[0]
                     if lastdate_value is not None:
                         lastdate = lastdate_value
-            diff_count=tsAStockFinance.getLastDateCountDiff(table,lastdate,ts_code,db,report_type)
+            # 传入已知的表状态
+            diff_count=tsAStockFinance.getLastDateCountDiff(table,lastdate,ts_code,db,report_type,table_exists)
 
 
 
