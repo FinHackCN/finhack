@@ -322,11 +322,16 @@ class SQLiteAdapter(DbAdapter):
                 kwargs.pop('connection', None)  # 移除可能存在的connection参数
                 kwargs.pop('con', None)  # 移除可能存在的con参数
                 
-                # 确保正确设置参数
+                # 确保正确设置参数，动态计算chunksize避免"too many SQL variables"错误
+                # SQLite默认限制999个参数变量，需要根据列数计算安全的chunksize
+                safe_chunksize = max(1, min(999 // max(len(df.columns), 1), 1000))
+                user_chunksize = kwargs.get('chunksize', safe_chunksize)
+                # 即使用户提供了chunksize，也要确保不超过SQLite限制
+                final_chunksize = min(user_chunksize, safe_chunksize)
                 kwargs.update({
                     'index': False,
                     'if_exists': if_exists,
-                    'chunksize': kwargs.get('chunksize', 1000),  # 减小批次大小减少锁定时间
+                    'chunksize': final_chunksize,
                     'method': 'multi'  # 使用批量插入
                 })
                 
@@ -356,7 +361,14 @@ class SQLiteAdapter(DbAdapter):
         final_to_sql_kwargs = kwargs.copy()
         final_to_sql_kwargs.setdefault('index', False)
         final_to_sql_kwargs.setdefault('if_exists', 'append')
-        final_to_sql_kwargs.setdefault('chunksize', 5000) # Default for SQLite, can be overridden by kwargs
+        
+        # 动态计算安全的chunksize，避免"too many SQL variables"错误
+        # SQLite默认限制999个参数变量，需要根据列数计算
+        safe_chunksize = max(1, min(999 // max(len(df.columns), 1), 5000))
+        user_chunksize = final_to_sql_kwargs.get('chunksize', safe_chunksize)
+        # 即使用户提供了chunksize，也要确保不超过SQLite限制
+        final_chunksize = min(user_chunksize, safe_chunksize)
+        final_to_sql_kwargs['chunksize'] = final_chunksize
 
         try:
             # 检查表是否存在，不存在则直接写入
