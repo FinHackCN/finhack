@@ -1,408 +1,533 @@
 """
-事件中心实现
+事件中心
+
+负责事件生成、调度和分发，支持多市场多频次
 """
 
-import heapq
-from datetime import datetime, timedelta
-from typing import List, Dict, Any, Optional, Callable
-from collections import defaultdict
+import logging
+from datetime import datetime, date, time, timedelta
+from typing import Dict, List, Any, Optional
+import importlib
 
-from ..events.base_event import BaseEvent, EventType
-from ..events.market_events import (
-    MarketEvent, StartIntervalEvent, BeforeMarketEvent, 
-    MorningStartEvent, MorningEndEvent, AfternoonStartEvent, 
-    AfternoonEndEvent, AfterMarketEvent, DailyBarClosedEvent, MinuteBarEvent
-)
-from ..events.user_events import (
-    UserEvent, UserDailyEvent, UserHourlyEvent, UserMinutelyEvent,
-    UserWeeklyEvent, UserMonthlyEvent, UserIntervalEvent
-)
-from ..events.trade_events import (
-    TradeEvent, OrderSubmissionEvent, OrderFillEvent, 
-    OrderCancellationEvent, PositionUpdateEvent
-)
+from ..events.event_bus import EventBus
+from ..events.event_types import BaseEvent, MarketEvent, TimeEvent, TradeEvent, EventTypeEnum
+
+logger = logging.getLogger(__name__)
 
 
 class EventCenter:
-    """事件中心，负责事件的生成、调度和分发"""
+    """事件中心
     
-    def __init__(self, market: str = "cn_stock"):
-        self.market = market
-        self.event_queue: List[BaseEvent] = []  # 事件队列（最小堆）
-        self.user_schedules: Dict[str, List[Dict]] = defaultdict(list)  # 用户定时任务
-        self.current_time: Optional[datetime] = None
-        self.trading_sessions = self._get_trading_sessions()
-        self.context = None  # 上下文引用
+    负责事件的生成、调度和分发
+    """
     
-    def initialize(self, context):
-        """初始化事件中心"""
+    def __init__(self, config: Dict[str, Any]):
+        """初始化事件中心
+        
+        Args:
+            config: 配置参数
+        """
+        self.config = config
+        self.context = None
+        
+        # 初始化事件总线
+        self.event_bus = EventBus()
+        
+        # 市场适配器映射
+        self.market_adapters = {}
+        
+        # 其他组件引用
+        self.trade_center = None
+        self.data_center = None
+        self.strategy_executor = None
+        
+        # 当前处理的日期和频率
+        self.current_date = None
+        self.current_frequency = '1d'
+        
+        logger.info("事件中心初始化完成")
+    
+    def set_context(self, context: Dict[str, Any]):
+        """设置上下文
+        
+        Args:
+            context: 回测上下文
+        """
         self.context = context
-        context.logger.info("事件中心初始化完成")
+        
+        # 根据配置加载市场适配器
+        market_name = context.get('settings', {}).get('market', 'cn_stock')
+        self._load_market_adapter(market_name)
+        
+        # 注册事件处理器
+        self._register_event_handlers()
+        
+        logger.debug("事件中心已设置上下文")
     
-    def _get_trading_sessions(self) -> Dict[str, List[Dict]]:
-        """获取交易时段配置"""
-        sessions = {
-            "cn_stock": [
-                {
-                    "name": "morning",
-                    "start_time": "09:30:00",
-                    "end_time": "11:30:00",
-                    "pre_open": "09:15:00",
-                    "pre_close": "11:25:00"
-                },
-                {
-                    "name": "afternoon", 
-                    "start_time": "13:00:00",
-                    "end_time": "15:00:00",
-                    "pre_open": "12:55:00",
-                    "pre_close": "14:57:00"
-                }
-            ],
-            "hk_stock": [
-                {
-                    "name": "morning",
-                    "start_time": "09:30:00",
-                    "end_time": "12:00:00",
-                    "pre_open": "09:15:00",
-                    "pre_close": "11:55:00"
-                },
-                {
-                    "name": "afternoon",
-                    "start_time": "13:00:00", 
-                    "end_time": "16:00:00",
-                    "pre_open": "12:55:00",
-                    "pre_close": "15:55:00"
-                }
-            ]
-        }
-        return sessions.get(self.market, sessions["cn_stock"])
+    def set_trade_center(self, trade_center):
+        """设置交易中心"""
+        self.trade_center = trade_center
     
-    def add_event(self, event: BaseEvent):
-        """添加事件到队列"""
-        heapq.heappush(self.event_queue, event)
+    def set_data_center(self, data_center):
+        """设置数据中心"""
+        self.data_center = data_center
     
-    def get_next_event(self) -> Optional[BaseEvent]:
-        """获取下一个事件"""
-        if self.event_queue:
-            return heapq.heappop(self.event_queue)
-        return None
+    def set_strategy_executor(self, strategy_executor):
+        """设置策略执行器"""
+        self.strategy_executor = strategy_executor
     
-    def has_events(self) -> bool:
-        """检查是否还有事件"""
-        return len(self.event_queue) > 0
-    
-    def clear_events(self):
-        """清空事件队列"""
-        self.event_queue.clear()
-    
-    def generate_market_events(self, date: datetime, frequency: str = "1d") -> List[BaseEvent]:
-        """
-        生成市场事件
+    def set_scheduled_tasks(self, scheduled_tasks: List[Dict[str, Any]]):
+        """设置定时任务列表
         
         Args:
-            date: 交易日期
-            frequency: 频率 (1d, 1h, 1m, 1s)
-            
-        Returns:
-            List[BaseEvent]: 生成的事件列表
+            scheduled_tasks: 定时任务列表
         """
-        events = []
-        
-        # 生成日开始事件
-        start_time = date.replace(hour=0, minute=0, second=0, microsecond=0)
-        events.append(StartIntervalEvent(start_time, self.market))
-        
-        # 生成盘前事件
-        before_market_time = date.replace(hour=9, minute=0, second=0, microsecond=0)
-        events.append(BeforeMarketEvent(before_market_time, self.market))
-        
-        # 生成交易时段事件
-        for session in self.trading_sessions:
-            session_name = session["name"]
-            start_time_str = session["start_time"]
-            end_time_str = session["end_time"]
-            
-            # 解析时间
-            start_hour, start_minute, start_second = map(int, start_time_str.split(':'))
-            end_hour, end_minute, end_second = map(int, end_time_str.split(':'))
-            
-            # 开盘事件
-            session_start = date.replace(hour=start_hour, minute=start_minute, second=start_second, microsecond=0)
-            if session_name == "morning":
-                events.append(MorningStartEvent(session_start, self.market))
-            else:
-                events.append(AfternoonStartEvent(session_start, self.market))
-            
-            # 根据频率生成Bar事件
-            if frequency in ["1m", "1s"]:
-                bar_events = self._generate_bar_events(date, session, frequency)
-                events.extend(bar_events)
-            
-            # 收盘事件
-            session_end = date.replace(hour=end_hour, minute=end_minute, second=end_second, microsecond=0)
-            if session_name == "morning":
-                events.append(MorningEndEvent(session_end, self.market))
-            else:
-                events.append(AfternoonEndEvent(session_end, self.market))
-        
-        # 生成盘后事件
-        after_market_time = date.replace(hour=18, minute=0, second=0, microsecond=0)
-        events.append(AfterMarketEvent(after_market_time, self.market))
-        
-        # 生成日线收盘事件
-        daily_close_time = date.replace(hour=15, minute=0, second=0, microsecond=0)
-        
-        # 获取当日的K线数据
-        bar_data = self._get_daily_bar_data(date)
-        events.append(DailyBarClosedEvent(daily_close_time, self.market, bar_data=bar_data))
-        
-        return events
+        if not self.context:
+            self.context = {}
+        self.context['scheduled_tasks'] = scheduled_tasks
+        logger.debug(f"设置定时任务: {len(scheduled_tasks)} 个")
     
-    def _generate_bar_events(self, date: datetime, session: Dict, frequency: str) -> List[BaseEvent]:
-        """生成Bar事件"""
-        events = []
-        
-        start_time_str = session["start_time"]
-        end_time_str = session["end_time"]
-        session_name = session["name"]
-        
-        # 解析时间
-        start_hour, start_minute, start_second = map(int, start_time_str.split(':'))
-        end_hour, end_minute, end_second = map(int, end_time_str.split(':'))
-        
-        current_time = date.replace(hour=start_hour, minute=start_minute, second=start_second, microsecond=0)
-        end_time = date.replace(hour=end_hour, minute=end_minute, second=end_second, microsecond=0)
-        
-        # 计算时间增量
-        if frequency == "1m":
-            delta = timedelta(minutes=1)
-        elif frequency == "1s":
-            delta = timedelta(seconds=1)
-        else:
-            return events
-        
-        # 生成Bar事件
-        while current_time < end_time:
-            events.append(MinuteBarEvent(current_time, self.market, session=session_name))
-            current_time += delta
-        
-        return events
-    
-    def register_user_schedule(self, schedule_type: str, time_str: str, 
-                              callback: Callable, **kwargs):
-        """
-        注册用户定时任务
+    def _load_market_adapter(self, market_name: str):
+        """加载市场适配器
         
         Args:
-            schedule_type: 调度类型 (daily, hourly, minutely, weekly, monthly, interval)
-            time_str: 时间字符串 (如 "09:30:00")
-            callback: 回调函数
-            **kwargs: 其他参数
-        """
-        schedule_info = {
-            "type": schedule_type,
-            "time_str": time_str,
-            "callback": callback,
-            "kwargs": kwargs
-        }
-        self.user_schedules[schedule_type].append(schedule_info)
-    
-    def generate_user_events(self, date: datetime) -> List[BaseEvent]:
-        """
-        生成用户事件
-        
-        Args:
-            date: 交易日期
-            
-        Returns:
-            List[BaseEvent]: 生成的用户事件列表
-        """
-        events = []
-        
-        # 生成日级别事件
-        for schedule in self.user_schedules["daily"]:
-            time_str = schedule["time_str"]
-            callback = schedule["callback"]
-            
-            # 解析时间
-            if ":" in time_str:
-                time_parts = time_str.split(":")
-                hour = int(time_parts[0])
-                minute = int(time_parts[1]) if len(time_parts) > 1 else 0
-                second = int(time_parts[2]) if len(time_parts) > 2 else 0
-            else:
-                hour, minute, second = 9, 30, 0  # 默认开盘时间
-            
-            event_time = date.replace(hour=hour, minute=minute, second=second, microsecond=0)
-            events.append(UserDailyEvent(event_time, callback, self.market))
-        
-        # 生成小时级别事件
-        for schedule in self.user_schedules["hourly"]:
-            callback = schedule["callback"]
-            minute = schedule["kwargs"].get("minute", 0)
-            
-            # 在交易时间内每小时生成事件
-            for session in self.trading_sessions:
-                start_hour = int(session["start_time"].split(':')[0])
-                end_hour = int(session["end_time"].split(':')[0])
-                
-                for hour in range(start_hour, end_hour + 1):
-                    event_time = date.replace(hour=hour, minute=minute, second=0, microsecond=0)
-                    # 检查是否在交易时间内
-                    if self._is_trading_time(event_time, session):
-                        events.append(UserHourlyEvent(event_time, callback, self.market))
-        
-        # 生成分钟级别事件
-        for schedule in self.user_schedules["minutely"]:
-            callback = schedule["callback"]
-            interval = schedule["kwargs"].get("interval", 1)  # 默认每分钟
-            
-            # 在交易时间内按间隔生成事件
-            for session in self.trading_sessions:
-                start_time_str = session["start_time"]
-                end_time_str = session["end_time"]
-                
-                start_hour, start_minute, _ = map(int, start_time_str.split(':'))
-                end_hour, end_minute, _ = map(int, end_time_str.split(':'))
-                
-                current_time = date.replace(hour=start_hour, minute=start_minute, second=0, microsecond=0)
-                end_time = date.replace(hour=end_hour, minute=end_minute, second=0, microsecond=0)
-                
-                while current_time < end_time:
-                    events.append(UserMinutelyEvent(current_time, callback, self.market))
-                    current_time += timedelta(minutes=interval)
-        
-        return events
-    
-    def _is_trading_time(self, check_time: datetime, session: Dict) -> bool:
-        """检查是否在交易时间内"""
-        start_time_str = session["start_time"]
-        end_time_str = session["end_time"]
-        
-        start_hour, start_minute, start_second = map(int, start_time_str.split(':'))
-        end_hour, end_minute, end_second = map(int, end_time_str.split(':'))
-        
-        start_time = check_time.replace(hour=start_hour, minute=start_minute, second=start_second)
-        end_time = check_time.replace(hour=end_hour, minute=end_minute, second=end_second)
-        
-        return start_time <= check_time <= end_time
-    
-    def generate_daily_events(self, date: datetime, frequency: str = "1d") -> List[BaseEvent]:
-        """
-        生成某日的所有事件
-        
-        Args:
-            date: 交易日期
-            frequency: 频率
-            
-        Returns:
-            List[BaseEvent]: 生成的事件列表
-        """
-        events = []
-        
-        # 生成市场事件
-        market_events = self.generate_market_events(date, frequency)
-        events.extend(market_events)
-        
-        # 生成用户事件
-        user_events = self.generate_user_events(date)
-        events.extend(user_events)
-        
-        # 按时间排序
-        events.sort(key=lambda x: x.event_time)
-        
-        return events
-    
-    def add_events_to_queue(self, events: List[BaseEvent]):
-        """批量添加事件到队列"""
-        for event in events:
-            self.add_event(event)
-    
-    # 事件处理器方法
-    def handle_start_interval(self, context, event: BaseEvent):
-        """处理开始区间事件"""
-        context.logger.info(f"新的交易日开始: {event.event_time.strftime('%Y-%m-%d')}")
-        # 更新交易日状态
-        context.current_date = event.event_time.date()
-        
-    def handle_before_market(self, context, event: BaseEvent):
-        """处理盘前事件"""
-        context.logger.info(f"盘前准备: {event.event_time.strftime('%Y-%m-%d %H:%M:%S')}")
-        # 盘前准备工作，如数据预加载等
-        
-    def handle_morning_start(self, context, event: BaseEvent):
-        """处理上午开盘事件"""
-        context.logger.info(f"上午开盘: {event.event_time.strftime('%Y-%m-%d %H:%M:%S')}")
-        
-    def handle_morning_end(self, context, event: BaseEvent):
-        """处理上午收盘事件"""
-        context.logger.info(f"上午收盘: {event.event_time.strftime('%Y-%m-%d %H:%M:%S')}")
-        
-    def handle_afternoon_start(self, context, event: BaseEvent):
-        """处理下午开盘事件"""
-        context.logger.info(f"下午开盘: {event.event_time.strftime('%Y-%m-%d %H:%M:%S')}")
-        
-    def handle_afternoon_end(self, context, event: BaseEvent):
-        """处理下午收盘事件"""
-        context.logger.info(f"下午收盘: {event.event_time.strftime('%Y-%m-%d %H:%M:%S')}")
-        
-    def handle_after_market(self, context, event: BaseEvent):
-        """处理盘后事件"""
-        context.logger.info(f"盘后处理: {event.event_time.strftime('%Y-%m-%d %H:%M:%S')}")
-        # 盘后处理工作，如清算、结算等
-        
-    def handle_daily_bar_closed(self, context, event: BaseEvent):
-        """处理日线收盘事件"""
-        context.logger.info(f"日线数据完成: {event.event_time.strftime('%Y-%m-%d %H:%M:%S')}")
-        # 更新日线数据，计算收益等
-    
-    def _get_daily_bar_data(self, date: datetime) -> Dict[str, Any]:
-        """
-        获取当日K线数据
-        
-        Args:
-            date: 交易日期
-            
-        Returns:
-            Dict[str, Any]: K线数据
+            market_name: 市场名称
         """
         try:
-            if self.context and self.context.data_center:
-                # 从数据中心获取K线数据
-                date_str = date.strftime('%Y-%m-%d')
-                
-                # 这里可以根据实际需要获取多个股票的数据
-                # 暂时返回模拟的日线数据
-                bar_data = {
-                    'date': date_str,
-                    'open': 10.0,
-                    'high': 10.5,
-                    'low': 9.5,
-                    'close': 10.2,
-                    'volume': 1000000,
-                    'amount': 10200000
-                }
-                
-                return bar_data
+            from ..markets import MARKET_ADAPTERS
+            
+            if market_name in MARKET_ADAPTERS:
+                adapter_class = MARKET_ADAPTERS[market_name]
+                self.market_adapters[market_name] = adapter_class()
+                logger.info(f"成功加载市场适配器: {market_name}")
             else:
-                # 返回默认的模拟数据
-                return {
-                    'date': date.strftime('%Y-%m-%d'),
-                    'open': 10.0,
-                    'high': 10.5,
-                    'low': 9.5,
-                    'close': 10.2,
-                    'volume': 1000000,
-                    'amount': 10200000
-                }
+                logger.warning(f"未支持的市场类型: {market_name}，使用cn_stock适配器")
+                from ..markets import CnStockMarketAdapter
+                self.market_adapters[market_name] = CnStockMarketAdapter()
+            
         except Exception as e:
-            # 如果获取数据失败，返回默认数据
-            return {
-                'date': date.strftime('%Y-%m-%d'),
-                'open': 10.0,
-                'high': 10.5,
-                'low': 9.5,
-                'close': 10.2,
-                'volume': 1000000,
-                'amount': 10200000
-            } 
+            logger.error(f"加载市场适配器失败 {market_name}: {e}")
+            raise
+    
+    def _register_event_handlers(self):
+        """注册事件处理器"""
+        # 注册所有市场事件的默认处理器
+        market_events = [
+            EventTypeEnum.DAY_START,
+            EventTypeEnum.BEFORE_MARKET,
+            EventTypeEnum.PRE_OPENING_START,
+            EventTypeEnum.PRE_OPENING_END,
+            EventTypeEnum.MATCHING_START,
+            EventTypeEnum.OPENING_PRICE_DETERMINED,
+            EventTypeEnum.MARKET_START,
+            EventTypeEnum.MORNING_END,
+            EventTypeEnum.AFTERNOON_START,
+            EventTypeEnum.CLOSING_START,
+            EventTypeEnum.CLOSING_END,
+            EventTypeEnum.CLOSING_PRICE_DETERMINED,
+            EventTypeEnum.MARKET_END,
+            EventTypeEnum.DAILY_BAR_CLOSED,
+            EventTypeEnum.AFTER_MARKET,
+            EventTypeEnum.DAY_END,
+        ]
+        
+        for event_type in market_events:
+            self.event_bus.register_handler(event_type, self._handle_market_event)
+        
+        # 注册策略相关事件处理器
+        self.event_bus.register_handler(EventTypeEnum.ON_TIME, self._handle_on_time)
+        
+        # 注册交易相关事件处理器
+        self.event_bus.register_handler(EventTypeEnum.ORDER_SUBMISSION, self._handle_trade_event)
+        self.event_bus.register_handler(EventTypeEnum.ORDER_CANCELLATION, self._handle_trade_event)
+        self.event_bus.register_handler(EventTypeEnum.TRY_MATCH, self._handle_try_match)
+        
+        logger.debug("事件处理器注册完成")
+    
+    def generate_daily_events(self, trade_date: date) -> List[BaseEvent]:
+        """生成指定日期的事件列表
+        
+        Args:
+            trade_date: 交易日期
+            
+        Returns:
+            List[BaseEvent]: 事件列表
+        """
+        self.current_date = trade_date
+        
+        if not self.context:
+            logger.warning("context未设置，无法生成事件")
+            return []
+        
+        market_name = self.context.get('settings', {}).get('market', 'cn_stock')
+        frequency = self.context.get('settings', {}).get('frequency', '1d')
+        self.current_frequency = frequency
+        
+        events = []
+        
+        try:
+            # 1. 生成静态市场事件
+            market_events = self._generate_market_events(trade_date, market_name, frequency)
+            events.extend(market_events)
+            
+            # 2. 生成动态定时任务事件
+            time_events = self._generate_time_events(trade_date, frequency)
+            events.extend(time_events)
+            
+            # 3. 按时间排序所有事件
+            events.sort(key=lambda x: (x.event_time, x.priority.value))
+            
+            logger.debug(f"生成 {trade_date} 的事件: {len(events)} 个")
+            
+        except Exception as e:
+            logger.error(f"生成事件失败 {trade_date}: {e}")
+            raise
+        
+        return events
+    
+    def _generate_market_events(self, trade_date: date, market_name: str, frequency: str) -> List[BaseEvent]:
+        """生成市场事件
+        
+        Args:
+            trade_date: 交易日期
+            market_name: 市场名称
+            frequency: 数据频率
+            
+        Returns:
+            List[BaseEvent]: 市场事件列表
+        """
+        market_adapter = self.market_adapters.get(market_name)
+        if not market_adapter:
+            logger.warning(f"未找到市场适配器: {market_name}")
+            return []
+        
+        # 转换date为datetime
+        if isinstance(trade_date, date):
+            trade_datetime = datetime.combine(trade_date, datetime.min.time())
+        else:
+            trade_datetime = trade_date
+            
+        return market_adapter.generate_daily_events(trade_datetime, frequency)
+    
+    def _generate_time_events(self, trade_date: date, frequency: str) -> List[BaseEvent]:
+        """生成定时任务事件
+        
+        Args:
+            trade_date: 交易日期
+            frequency: 数据频率
+            
+        Returns:
+            List[BaseEvent]: 定时任务事件列表
+        """
+        if not self.context:
+            return []
+        
+        scheduled_tasks = self.context.get('scheduled_tasks', [])
+        time_events = []
+        
+        for task in scheduled_tasks:
+            task_times = self._calculate_task_times(task, trade_date, frequency)
+            
+            for task_time in task_times:
+                event = TimeEvent(
+                    event_type=EventTypeEnum.ON_TIME,
+                    event_time=task_time,
+                    market=self.context.get('settings', {}).get('market', 'cn_stock'),
+                    frequency=frequency,
+                    function_name=task['function_name'],
+                    task_id=task['task_id']
+                )
+                time_events.append(event)
+        
+        return time_events
+    
+    def _calculate_task_times(self, task: Dict[str, Any], trade_date: date, frequency: str) -> List[datetime]:
+        """计算任务执行时间
+        
+        Args:
+            task: 任务配置
+            trade_date: 交易日期
+            frequency: 数据频率
+            
+        Returns:
+            List[datetime]: 执行时间列表
+        """
+        rule = task.get('scheduling_rule', {})
+        rule_type = rule.get('type')
+        times = []
+        
+        if rule_type == 'daily':
+            # 每日任务
+            task_time_str = rule.get('time', '14:50:00')
+            # 支持 HH:MM 和 HH:MM:SS 两种格式
+            try:
+                task_time = datetime.strptime(task_time_str, '%H:%M:%S').time()
+            except ValueError:
+                task_time = datetime.strptime(task_time_str, '%H:%M').time()
+            times.append(datetime.combine(trade_date, task_time))
+            
+        elif rule_type == 'weekly':
+            # 每周任务
+            weekday = rule.get('weekday', 1)  # 1=周一
+            task_time_str = rule.get('time', '14:50:00')
+            # 支持 HH:MM 和 HH:MM:SS 两种格式
+            try:
+                task_time = datetime.strptime(task_time_str, '%H:%M:%S').time()
+            except ValueError:
+                task_time = datetime.strptime(task_time_str, '%H:%M').time()
+            
+            # 检查当前日期是否为指定星期几（Python中weekday()返回0-6，0=周一）
+            if trade_date.weekday() == (weekday - 1):
+                times.append(datetime.combine(trade_date, task_time))
+                
+        elif rule_type == 'interval':
+            # 间隔任务
+            frequency_str = rule.get('frequency', '15m')
+            reference_time_str = rule.get('reference_time', '09:30:00')
+            # 支持 HH:MM 和 HH:MM:SS 两种格式
+            try:
+                reference_time = datetime.strptime(reference_time_str, '%H:%M:%S').time()
+            except ValueError:
+                reference_time = datetime.strptime(reference_time_str, '%H:%M').time()
+            
+            # 解析频率
+            if frequency_str.endswith('m'):
+                interval_minutes = int(frequency_str[:-1])
+                times = self._generate_interval_times(trade_date, reference_time, interval_minutes, 'minute')
+            elif frequency_str.endswith('h'):
+                interval_hours = int(frequency_str[:-1])
+                times = self._generate_interval_times(trade_date, reference_time, interval_hours, 'hour')
+        
+        return times
+    
+    def _generate_interval_times(self, trade_date: date, reference_time: time, 
+                                interval: int, unit: str) -> List[datetime]:
+        """生成间隔执行时间"""
+        times = []
+        
+        # 获取交易时间段
+        market_name = self.context.get('settings', {}).get('market', 'cn_stock')
+        market_adapter = self.market_adapters.get(market_name)
+        
+        if not market_adapter:
+            return times
+        
+        trading_sessions = market_adapter.get_trading_sessions(trade_date, self.current_frequency)
+        
+        for start_time, end_time in trading_sessions:
+            # 从参考时间开始，按间隔生成时间点
+            current_time = datetime.combine(trade_date, reference_time)
+            
+            # 调整到交易时间段内
+            if current_time < start_time:
+                current_time = start_time
+            
+            while current_time <= end_time:
+                if start_time <= current_time <= end_time:
+                    times.append(current_time)
+                
+                # 计算下一个时间点
+                if unit == 'minute':
+                    current_time += timedelta(minutes=interval)
+                elif unit == 'hour':
+                    current_time += timedelta(hours=interval)
+        
+        return times
+    
+    def process_event(self, event: BaseEvent):
+        """处理单个事件
+        
+        Args:
+            event: 事件对象
+        """
+        try:
+            # 更新当前时间到context
+            if self.context:
+                self.context['current_dt'] = event.event_time
+            
+            logger.debug(f"处理事件: {event.event_type.value} at {event.event_time}")
+            
+            # 发布事件到事件总线
+            self.event_bus.publish_event(event)
+            
+            # 处理事件
+            self.event_bus.process_next_event()
+            
+        except Exception as e:
+            logger.error(f"处理事件失败 {event.event_type.value}: {e}")
+            raise
+    
+    def _handle_strategy_event(self, event: BaseEvent):
+        """处理策略相关事件"""
+        if not self.strategy_executor:
+            return
+        
+        try:
+            if event.event_type == EventTypeEnum.ON_TIME:
+                # 定时任务事件
+                if isinstance(event, TimeEvent):
+                    self.strategy_executor.execute_scheduled_function(event.function_name, event.task_id)
+            else:
+                # 市场事件
+                self.strategy_executor.execute_market_event(event)
+                
+        except Exception as e:
+            logger.error(f"处理策略事件失败 {event.event_type.value}: {e}")
+    
+    def _handle_trade_event(self, event: BaseEvent):
+        """处理交易相关事件"""
+        if not self.trade_center:
+            return
+        
+        try:
+            if event.event_type == EventTypeEnum.ORDER_SUBMISSION:
+                self.trade_center.handle_order_submission(event)
+            elif event.event_type == EventTypeEnum.ORDER_CANCELLATION:
+                self.trade_center.handle_order_cancellation(event)
+            elif event.event_type == EventTypeEnum.TRY_MATCH:
+                self.trade_center.try_match_orders(event)
+                
+        except Exception as e:
+            logger.error(f"处理交易事件失败 {event.event_type.value}: {e}")
+    
+    def _handle_before_market(self, event: BaseEvent):
+        """处理盘前事件"""
+        if not self.trade_center:
+            return
+        
+        try:
+            # 处理除权除息等盘前事件
+            self.trade_center.handle_before_market(event)
+            
+        except Exception as e:
+            logger.error(f"处理盘前事件失败: {e}")
+    
+    def _handle_after_market(self, event: BaseEvent):
+        """处理盘后事件"""
+        if not self.trade_center:
+            return
+        
+        try:
+            # 处理分红等盘后事件
+            self.trade_center.handle_after_market(event)
+            
+        except Exception as e:
+            logger.error(f"处理盘后事件失败: {e}")
+    
+    def _handle_market_end(self, event: BaseEvent):
+        """处理市场收盘事件"""
+        if not self.trade_center:
+            return
+        
+        try:
+            # 取消未成交订单
+            self.trade_center.cancel_pending_orders(event)
+            
+            # 执行日终清算
+            self.trade_center.daily_settlement(event)
+            
+        except Exception as e:
+            logger.error(f"处理收盘事件失败: {e}")
+    
+    def publish_order_event(self, event_type: EventTypeEnum, order_data: Dict[str, Any]):
+        """发布订单事件
+        
+        Args:
+            event_type: 事件类型
+            order_data: 订单数据
+        """
+        current_dt = self.context.get('current_dt') if self.context else datetime.now()
+        market = self.context.get('settings', {}).get('market', 'cn_stock') if self.context else 'cn_stock'
+        
+        trade_event = TradeEvent(
+            event_type=event_type,
+            event_time=current_dt,
+            market=market,
+            frequency=self.current_frequency,
+            order_id=order_data.get('order_id'),
+            symbol=order_data.get('symbol')
+        )
+        trade_event.data = order_data
+        
+        self.event_bus.publish_event(trade_event)
+        self.event_bus.process_next_event()
+    
+    def get_statistics(self) -> Dict[str, Any]:
+        """获取事件中心统计信息"""
+        stats = self.event_bus.get_statistics()
+        stats['current_date'] = self.current_date
+        stats['current_frequency'] = self.current_frequency
+        stats['loaded_markets'] = list(self.market_adapters.keys())
+        return stats
+    
+    def stop(self):
+        """停止事件中心"""
+        self.event_bus.stop()
+        self.market_adapters.clear()
+        logger.info("事件中心已停止")
+    
+    def _handle_market_event(self, event: BaseEvent):
+        """通用市场事件处理器
+        
+        Args:
+            event: 市场事件
+        """
+        try:
+            logger.debug(f"处理市场事件: {event.event_type.value} at {event.event_time}")
+            
+            # 根据不同的事件类型执行相应的处理
+            if event.event_type == EventTypeEnum.BEFORE_MARKET:
+                self._handle_before_market(event)
+            elif event.event_type == EventTypeEnum.MARKET_END:
+                self._handle_market_end(event)
+            elif event.event_type == EventTypeEnum.AFTER_MARKET:
+                self._handle_after_market(event)
+            elif event.event_type == EventTypeEnum.TRY_MATCH:
+                self._handle_try_match(event)
+            else:
+                # 其他市场事件的默认处理（主要是记录日志）
+                logger.debug(f"市场事件 {event.event_type.value} 已处理")
+                
+        except Exception as e:
+            logger.error(f"处理市场事件失败 {event.event_type.value}: {e}")
+    
+    async def _handle_on_time(self, event: BaseEvent):
+        """处理定时任务事件
+        
+        Args:
+            event: 定时任务事件
+        """
+        try:
+            if not hasattr(event, 'function_name'):
+                logger.warning("ON_TIME事件缺少function_name属性")
+                return
+            
+            function_name = event.function_name
+            logger.debug(f"执行定时任务: {function_name} at {event.event_time}")
+            
+            # 通过策略执行器执行用户定义的函数
+            if self.strategy_executor:
+                await self.strategy_executor.execute_function(function_name, self.context)
+            else:
+                logger.warning("策略执行器未设置，无法执行定时任务")
+                
+        except Exception as e:
+            logger.error(f"执行定时任务失败 {event.function_name}: {e}")
+    
+    def _handle_try_match(self, event: BaseEvent):
+        """处理订单撮合事件
+        
+        Args:
+            event: 撮合事件
+        """
+        try:
+            logger.debug(f"执行订单撮合: {event.event_time}")
+            
+            # 通过交易中心执行订单撮合
+            if self.trade_center:
+                self.trade_center.try_match_orders(event)
+            else:
+                logger.warning("交易中心未设置，无法执行订单撮合")
+                
+        except Exception as e:
+            logger.error(f"订单撮合失败: {e}") 

@@ -9,14 +9,14 @@ class Event:
     def get_event():
         event={}
         event['default']={
-            'start_interval':'00:00:00',
+            'start_day':'00:00:00',
             'start_market':'00:00:00',
             'end_market':'23:59:59',
-            'end_interval':'23:59:59'    
+            'end_day':'23:59:59'    
         }
         
         event['astock']={
-            'start_interval':'00:00:00',
+            'start_day':'00:00:00',
             'before_market':'09:00:00',
             'pre_opening_start':'09:15:00',
             'pre_opening_end':'09:20:00',
@@ -28,7 +28,7 @@ class Event:
             'closing_end':'15:00:00',
             'afternoon_end':'15:00:00',
             'after_market':'18:00:00',
-            'end_interval':'23:59:59'
+            'end_day':'23:59:59'
         }
        
         event['astock'] = {**event['default'], **event['astock']}
