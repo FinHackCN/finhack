@@ -12,6 +12,7 @@ class EventType(Enum):
     """事件类型枚举"""
     
     # 时间驱动事件
+    START_DAY = "START_DAY"
     START_INTERVAL = "START_INTERVAL"
     START_MARKET = "START_MARKET"
     BEFORE_MARKET = "BEFORE_MARKET"
@@ -26,7 +27,7 @@ class EventType(Enum):
     AFTERNOON_END = "AFTERNOON_END"
     AFTER_MARKET = "AFTER_MARKET"
     END_MARKET = "END_MARKET"
-    END_INTERVAL = "END_INTERVAL"
+    END_DAY = "END_DAY"
     
     # 市场数据事件
     OPENING_PRICE_DETERMINED = "OPENING_PRICE_DETERMINED"

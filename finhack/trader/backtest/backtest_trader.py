@@ -1,529 +1,591 @@
-"""
-主回测引擎实现
-"""
-
+import asyncio
+import importlib.util
+import os
+import json
+import hashlib
 import logging
-import pandas as pd
 from datetime import datetime, timedelta
-from typing import Dict, Any, Optional, List
-from pathlib import Path
+from typing import Dict, List, Optional, Any
+import pandas as pd
 
-from .core.context import Context
-from .core.event_center import EventCenter
-from .core.trade_center import TradeCenter
+logger = logging.getLogger(__name__)
+
+# 修复导入问题 - runtime模块应该从项目目录导入
+import sys
+# 添加项目目录到sys.path，这样可以导入runtime模块
+if hasattr(sys, '_getframe'):  # 安全检查
+    current_frame = sys._getframe()
+    project_base = None
+    
+    # 尝试从环境变量获取项目路径
+    if 'BASE_DIR' in os.environ:
+        project_base = os.environ['BASE_DIR']
+    else:
+        # 如果没有环境变量，尝试自动检测
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        # 向上查找直到找到runtime目录或到达根目录
+        while current_dir != os.path.dirname(current_dir):
+            runtime_path = os.path.join(current_dir, 'runtime')
+            if os.path.exists(runtime_path) and os.path.isdir(runtime_path):
+                project_base = current_dir
+                break
+            current_dir = os.path.dirname(current_dir)
+    
+    if project_base and project_base not in sys.path:
+        sys.path.insert(0, project_base)
+
+# 尝试导入runtime模块，如果失败则提供默认值
+try:
+    from runtime.constant import *
+    import runtime.global_var as global_var
+except ImportError:
+    # 如果无法导入runtime，定义基本常量
+    import os
+    BASE_DIR = os.environ.get('BASE_DIR', os.getcwd())
+    DATA_DIR = os.path.join(BASE_DIR, 'data')
+    global_var = type('GlobalVar', (), {})()
+
+import finhack.library.log as Log
+
+# 导入我们的事件驱动架构组件
+from .engine.backtest_engine import BacktestEngine
+from .engine.context_manager import ContextManager
+from .engine.scheduler import Scheduler
 from .core.data_center import DataCenter
-from .strategy.strategy_manager import StrategyManager
-from .events.base_event import BaseEvent, EventType
-from .events.market_events import MarketEvent
-from .events.trade_events import TradeEvent
-from .events.user_events import UserEvent
-# from finhack.library.config import Config
-# from finhack.library.file_util import check_file_exists  
-# from finhack.library.db_adpter.kline import Kline
-# from finhack.library.db_adpter.ref_tickers import RefTickers
-# from finhack.library.db_adpter.factors import factorManager
-
-class SimpleConfig:
-    """简化的配置类"""
-    def __init__(self):
-        self.backtest = {}
+from .core.event_center import EventCenter
+from .events.event_bus import EventBus
+from .models.enums import *
+from .models.account import Account
+from .models.position import Position
+from .models.order import Order
+from .models.trade import Trade
+from .models.instrument import Instrument
 
 
 class BacktestTrader:
-    """主回测引擎，整合所有组件并实现完整的回测流程"""
+    """回测交易器主入口类"""
     
-    def __init__(self, config_path: str = ""):
-        """
-        初始化回测引擎
-        
-        Args:
-            config_path: 配置文件路径
-        """
-        self.config_path = config_path
-        self.config = None
+    def __init__(self, args):
+        self.args = args
         self.context = None
-        self.logger = None
+        self.strategy = None
+        self.engine = None
+        self.event_bus = EventBus()
+        self.data_center = None
+        self.event_center = None
         
-        # 四大核心组件
-        self.event_center = EventCenter()
-        self.trade_center = TradeCenter()
-        self.data_center = DataCenter()
-        self.strategy_manager = StrategyManager()
+        # 存储策略注册的定时任务
+        self.scheduled_tasks = []
         
-        # 运行状态
-        self.is_running = False
-        self.start_time = None
-        self.end_time = None
-        
-        # 性能统计
-        self.performance_metrics = {}
-        
-        # 初始化
-        self._initialize()
-    
-    def _initialize(self):
-        """初始化回测引擎"""
-        
-        # 加载配置
-        self._load_config()
-        
-        # 初始化日志
-        self._setup_logging()
-        
-        # 创建上下文
-        self._create_context()
-        
-        # 初始化组件
-        self._initialize_components()
-        
-        self.logger.info("回测引擎初始化完成")
-    
-    def _load_config(self):
-        """加载配置"""
-        # 简化配置加载，直接使用默认配置
-        self.config = SimpleConfig()
-        
-        # 设置一些默认值
-        if not hasattr(self.config, 'backtest'):
-            self.config.backtest = {}
-        
-        defaults = {
-            'market': 'cn_stock',
-            'start_time': '2023-01-01 00:00:00',
-            'end_time': '2024-12-31 23:59:59',
-            'initial_cash': 1000000.0,
-            'benchmark': '000001.SH',
-            'strategy': 'DemoStrategy',
-            'frequency': '1d'
-        }
-        
-        for key, value in defaults.items():
-            if key not in self.config.backtest:
-                self.config.backtest[key] = value
-    
-    def _setup_logging(self):
-        """设置日志"""
-        # 创建日志记录器
-        self.logger = logging.getLogger('BacktestTrader')
-        self.logger.setLevel(logging.INFO)
-        
-        # 创建处理器
-        handler = logging.StreamHandler()
-        formatter = logging.Formatter(
-            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        )
-        handler.setFormatter(formatter)
-        
-        # 添加处理器
-        if not self.logger.handlers:
-            self.logger.addHandler(handler)
-    
-    def _create_context(self):
-        """创建上下文"""
-        
-        # 构建配置字典
-        config_dict = {
-            'account': {
-                'initial_cash': self.config.backtest.get('initial_cash', 1000000.0),
-                'cash': self.config.backtest.get('initial_cash', 1000000.0),
-                'open_tax': self.config.backtest.get('open_tax', 0.0),
-                'close_tax': self.config.backtest.get('close_tax', 0.001),
-                'open_commission': self.config.backtest.get('open_commission', 0.0003),
-                'close_commission': self.config.backtest.get('close_commission', 0.0003),
-                'min_commission': self.config.backtest.get('min_commission', 5.0)
-            },
-            'trade': {
-                'market': self.config.backtest.get('market', 'cn_stock'),
-                'start_time': self.config.backtest.get('start_time', '2023-01-01 00:00:00'),
-                'end_time': self.config.backtest.get('end_time', '2024-12-31 23:59:59'),
-                'benchmark': self.config.backtest.get('benchmark', '000001.SH'),
-                'strategy': self.config.backtest.get('strategy', 'DemoStrategy'),
-                'frequency': self.config.backtest.get('frequency', '1d'),
-                'max_position_ratio': self.config.backtest.get('max_position_ratio', 0.1),
-                'max_order_ratio': self.config.backtest.get('max_order_ratio', 0.1),
-                'enable_t1_rule': self.config.backtest.get('enable_t1_rule', True),
-                'enable_limit_rule': self.config.backtest.get('enable_limit_rule', True),
-                'slippage': self.config.backtest.get('slippage', 0.005),
-                'rule_list': self.config.backtest.get('rule_list', 'delist,stop,st,limit,slip,volume_ratio,cost,volume_num,t1')
-            },
-            'data': {
-                'cache_enabled': self.config.backtest.get('cache_enabled', True),
-                'preload_days': self.config.backtest.get('preload_days', 30),
-                'cache_size': self.config.backtest.get('cache_size', 1000)
-            },
-            'params': self.config.backtest.get('params', {}),
-            'strategy_params': self.config.backtest.get('strategy_params', {})
-        }
-        
-        # 创建上下文
-        self.context = Context(config_dict)
-        self.context.logger = self.logger
-        
-        # 解析时间
-        self.start_time = datetime.strptime(self.context.trade_config.start_time, '%Y-%m-%d %H:%M:%S')
-        self.end_time = datetime.strptime(self.context.trade_config.end_time, '%Y-%m-%d %H:%M:%S')
-        
-        self.logger.info(f"回测期间: {self.start_time} 到 {self.end_time}")
-    
-    def _initialize_components(self):
-        """初始化组件"""
-        
-        # 设置组件的上下文引用
-        self.context.event_center = self.event_center
-        self.context.trade_center = self.trade_center
-        self.context.data_center = self.data_center
-        self.context.strategy_manager = self.strategy_manager
-        
-        # 初始化各组件
-        self.event_center.initialize(self.context)
-        self.trade_center.initialize(self.context)
-        self.data_center.initialize(self.context)
-        self.strategy_manager.initialize(self.context)
-        
-        # 设置事件中心的市场类型
-        self.event_center.market = self.context.trade_config.market
-        
-        self.logger.info("组件初始化完成")
-    
-    def run(self, start_date: str = "", end_date: str = "") -> Dict[str, Any]:
-        """
-        运行回测
-        
-        Args:
-            start_date: 开始日期（可选，覆盖配置）
-            end_date: 结束日期（可选，覆盖配置）
-            
-        Returns:
-            Dict[str, Any]: 回测结果
-        """
-        
-        # 检查是否有激活策略
-        if not self.strategy_manager.get_active_strategy():
-            self.logger.error("没有激活的策略")
-            return {"error": "没有激活的策略"}
-        
-        # 更新时间范围
-        if start_date:
-            self.start_time = datetime.strptime(start_date, '%Y-%m-%d')
-        if end_date:
-            self.end_time = datetime.strptime(end_date, '%Y-%m-%d')
-        
-        self.logger.info(f"开始回测: {self.start_time} 到 {self.end_time}")
-        
-        # 设置运行状态
-        self.is_running = True
-        self.context.current_dt = self.start_time
-        
+    def run(self):
+        """回测主入口方法 - 改为同步版本"""
         try:
-            # 初始化策略
-            self._initialize_strategy()
+            Log.logger.info("开始初始化回测系统...")
             
-            # 生成回测期间的所有事件
-            self._generate_events()
+            # 1. 初始化上下文
+            self.init_context()
             
-            # 运行事件循环
-            self._run_event_loop()
+            # 2. 初始化组件
+            self.init_components()
             
-            # 计算绩效
-            self._calculate_performance()
+            # 3. 加载策略
+            self.load_strategy()
             
-            # 生成报告
-            result = self._generate_report()
+            # 4. 初始化策略
+            self.init_strategy()
             
-            self.logger.info("回测完成")
+            # 5. 运行回测 - 直接调用同步版本
+            self.run_backtest_sync()
             
-            return result
+            Log.logger.info("回测完成")
             
         except Exception as e:
-            self.logger.error(f"回测运行失败: {str(e)}")
-            return {"error": str(e)}
+            Log.logger.error(f"回测运行失败: {e}")
+            raise
             
-        finally:
-            self.is_running = False
-    
-    def _initialize_strategy(self):
-        """初始化策略"""
+    def init_context(self):
+        """初始化回测上下文"""
+        args_dict = self.args.__dict__
         
-        # 确保策略已初始化
-        active_strategy = self.strategy_manager.get_active_strategy()
-        if active_strategy:
-            # 设置策略参数
-            if self.context.strategy_params:
-                active_strategy.set_params(self.context.strategy_params)
-            
-            # 初始化策略
-            active_strategy.initialize(self.context)
-            
-            # 设置上下文中的策略引用
-            self.context.strategy = active_strategy
-            
-            self.logger.info(f"策略初始化完成: {active_strategy.name}")
-    
-    def _generate_events(self):
-        """生成回测期间的所有事件"""
+        # 生成context_id
+        context_json = str(args_dict)
+        context_id = hashlib.md5(context_json.encode()).hexdigest()
         
-        self.logger.info("开始生成事件...")
+        # 从参数中获取基础配置
+        market = getattr(self.args, 'market', 'cn_stock')
+        freq = getattr(self.args, 'freq', '1d') 
+        start_date = getattr(self.args, 'start_time', '2024-01-01')
+        end_date = getattr(self.args, 'end_time', '2024-12-31')
+        initial_cash = float(getattr(self.args, 'cash', 1000000))
+        benchmark = getattr(self.args, 'benchmark', '000001.SH')
+        strategy_name = getattr(self.args, 'strategy', 'demoStrategy')
         
-        # 获取交易日历
-        trading_days = self._get_trading_days()
-        
-        # 为每个交易日生成事件
-        for trade_date in trading_days:
-            daily_events = self.event_center.generate_daily_events(
-                trade_date, 
-                self.context.trade_config.frequency
-            )
-            
-            # 添加事件到队列
-            self.event_center.add_events_to_queue(daily_events)
-        
-        self.logger.info(f"事件生成完成，共生成 {len(self.event_center.event_queue)} 个事件")
-    
-    def _get_trading_days(self) -> List[datetime]:
-        """获取交易日历"""
-        
-        trading_days = []
-        
-        # 使用简单的日期范围（排除周末）
-        current_date = self.start_time
-        while current_date <= self.end_time:
-            # 排除周末
-            if current_date.weekday() < 5:  # 周一到周五
-                trading_days.append(current_date)
-            current_date += timedelta(days=1)
-        
-        return trading_days
-    
-    def _run_event_loop(self):
-        """运行事件循环"""
-        
-        self.logger.info("开始事件循环...")
-        
-        event_count = 0
-        
-        # 处理所有事件
-        while self.event_center.has_events() and self.is_running:
-            
-            # 获取下一个事件
-            event = self.event_center.get_next_event()
-            
-            if event is None:
-                break
-            
-            # 更新当前时间
-            self.context.current_dt = event.event_time
-            self.context.current_date = event.event_time.date()
-            
-            # 处理事件
+        # 解析params参数
+        params = {}
+        if hasattr(self.args, 'params') and self.args.params:
             try:
-                # 让事件自己处理
-                event.process(self.context)
-                
-                # 分发事件到策略
-                self.strategy_manager.dispatch_event(event)
-                
-                event_count += 1
-                
-                # 定期更新绩效
-                if event_count % 1000 == 0:
-                    self._update_performance()
-                    self.logger.info(f"已处理 {event_count} 个事件")
-                
-            except Exception as e:
-                self.logger.error(f"处理事件失败: {event.event_type.value}, 错误: {str(e)}")
-                continue
+                params = json.loads(self.args.params)
+            except:
+                pass
         
-        self.logger.info(f"事件循环完成，共处理 {event_count} 个事件")
-    
-    def _update_performance(self):
-        """更新绩效统计"""
+        # 创建一个简单的字典类，支持属性访问
+        class DictObj(dict):
+            def __getattr__(self, key):
+                try:
+                    return self[key]
+                except KeyError:
+                    raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{key}'")
+            
+            def __setattr__(self, key, value):
+                self[key] = value
+            
+            def __delattr__(self, key):
+                try:
+                    del self[key]
+                except KeyError:
+                    raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{key}'")
         
-        # 更新组合价值
-        self.context.update_portfolio_value()
-        
-        # 计算收益率
-        self.context.calculate_returns()
-        
-        # 记录每日收益
-        if self.context.current_date and self.context.previous_date:
-            if self.context.current_date != self.context.previous_date:
-                # 计算日收益率
-                if self.context.account.initial_cash > 0:
-                    daily_return = (self.context.portfolio.total_value - self.context.account.initial_cash) / self.context.account.initial_cash
-                    self.context.add_daily_return(daily_return)
-        
-        # 更新前一日日期
-        self.context.previous_date = self.context.current_date
-    
-    def _calculate_performance(self):
-        """计算绩效"""
-        
-        self.logger.info("开始计算绩效...")
-        
-        # 最终更新
-        self._update_performance()
-        
-        # 计算基本统计
-        total_return = self.context.portfolio.returns
-        daily_returns = self.context.portfolio.daily_returns
-        
-        # 计算各种绩效指标
-        self.performance_metrics = {
-            'total_return': total_return,
-            'annualized_return': self._calculate_annualized_return(daily_returns),
-            'volatility': self._calculate_volatility(daily_returns),
-            'sharpe_ratio': self._calculate_sharpe_ratio(daily_returns),
-            'max_drawdown': self._calculate_max_drawdown(daily_returns),
-            'win_rate': self._calculate_win_rate(),
-            'total_trades': len(self.context.logs['trade_list']),
-            'final_value': self.context.portfolio.total_value,
-            'initial_cash': self.context.account.initial_cash
-        }
-        
-        self.logger.info(f"绩效计算完成，总收益率: {total_return:.2%}")
-    
-    def _calculate_annualized_return(self, daily_returns: List[float]) -> float:
-        """计算年化收益率"""
-        if not daily_returns:
-            return 0.0
-        
-        # 计算累计收益率
-        cumulative_return = 1.0
-        for ret in daily_returns:
-            cumulative_return *= (1 + ret)
-        
-        # 年化
-        trading_days = len(daily_returns)
-        if trading_days > 0:
-            years = trading_days / 252  # 假设252个交易日为一年
-            return (cumulative_return ** (1/years)) - 1
-        
-        return 0.0
-    
-    def _calculate_volatility(self, daily_returns: List[float]) -> float:
-        """计算波动率"""
-        if len(daily_returns) < 2:
-            return 0.0
-        
-        # 计算标准差
-        mean_return = sum(daily_returns) / len(daily_returns)
-        variance = sum((ret - mean_return) ** 2 for ret in daily_returns) / (len(daily_returns) - 1)
-        
-        # 年化波动率
-        return (variance ** 0.5) * (252 ** 0.5)
-    
-    def _calculate_sharpe_ratio(self, daily_returns: List[float]) -> float:
-        """计算夏普比率"""
-        if len(daily_returns) < 2:
-            return 0.0
-        
-        # 假设无风险利率为3%
-        risk_free_rate = 0.03
-        
-        # 计算超额收益
-        annualized_return = self._calculate_annualized_return(daily_returns)
-        volatility = self._calculate_volatility(daily_returns)
-        
-        if volatility > 0:
-            return (annualized_return - risk_free_rate) / volatility
-        
-        return 0.0
-    
-    def _calculate_max_drawdown(self, daily_returns: List[float]) -> float:
-        """计算最大回撤"""
-        if not daily_returns:
-            return 0.0
-        
-        # 计算累计净值
-        cumulative_values = [1.0]
-        for ret in daily_returns:
-            cumulative_values.append(cumulative_values[-1] * (1 + ret))
-        
-        # 计算最大回撤
-        max_drawdown = 0.0
-        peak = cumulative_values[0]
-        
-        for value in cumulative_values[1:]:
-            if value > peak:
-                peak = value
-            else:
-                drawdown = (peak - value) / peak
-                max_drawdown = max(max_drawdown, drawdown)
-        
-        return max_drawdown
-    
-    def _calculate_win_rate(self) -> float:
-        """计算胜率"""
-        trades = self.context.logs['trade_list']
-        
-        if not trades:
-            return 0.0
-        
-        win_count = 0
-        total_count = len(trades)
-        
-        for trade in trades:
-            if trade.get('profit', 0) > 0:
-                win_count += 1
-        
-        return win_count / total_count if total_count > 0 else 0.0
-    
-    def _generate_report(self) -> Dict[str, Any]:
-        """生成回测报告"""
-        
-        report = {
-            'summary': {
-                'strategy': self.context.trade_config.strategy,
-                'start_date': self.start_time.strftime('%Y-%m-%d'),
-                'end_date': self.end_time.strftime('%Y-%m-%d'),
-                'initial_cash': self.context.account.initial_cash,
-                'final_value': self.context.portfolio.total_value,
-                'total_return': self.performance_metrics.get('total_return', 0.0),
-                'annualized_return': self.performance_metrics.get('annualized_return', 0.0),
-                'volatility': self.performance_metrics.get('volatility', 0.0),
-                'sharpe_ratio': self.performance_metrics.get('sharpe_ratio', 0.0),
-                'max_drawdown': self.performance_metrics.get('max_drawdown', 0.0),
-                'win_rate': self.performance_metrics.get('win_rate', 0.0),
-                'total_trades': self.performance_metrics.get('total_trades', 0)
+        self.context = {
+            'id': context_id,
+            'current_dt': None,
+            'previous_date': None,
+            'params': params,
+            'benchmark': benchmark,
+            
+            'settings': {
+                'market': market,
+                'freq': freq,
+                'strategy_name': strategy_name,
+                'start_date': start_date,
+                'end_date': end_date,
+                'benchmark': benchmark,
+                'universe': getattr(self.args, 'universe', []),
+                'starting_cash': initial_cash,
+                'order_volume_ratio': getattr(self.args, 'order_volume_ratio', 1.0),
+                'slip_type': getattr(self.args, 'sliptype', 'pricerelated'),
+                'slip_value': float(getattr(self.args, 'slip', 0.001)),
+                'open_tax': float(getattr(self.args, 'open_tax', 0.0)),
+                'close_tax': float(getattr(self.args, 'close_tax', 0.001)),
+                'open_commission': float(getattr(self.args, 'open_commission', 0.0003)),
+                'close_commission': float(getattr(self.args, 'close_commission', 0.0003)),
+                'close_today_commission': float(getattr(self.args, 'close_today_commission', 0.0)),
+                'min_commission': float(getattr(self.args, 'min_commission', 5.0)),
             },
-            'positions': dict(self.context.portfolio.positions),
-            'trades': self.context.logs['trade_list'],
-            'orders': self.context.logs['order_list'],
-            'daily_returns': self.context.portfolio.daily_returns,
-            'performance_metrics': self.performance_metrics
+            
+            'account': {
+                'account_id': 'backtest_account',
+                'platform': PlatformEnum.BACKTEST,
+                'account_type': AccountTypeEnum.CASH,
+                'currency': 'CNY',
+                'total_assets': initial_cash,
+                'cash_available': initial_cash,
+                'cash_frozen': 0.0,
+                'market_value': 0.0,
+                'pnl_unrealized': 0.0,
+                'pnl_realized': 0.0,
+                'status': AccountStatusEnum.CONNECTED,
+                'timestamp_updated': None,
+            },
+            
+            'portfolio': {
+                'positions': {},
+                'orders': {},
+            },
+            
+            'data': {
+                'calendar': [],
+                'schedule_event_list': [],
+                'data_source': getattr(self.args, 'data_source', 'file'),
+                'dividend_info': {},
+                'client': None,
+            },
+            
+            'g': DictObj(),  # 全局变量命名空间，支持字典和属性访问
+            'scheduled_tasks': [],
+            
+            'logs': {
+                'all_trades': [],
+                'all_orders': [],
+                'daily_history': [],
+            },
+            
+            'performance': {
+                'returns': [],
+                'bench_returns': [],
+                'turnover': [],
+                'win_ratio': 0.0,
+                'trade_num': 0,
+                'indicators': {}
+            }
         }
         
-        return report
-    
-    def load_strategy(self, strategy_name: str, strategy_path: str = "") -> bool:
-        """加载策略"""
-        if strategy_path:
-            return self.strategy_manager.load_strategy_from_file(strategy_path, strategy_name)
-        else:
-            return self.strategy_manager.load_strategy_from_module(f"strategies.{strategy_name}", strategy_name)
-    
-    def set_active_strategy(self, strategy_name: str) -> bool:
-        """设置激活策略"""
-        return self.strategy_manager.set_active_strategy(strategy_name)
-    
-    def get_status(self) -> Dict[str, Any]:
-        """获取回测状态"""
-        return {
-            'is_running': self.is_running,
-            'current_time': self.context.current_dt.isoformat() if self.context and self.context.current_dt else None,
-            'start_time': self.start_time.isoformat() if self.start_time else None,
-            'end_time': self.end_time.isoformat() if self.end_time else None,
-            'active_strategy': self.strategy_manager.get_active_strategy().name if self.strategy_manager.get_active_strategy() else None,
-            'total_value': self.context.portfolio.total_value if self.context else 0.0,
-            'cash': self.context.portfolio.cash if self.context else 0.0,
-            'positions_count': len(self.context.portfolio.positions) if self.context else 0,
-            'events_pending': len(self.event_center.event_queue) if self.event_center else 0
+        Log.logger.info(f"回测上下文初始化完成，ID: {context_id}")
+        Log.logger.info(f"回测设置: {market} {freq} {start_date} -> {end_date}")
+        
+    def init_components(self):
+        """初始化各个组件"""
+        # 初始化数据中心
+        self.data_center = DataCenter(
+            project_path=BASE_DIR,
+            market=self.context['settings']['market'],
+            freq=self.context['settings']['freq']
+        )
+        self.data_center.set_context(self.context)
+        
+        # 初始化事件中心
+        event_config = {
+            'market': self.context['settings']['market'],
+            'freq': self.context['settings']['freq'],
+            'event_bus': self.event_bus
         }
+        self.event_center = EventCenter(config=event_config)
+        self.event_center.set_context(self.context)
+        
+        # 设置数据中心的引用
+        self.event_center.set_data_center(self.data_center)
+        
+        # 初始化回测引擎
+        self.engine = BacktestEngine(
+            context=self.context,
+            data_center=self.data_center,
+            event_center=self.event_center,
+            event_bus=self.event_bus
+        )
+        
+        # 设置交易中心的引用
+        self.event_center.set_trade_center(self.engine.trade_center)
+        
+        Log.logger.info("回测组件初始化完成")
+        
+    def load_strategy(self):
+        """加载策略文件"""
+        strategy_name = self.context['settings']['strategy_name']
+        market = self.context['settings']['market']
+        
+        # 构建策略文件路径
+        strategy_path = f"{BASE_DIR}/strategies/{market}/{strategy_name}.py"
+        
+        if not os.path.exists(strategy_path):
+            raise FileNotFoundError(f"策略文件不存在: {strategy_path}")
+        
+        # 加载策略模块
+        module_spec = importlib.util.spec_from_file_location('strategy', strategy_path)
+        strategy_module = importlib.util.module_from_spec(module_spec)
+        module_spec.loader.exec_module(strategy_module)
+        
+        # 读取策略代码
+        with open(strategy_path, 'r', encoding='utf-8') as f:
+            strategy_code = f.read()
+        
+        self.strategy = strategy_module
+        self.context['trade'] = {'strategy_code': strategy_code}
+        
+        Log.logger.info(f"策略加载完成: {strategy_path}")
+        
+    def init_strategy(self):
+        """初始化策略"""
+        # 绑定API函数到策略模块
+        self.bind_strategy_api()
+        
+        # 调用策略的initialize函数
+        if hasattr(self.strategy, 'initialize'):
+            self.strategy.initialize(self.context)
+            Log.logger.info("策略初始化完成")
+        else:
+            Log.logger.warning("策略没有initialize函数")
+            
+    def bind_strategy_api(self):
+        """绑定策略所需的API函数"""
+        # 绑定定时任务注册函数
+        self.strategy.run_daily = self.run_daily
+        self.strategy.run_weekly = self.run_weekly
+        self.strategy.run_interval = self.run_interval
+        
+        # 绑定数据获取方法
+        self.strategy.get_quotes = self.data_center.get_quotes
+        self.strategy.get_klines = self.data_center.get_klines
+        self.strategy.get_factors = self.data_center.get_factors
+        
+        # 为了兼容性，提供别名
+        self.strategy.get_price = self.get_price_sync
+        self.strategy.get_kline = self.data_center.get_klines
+        
+        # 绑定交易方法（同步版本）
+        self.strategy.place_order = self.place_order_sync
+        self.strategy.cancel_order = self.cancel_order_sync
+        self.strategy.get_account = self.get_account_sync
+        self.strategy.get_positions = self.get_positions_sync
+        self.strategy.get_orders = self.get_orders_sync
+        self.strategy.get_trades = self.get_trades_sync
+        
+        # 绑定便利方法
+        self.strategy.order_buy = self.order_buy_sync
+        self.strategy.order_sell = self.order_sell_sync
+        self.strategy.sell_all_stocks = self.sell_all_stocks_sync
+        
+        # 绑定回测配置方法（这些在回测中通常是空操作）
+        self.strategy.set_benchmark = self.set_benchmark
+        self.strategy.set_option = self.set_option
+        self.strategy.set_order_cost = self.set_order_cost
+        self.strategy.set_slippage = self.set_slippage
+        
+        logger.info("策略API绑定完成")
     
-    def stop(self):
-        """停止回测"""
-        self.is_running = False
-        self.logger.info("回测已停止")
+    def get_price_sync(self, code, time=None):
+        """获取单个股票价格的同步方法（get_quotes的简化版本）"""
+        try:
+            quotes = self.data_center.get_quotes([code], freq='1d', time=time, fields=['close'])
+            if not quotes.empty:
+                return quotes.iloc[0]['close']
+            else:
+                logger.warning(f"无法获取股票 {code} 的价格数据")
+                return None
+        except Exception as e:
+            logger.error(f"获取股票价格失败: {e}")
+            return None
     
-    def __str__(self) -> str:
-        return f"BacktestTrader(running={self.is_running})" 
+    def place_order_sync(self, adapter_id, symbol, side, order_type, volume, price=None, **kwargs):
+        """同步下单方法"""
+        try:
+            # 字符串到枚举的转换
+            if isinstance(side, str):
+                side = Side.BUY if side.upper() == 'BUY' else Side.SELL
+            if isinstance(order_type, str):
+                if order_type.upper() == 'MARKET':
+                    order_type = OrderType.MARKET
+                elif order_type.upper() == 'LIMIT':
+                    order_type = OrderType.LIMIT
+                else:
+                    order_type = OrderType.LIMIT  # 默认为限价单
+            
+            # 调用TradeCenter的下单方法
+            if hasattr(self.engine, 'trade_center'):
+                # 创建订单对象并添加到TradeCenter
+                from datetime import datetime
+                order_id = f"order_{symbol}_{int(datetime.now().timestamp())}"
+                
+                # 创建订单
+                order = Order(
+                    account_id=self.context['account']['account_id'],
+                    symbol=symbol,
+                    side=side,
+                    order_type=order_type,
+                    volume=volume,
+                    order_id=order_id,
+                    price=price,
+                    status=OrderStatus.PENDING_NEW,
+                    created_time=self.context.get('current_dt', datetime.now())
+                )
+                
+                # 添加到订单列表
+                self.engine.trade_center.orders[order_id] = order
+                order.status = OrderStatus.NEW
+                
+                logger.info(f"下单成功: {symbol} {side.value} {order_type.value} 数量:{volume} 价格:{price}")
+                return order_id
+            else:
+                logger.info(f"模拟下单: {symbol} {side} {order_type} 数量:{volume} 价格:{price}")
+                return f"order_{symbol}_{int(datetime.now().timestamp())}"
+        except Exception as e:
+            logger.error(f"下单失败: {e}")
+            return None
+    
+    def cancel_order_sync(self, adapter_id, order_id, **kwargs):
+        """同步撤单方法"""
+        try:
+            if hasattr(self.engine, 'trade_center') and order_id in self.engine.trade_center.orders:
+                order = self.engine.trade_center.orders[order_id]
+                order.status = OrderStatus.CANCELLED
+                order.rejected_reason = "用户撤单"
+                logger.info(f"撤单成功: {order_id}")
+                return True
+            else:
+                logger.info(f"模拟撤单: {order_id}")
+                return True
+        except Exception as e:
+            logger.error(f"撤单失败: {e}")
+            return False
+    
+    def get_account_sync(self, adapter_id='backtest', refresh=False):
+        """同步获取账户信息"""
+        try:
+            if hasattr(self.engine, 'trade_center'):
+                account = self.engine.trade_center.account
+                logger.debug(f"返回账户信息: 现金={account.cash_available}, 总资产={account.total_assets}")
+                return account
+            else:
+                # 创建模拟账户信息
+                from types import SimpleNamespace
+                account = SimpleNamespace()
+                account.cash_available = 1000000.0  # 初始资金
+                account.total_assets = 1000000.0
+                account.market_value = 0.0
+                logger.debug("返回模拟账户信息")
+                return account
+        except Exception as e:
+            logger.error(f"获取账户信息失败: {e}")
+            return None
+    
+    def get_positions_sync(self, adapter_id='backtest', symbol=None, refresh=False):
+        """同步获取持仓信息"""
+        try:
+            if hasattr(self.engine, 'trade_center'):
+                positions = list(self.engine.trade_center.positions.values())
+                if symbol:
+                    positions = [pos for pos in positions if pos.symbol == symbol]
+                logger.debug(f"返回持仓信息: {len(positions)} 个持仓")
+                return positions
+            else:
+                # 返回空的持仓列表（暂时）
+                logger.debug("返回空持仓列表")
+                return []
+        except Exception as e:
+            logger.error(f"获取持仓信息失败: {e}")
+            return []
+    
+    def get_orders_sync(self, adapter_id='backtest', symbol=None, status=None, **kwargs):
+        """同步获取订单信息"""
+        try:
+            if hasattr(self.engine, 'trade_center'):
+                orders = list(self.engine.trade_center.orders.values())
+                if symbol:
+                    orders = [order for order in orders if order.symbol == symbol]
+                if status:
+                    orders = [order for order in orders if order.status == status]
+                logger.debug(f"返回订单信息: {len(orders)} 个订单")
+                return orders
+            else:
+                logger.debug("返回空订单列表")
+                return []
+        except Exception as e:
+            logger.error(f"获取订单信息失败: {e}")
+            return []
+    
+    def get_trades_sync(self, adapter_id='backtest', symbol=None, **kwargs):
+        """同步获取成交信息"""
+        try:
+            if hasattr(self.engine, 'trade_center'):
+                trades = self.engine.trade_center.trades.copy()
+                if symbol:
+                    trades = [trade for trade in trades if trade.symbol == symbol]
+                logger.debug(f"返回成交信息: {len(trades)} 个成交")
+                return trades
+            else:
+                logger.debug("返回空成交列表")
+                return []
+        except Exception as e:
+            logger.error(f"获取成交信息失败: {e}")
+            return []
+    
+    def order_buy_sync(self, symbol, volume, price=None):
+        """便利买入方法"""
+        from finhack.trader.backtest.models.enums import Side, OrderType
+        order_type = OrderType.LIMIT if price else OrderType.MARKET
+        return self.place_order_sync('backtest', symbol, Side.BUY, order_type, volume, price)
+    
+    def order_sell_sync(self, symbol, volume, price=None):
+        """便利卖出方法"""
+        from finhack.trader.backtest.models.enums import Side, OrderType
+        order_type = OrderType.LIMIT if price else OrderType.MARKET
+        return self.place_order_sync('backtest', symbol, Side.SELL, order_type, volume, price)
+    
+    def sell_all_stocks_sync(self, context=None):
+        """卖出所有持仓的便利方法"""
+        try:
+            positions = self.get_positions_sync()
+            sell_orders = []
+            
+            for position in positions:
+                if position.volume > 0:  # 确保有持仓
+                    order_id = self.order_sell_sync(position.symbol, position.volume)
+                    if order_id:
+                        sell_orders.append(order_id)
+                        logger.info(f"卖出持仓: {position.symbol} 数量: {position.volume}")
+                    
+            return sell_orders
+        except Exception as e:
+            logger.error(f"卖出所有股票失败: {e}")
+            return []
+    
+    def set_benchmark(self, benchmark):
+        """设置基准"""
+        if self.context and 'settings' in self.context:
+            self.context['settings']['benchmark'] = benchmark
+            logger.info(f"设置基准: {benchmark}")
+    
+    def set_option(self, key, value):
+        """设置选项"""
+        if self.context and 'settings' in self.context:
+            self.context['settings'][key] = value
+            logger.debug(f"设置选项: {key} = {value}")
+    
+    def set_order_cost(self, order_cost, type='stock'):
+        """设置手续费"""
+        logger.debug(f"设置手续费: {type}")
+        # 在回测中，手续费通过TradeCenter配置
+    
+    def set_slippage(self, slippage, type='stock'):
+        """设置滑点"""
+        logger.debug(f"设置滑点: {type}")
+        # 在回测中，滑点通过TradeCenter配置 
+    
+    # ==================== 定时任务注册函数 ====================
+    
+    def run_daily(self, func, time="14:50:00"):
+        """注册每日定时任务"""
+        task = {
+            'task_id': f"daily-{time}-{func.__name__}",
+            'function_object': func,
+            'function_name': func.__name__,
+            'scheduling_rule': {
+                'type': 'daily',
+                'time': time
+            },
+            'next_run_time': None
+        }
+        self.context['scheduled_tasks'].append(task)
+        logger.info(f"注册每日任务: {func.__name__} at {time}")
+        
+    def run_weekly(self, func, weekday, time="14:50:00"):
+        """注册每周定时任务"""
+        task = {
+            'task_id': f"weekly-W{weekday}-{time}-{func.__name__}",
+            'function_object': func,
+            'function_name': func.__name__,
+            'scheduling_rule': {
+                'type': 'weekly',
+                'weekday': weekday,
+                'time': time
+            },
+            'next_run_time': None
+        }
+        self.context['scheduled_tasks'].append(task)
+        logger.info(f"注册每周任务: {func.__name__} weekday={weekday} at {time}")
+        
+    def run_interval(self, func, frequency, reference_time="09:30:00"):
+        """注册间隔定时任务"""
+        task = {
+            'task_id': f"interval-{frequency}-{reference_time}-{func.__name__}",
+            'function_object': func,
+            'function_name': func.__name__,
+            'scheduling_rule': {
+                'type': 'interval',
+                'frequency': frequency,
+                'reference_time': reference_time
+            },
+            'next_run_time': None
+        }
+        self.context['scheduled_tasks'].append(task)
+        logger.info(f"注册间隔任务: {func.__name__} every {frequency} from {reference_time}")
+    
+    def run_backtest_sync(self):
+        """运行回测主循环 - 同步版本"""
+        logger.info("开始运行回测...")
+        
+        # 启动回测引擎
+        self.engine.run_sync(
+            start_date=self.context['settings']['start_date'],
+            end_date=self.context['settings']['end_date'],
+            strategy=self.strategy,
+            scheduled_tasks=self.context['scheduled_tasks']
+        ) 

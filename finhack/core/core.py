@@ -190,7 +190,8 @@ class Core:
             project_path=os.getcwd()
         project_file=project_path+"/.proj"
         if not os.path.exists(project_file):
-            print("当前目录非项目目录，请使用-p参数指定项目路径，或使用create命令创建项目")
+            print("当前目录非项目目录，请切换到项目目录下执行命令，或使用-p参数指定项目路径，若未创建项目，请使用create命令创建项目！\n")
+            exit()
         self.project_path=project_path
     
     

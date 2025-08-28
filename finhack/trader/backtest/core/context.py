@@ -34,6 +34,12 @@ class AccountInfo:
     close_commission: float = 0.0003
     close_today_commission: float = 0.0
     min_commission: float = 5.0
+    
+    # 新增字段
+    frozen_cash: float = 0.0          # 冻结资金
+    total_commission: float = 0.0     # 总手续费
+    realized_pnl: float = 0.0         # 已实现盈亏
+    unrealized_pnl: float = 0.0       # 未实现盈亏
 
 
 @dataclass 
@@ -125,6 +131,8 @@ class Context:
             'order_list': [],
             'position_list': [],
             'return_list': [],
+            'dividend_list': [],
+            'stock_dividend_list': [],
             'history': {}
         }
         
