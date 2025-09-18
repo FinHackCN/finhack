@@ -44,11 +44,10 @@ class tsSHelper:
                 Log.logger.warning(f"SQLite数据库 {db_name} 配置中未指定path参数")
                 return False
             
-            # 如果是相对路径，转换为绝对路径
+            # 如果是相对路径，使用项目数据目录作为基础路径
             if not os.path.isabs(db_path):
-                # 当前工作目录
-                cwd = os.getcwd()
-                abs_db_path = os.path.abspath(os.path.join(cwd, db_path))
+                from runtime.constant import BASE_DIR
+                abs_db_path = os.path.abspath(os.path.join(BASE_DIR, db_path))
                 Log.logger.info(f"数据库 {db_name} 相对路径: {db_path}")
                 Log.logger.info(f"转换为绝对路径: {abs_db_path}")
                 db_path = abs_db_path

@@ -23,38 +23,49 @@ class tsAStockOther:
     @tsMonitor
     def report_rc(pro,db):
         table="astock_other_report_rc"
-        # 不需要获取engine对象，直接使用db连接名
-        # engine = DB.get_db_engine(db)
-        if True:
-            try_times=0
+        
+        today = datetime.datetime.now().strftime("%Y%m%d")
+        lastdate = tsSHelper.getLastDateAndDelete('astock_other_report_rc','report_date',ts_code='',db=db)
+        
+        # 按天循环获取数据，避免日期范围导致的重复数据问题
+        begin = datetime.datetime.strptime(lastdate, "%Y%m%d")
+        end = datetime.datetime.strptime(today, "%Y%m%d")
+        current_date = begin
+        
+        while current_date <= end:
+            day = current_date.strftime("%Y%m%d")
+            try_times = 0
+            
             while True:
                 try:
-                    today = datetime.datetime.now()
-                    today=today.strftime("%Y%m%d")
-                    lastdate=tsSHelper.getLastDateAndDelete('astock_other_report_rc','report_date',ts_code='',db=db)
-                    df =pro.report_rc(start_date=lastdate, end_date=today)
-                    #df.to_sql('astock_other_report_rc', engine, index=False, if_exists='append', chunksize=5000)
-                    DB.safe_to_sql(df, table, db, index=False, if_exists='append', chunksize=5000)
+                    # 统一使用trade_date参数获取单日数据
+                    df = pro.report_rc(trade_date=day)
+                    if not df.empty:
+                        DB.safe_to_sql(df, table, db, index=False, if_exists='append', chunksize=5000)
                     break
                 except Exception as e:
                     if "每天最多访问" in str(e) or "每小时最多访问" in str(e):
-                        Log.logger.warning("report_rc:触发最多访问。\n"+str(e))
+                        Log.logger.warning(f"report_rc:日期{day}触发最多访问。\n{str(e)}")
                         return
                     elif "每分钟最多访问" in str(e):
-                        Log.logger.warning("report_rc:触发限流，等待重试。\n"+str(e))
+                        Log.logger.warning(f"report_rc:日期{day}触发限流，等待重试。\n{str(e)}")
                         time.sleep(15)
                         continue
                     else:
-                        if try_times<10:
-                            try_times=try_times+1;
-                            Log.logger.error("report_rc:函数异常，等待重试。\n"+str(e))
+                        if try_times < 10:
+                            try_times += 1
+                            Log.logger.error(f"report_rc:日期{day}函数异常，等待重试。\n{str(e)}")
                             time.sleep(15)
                             continue
                         else:
                             info = traceback.format_exc()
-                            alert.send('report_rc','函数异常',str(info))
+                            alert.send('report_rc', f'日期{day}函数异常', str(info))
                             Log.logger.error(info)  
-                            return
+                            break  # 跳过这一天，继续下一天
+            
+            # 移动到下一天
+            current_date += datetime.timedelta(days=1)
+            time.sleep(0.1)  # 避免请求过快
                         
  
     @tsMonitor

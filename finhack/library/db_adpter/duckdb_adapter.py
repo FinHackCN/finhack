@@ -154,6 +154,11 @@ class DuckDBAdapter(DbAdapter):
     
     def to_sql(self, df: pd.DataFrame, table_name: str, if_exists='append', **kwargs) -> int:
         """将DataFrame写入数据库"""
+        # 空DataFrame检查
+        if df.empty or len(df.columns) == 0:
+            Log.logger.warning(f"尝试写入空DataFrame到表 {table_name}, 操作已跳过")
+            return 0
+            
         conn = self.get_engine()
         
         try:
@@ -178,9 +183,74 @@ class DuckDBAdapter(DbAdapter):
             # 将DataFrame注册为临时视图，然后插入数据
             conn.register("temp_df", df)
             conn.execute(f"INSERT INTO {table_name} SELECT * FROM temp_df")
+            
+            # 增强日志记录：包含日期范围信息
+            date_info = self._extract_date_range_info(df)
+            if date_info:
+                Log.logger.info(f"成功写入 {len(df)} 条记录到表 {table_name} ({date_info})")
+            else:
+                Log.logger.info(f"成功写入 {len(df)} 条记录到表 {table_name}")
+                
             return len(df)
         finally:
             conn.close()
+    
+    def _extract_date_range_info(self, df: pd.DataFrame) -> str:
+        """
+        从DataFrame中提取日期范围信息用于日志记录
+        
+        Args:
+            df: DataFrame数据
+            
+        Returns:
+            包含日期范围的字符串，如果没有找到日期列则返回空字符串
+        """
+        if df.empty:
+            return ""
+            
+        # 常见的日期列名
+        date_columns = [
+            'trade_date', 'ann_date', 'end_date', 'start_date', 'list_date', 
+            'delist_date', 'date', 'cal_date', 'pre_date', 'actual_date'
+        ]
+        
+        # 查找第一个存在的日期列
+        date_col = None
+        for col in date_columns:
+            if col in df.columns:
+                date_col = col
+                break
+                
+        if date_col is None:
+            # 查找列名包含"date"的列
+            for col in df.columns:
+                if 'date' in col.lower():
+                    date_col = col
+                    break
+                    
+        if date_col is None:
+            return ""
+            
+        try:
+            # 获取该列的非空值
+            date_series = df[date_col].dropna()
+            if date_series.empty:
+                return ""
+                
+            # 转换为字符串并排序（处理不同格式的日期）
+            date_strings = date_series.astype(str).sort_values()
+            min_date = date_strings.iloc[0]
+            max_date = date_strings.iloc[-1]
+            
+            # 如果最小日期和最大日期相同，只显示一个日期
+            if min_date == max_date:
+                return f"日期: {min_date}"
+            else:
+                return f"日期范围: {min_date} ~ {max_date}"
+                
+        except Exception as e:
+            # 如果日期解析出错，返回空字符串
+            return ""
     
     def safe_to_sql(self, df: pd.DataFrame, table_name: str, **kwargs) -> int:
         """安全地将DataFrame写入数据库，处理可能的列缺失问题"""

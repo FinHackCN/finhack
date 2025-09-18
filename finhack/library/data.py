@@ -1,8 +1,9 @@
 """
-统一数据接口
+统一数据接口 - 增强版
 
 提供整个项目的数据访问能力，包括K线数据、因子数据、参考数据等
 支持高性能缓存、多线程处理、批量操作等优化功能
+专门优化cn_fund、cn_future、cn_stock、global_cryptoswap、global_cryptospot市场支持
 """
 
 import os
@@ -138,8 +139,46 @@ class LRUCache:
             return len(expired_keys)
 
 
+class MarketConfig:
+    """市场配置类，定义各市场类型的特性"""
+    
+    # 支持的市场类型和频率组合
+    MARKET_FREQ_SUPPORT = {
+        'cn_stock': ['1d', '1m'],
+        'cn_fund': ['1d', '1m'],
+        'cn_future': ['1m'],  # 只有1m数据
+        'cn_index': ['1d', '1m'],
+        'cn_cb': ['1d', '1m'],
+        'global_cryptospot': ['1m'],  # 只有1m数据
+        'global_cryptoswap': ['1m'],  # 只有1m数据
+        'global_fx': ['1d'],
+        'hk_stock': ['1d'],
+    }
+    
+    # 支持复权的市场
+    ADJ_SUPPORTED_MARKETS = ['cn_stock', 'cn_fund']
+    
+    # 7x24交易的市场（无节假日）
+    CONTINUOUS_MARKETS = ['global_cryptospot', 'global_cryptoswap']
+    
+    @classmethod
+    def is_freq_supported(cls, market: str, freq: str) -> bool:
+        """检查市场是否支持指定频率"""
+        return market in cls.MARKET_FREQ_SUPPORT and freq in cls.MARKET_FREQ_SUPPORT[market]
+    
+    @classmethod
+    def supports_adjustment(cls, market: str) -> bool:
+        """检查市场是否支持复权"""
+        return market in cls.ADJ_SUPPORTED_MARKETS
+    
+    @classmethod
+    def is_continuous_market(cls, market: str) -> bool:
+        """检查是否为连续交易市场"""
+        return market in cls.CONTINUOUS_MARKETS
+
+
 class DataInterface:
-    """统一数据接口"""
+    """统一数据接口 - 增强版"""
     
     def __init__(self, project_path: str, cache_config: Dict[str, Any] = None):
         """
@@ -159,8 +198,8 @@ class DataInterface:
         
         # 缓存配置
         default_cache_config = {
-            'max_size': 1000,
-            'ttl_seconds': 3600,
+            'max_size': 2000,  # 增加缓存大小
+            'ttl_seconds': 7200,  # 增加缓存时间
             'cleanup_interval': 300  # 5分钟清理一次过期缓存
         }
         self.cache_config = {**default_cache_config, **(cache_config or {})}
@@ -169,7 +208,7 @@ class DataInterface:
         self._init_caches()
         
         # 线程池
-        self.thread_pool = ThreadPoolExecutor(max_workers=8)
+        self.thread_pool = ThreadPoolExecutor(max_workers=12)  # 增加线程数
         
         # 启动缓存清理任务
         self._start_cache_cleanup()
@@ -230,8 +269,8 @@ class DataInterface:
         
         Args:
             codes: 股票代码或代码列表
-            market: 市场名称
-            freq: 数据频率
+            market: 市场名称 (cn_stock, cn_fund, cn_future, global_cryptospot, global_cryptoswap等)
+            freq: 数据频率 (1d, 1m)
             start_date: 开始时间
             end_date: 结束时间
             fields: 需要的字段列表
@@ -241,6 +280,12 @@ class DataInterface:
         Returns:
             pd.DataFrame: K线数据，MultiIndex(time, symbol)
         """
+        # 验证市场和频率支持
+        if not MarketConfig.is_freq_supported(market, freq):
+            logger.warning(f"市场 {market} 不支持频率 {freq}")
+            index = pd.MultiIndex.from_arrays([[], []], names=['time', 'symbol'])
+            return pd.DataFrame(columns=fields or ['open', 'high', 'low', 'close', 'volume'], index=index)
+        
         if isinstance(codes, str):
             codes = [codes]
             
@@ -290,8 +335,9 @@ class DataInterface:
             result_df = result_df[fields]
             
             # 应用复权逻辑
-            if adj_type != 'none' and self._has_price_fields(fields):
-                result_df = self._apply_adjustment(result_df, market, adj_type, start_date, end_date)
+            normalized_adj_type = self._normalize_adj_type(adj_type)
+            if normalized_adj_type != 'none' and MarketConfig.supports_adjustment(market) and self._has_price_fields(fields):
+                result_df = self._apply_adjustment(result_df, market, normalized_adj_type, start_date, end_date)
             
             # 缓存结果
             if use_cache:
@@ -306,10 +352,11 @@ class DataInterface:
     
     def _load_single_kline(self, market: str, symbol: str, freq: str,
                           start_date: str, end_date: str) -> pd.DataFrame:
-        """加载单个股票的K线数据"""
+        """加载单个代码的K线数据，支持多种市场类型"""
         # 确定数据文件路径（支持codebased存储格式）
         kline_dir = os.path.join(self.market_data_dir, 'kline')
         codebased_dir = os.path.join(kline_dir, 'codebased', market, freq)
+        timebased_dir = os.path.join(kline_dir, 'timebased', market, freq)
         
         # 获取年份范围
         start_year = int(start_date[:4])
@@ -317,6 +364,8 @@ class DataInterface:
         
         all_data = []
         
+        # 首先尝试codebased格式
+        codebased_found = False
         for year in range(start_year, end_year + 1):
             year_dir = os.path.join(codebased_dir, str(year))
             symbol_file = os.path.join(year_dir, f"{symbol}.csv")
@@ -329,32 +378,72 @@ class DataInterface:
                     
                     # 转换时间格式，统一处理时区
                     year_data['time'] = pd.to_datetime(year_data['time'], utc=False)
-                    if year_data['time'].dt.tz is not None:
+                    if hasattr(year_data['time'].dt, 'tz') and year_data['time'].dt.tz is not None:
                         year_data['time'] = year_data['time'].dt.tz_localize(None)
             
                     # 过滤日期范围
                     start_dt = pd.to_datetime(start_date)
                     end_dt = pd.to_datetime(end_date)
                     
-                    if start_dt.tz is not None:
+                    if hasattr(start_dt, 'tz') and start_dt.tz is not None:
                         start_dt = start_dt.tz_localize(None)
-                    if end_dt.tz is not None:
+                    if hasattr(end_dt, 'tz') and end_dt.tz is not None:
                         end_dt = end_dt.tz_localize(None)
                     
                     year_data = year_data[(year_data['time'] >= start_dt) & (year_data['time'] <= end_dt)]
                     
                     if not year_data.empty:
                         all_data.append(year_data)
+                        codebased_found = True
                         
                 except Exception as e:
-                    logger.warning(f"读取{symbol}的{year}年数据失败: {e}")
+                    logger.warning(f"读取{symbol}的{year}年codebased数据失败: {e}")
                     continue
+        
+        # 如果codebased没有找到数据，尝试timebased格式或loadKline
+        if not codebased_found:
+            logger.debug(f"未找到{symbol}的codebased数据，尝试timebased/loadKline格式")
+            try:
+                from finhack.library.kline import loadKline
+                # 使用现有的loadKline函数加载数据
+                kline_data = loadKline(
+                    market=market,
+                    freq=freq,
+                    start_date=start_date.replace('-', ''),
+                    end_date=end_date.replace('-', ''),
+                    code_list=[symbol],
+                    cache=False
+                )
+                
+                if not kline_data.empty and symbol in kline_data['code'].values:
+                    symbol_data = kline_data[kline_data['code'] == symbol].copy()
+                    if not symbol_data.empty:
+                        # 重新格式化时间列
+                        symbol_data['time'] = pd.to_datetime(symbol_data['time'], utc=False, errors='coerce')
+                        if hasattr(symbol_data['time'].dt, 'tz') and symbol_data['time'].dt.tz is not None:
+                            symbol_data['time'] = symbol_data['time'].dt.tz_localize(None)
+                        
+                        # 确保列名一致
+                        symbol_data = symbol_data[['time', 'open', 'high', 'low', 'close', 'volume', 'amount']].copy()
+                        all_data.append(symbol_data)
+                        logger.debug(f"通过loadKline成功加载{symbol}数据: {len(symbol_data)}条记录")
+                        
+            except Exception as e:
+                logger.warning(f"使用loadKline加载{symbol}数据失败: {e}")
+        
+        # 如果还是没有数据，记录调试信息
+        if not all_data:
+            logger.debug(f"未能找到{symbol}在{start_date}~{end_date}期间的{freq}数据")
+            logger.debug(f"检查路径: codebased={codebased_dir}, timebased={timebased_dir}")
         
         if all_data:
             result = pd.concat(all_data, ignore_index=True)
             result = result.sort_values('time').reset_index(drop=True)
-            # 去除code列，保持数据格式一致
-            result = result[['time', 'open', 'high', 'low', 'close', 'volume', 'amount']]
+            # 去除重复数据
+            result = result.drop_duplicates(subset=['time'], keep='last')
+            # 确保列名正确
+            expected_columns = ['time', 'open', 'high', 'low', 'close', 'volume', 'amount']
+            result = result.reindex(columns=expected_columns)
             return result
         else:
             return pd.DataFrame(columns=['time', 'open', 'high', 'low', 'close', 'volume', 'amount'])
@@ -382,6 +471,12 @@ class DataInterface:
         Note:
             当指定时间点没有数据时，会自动使用最近的历史交易日数据
         """
+        # 验证市场和频率支持
+        if not MarketConfig.is_freq_supported(market, freq):
+            logger.warning(f"市场 {market} 不支持频率 {freq}")
+            return pd.DataFrame(columns=fields or ['open', 'high', 'low', 'close', 'volume'], 
+                              index=pd.Index([], name='symbol'))
+        
         if isinstance(codes, str):
             codes = [codes]
         
@@ -406,37 +501,56 @@ class DataInterface:
         # 确保时间是naive datetime便于比较
         if hasattr(time, 'tz') and time.tz is not None:
             time = time.replace(tzinfo=None)
+            
+        # 修复时间比较问题：如果查询时间是日期开始时间(00:00:00)，
+        # 调整为当天结束时间以包含当天的交易数据
+        if time.hour == 0 and time.minute == 0 and time.second == 0:
+            time = time.replace(hour=23, minute=59, second=59)
         
         result_data = []
         
         for code in codes:
             # 获取该股票的K线数据（扩展历史范围以确保找到数据）
             end_date = time.strftime('%Y-%m-%d')
-            start_date = (time - timedelta(days=90)).strftime('%Y-%m-%d')  # 扩展到90天，应对长假期
             
-            klines = self._load_single_kline(market, code, freq, start_date, end_date)
-            
-            if klines.empty:
-                logger.debug(f"未找到{code}的K线数据")
-                continue
-            
-            # 查找指定时间点的数据（使用小于等于的最近时间）
-            klines_before = klines[klines['time'] <= time]
-            
-            if not klines_before.empty:
-                latest_data = klines_before.iloc[-1]
-                logger.debug(f"{code}: 查询时间{time}, 使用时间{latest_data['time']}")
-                
-                row_data = {'symbol': code}
-                for field in fields:
-                    if field in latest_data:
-                        row_data[field] = latest_data[field]
-                    else:
-                        row_data[field] = np.nan
-                
-                result_data.append(row_data)
+            # 根据市场类型调整查找范围
+            if MarketConfig.is_continuous_market(market):
+                # 加密货币市场7x24交易，缩短查找范围
+                lookback_days = 30
             else:
-                logger.debug(f"{code}: 在指定时间{time}之前未找到历史数据")
+                # 传统市场需要考虑更长的假期
+                lookback_days = 90
+                
+            start_date = (time - timedelta(days=lookback_days)).strftime('%Y-%m-%d')
+            
+            try:
+                klines = self._load_single_kline(market, code, freq, start_date, end_date)
+                
+                if klines.empty:
+                    logger.debug(f"未找到{code}的K线数据")
+                    continue
+                
+                # 查找指定时间点的数据（使用小于等于的最近时间）
+                klines_before = klines[klines['time'] <= time]
+                
+                if not klines_before.empty:
+                    latest_data = klines_before.iloc[-1]
+                    logger.debug(f"{code}: 查询时间{time}, 使用时间{latest_data['time']}")
+                    
+                    row_data = {'symbol': code}
+                    for field in fields:
+                        if field in latest_data:
+                            row_data[field] = latest_data[field]
+                        else:
+                            row_data[field] = np.nan
+                    
+                    result_data.append(row_data)
+                else:
+                    logger.debug(f"{code}: 在指定时间{time}之前未找到历史数据")
+                    
+            except Exception as e:
+                logger.warning(f"获取{code}行情数据失败: {e}")
+                continue
         
         if result_data:
             result_df = pd.DataFrame(result_data)
@@ -444,16 +558,23 @@ class DataInterface:
             result_df = result_df[fields]
             
             # 应用复权逻辑（将DataFrame转换为与get_klines相同的格式）
-            if adj_type != 'none' and self._has_price_fields(fields):
+            normalized_adj_type = self._normalize_adj_type(adj_type)
+            if normalized_adj_type != 'none' and MarketConfig.supports_adjustment(market) and self._has_price_fields(fields):
                 # 为行情快照数据添加时间列以便复权处理
                 temp_df = result_df.copy()
                 temp_df['time'] = time  # 添加查询时间
                 temp_df = temp_df.reset_index().set_index(['time', 'symbol'])
                 
                 # 应用复权
-                temp_df = self._apply_adjustment(temp_df, market, adj_type, 
-                                               (time - timedelta(days=1)).strftime('%Y-%m-%d'), 
-                                               time.strftime('%Y-%m-%d'))
+                # 修复：对于行情快照，需要获取足够的历史复权因子数据
+                # 使用更广泛的日期范围来确保有足够的复权因子用于向前查找
+                lookback_days = 365 if freq == '1d' else 90  # 日频数据需要更长的查找范围
+                start_for_adj = (time - timedelta(days=lookback_days)).strftime('%Y-%m-%d')
+                end_for_adj = time.strftime('%Y-%m-%d')
+                
+                temp_df = self._apply_adjustment(temp_df, market, normalized_adj_type, 
+                                               start_for_adj, 
+                                               end_for_adj)
                 
                 # 转换回原始格式
                 result_df = temp_df.reset_index(level=0, drop=True)  # 去掉time索引
@@ -482,7 +603,7 @@ class DataInterface:
         Args:
             factor_names: 因子名称或名称列表
             codes: 股票代码列表，如果为None则获取所有
-            market: 市场名称
+            market: 市场名称 (目前主要支持cn_stock)
             freq: 数据频率
             start_date: 开始日期
             end_date: 结束日期
@@ -565,9 +686,20 @@ class DataInterface:
                     continue
                 
                 for factor_name in factor_names:
-                    factor_file = os.path.join(stock_path, f"{factor_name}.pkl")
-                    if not os.path.exists(factor_file):
-                        logger.debug(f"Factor file not found: {factor_file}")
+                    # 尝试不同的因子文件命名格式
+                    factor_files = [
+                        os.path.join(stock_path, f"{factor_name}.pkl"),
+                        os.path.join(stock_path, f"{factor_name}_0.pkl")
+                    ]
+                    
+                    factor_file = None
+                    for potential_file in factor_files:
+                        if os.path.exists(potential_file):
+                            factor_file = potential_file
+                            break
+                    
+                    if factor_file is None:
+                        logger.debug(f"Factor file not found for {factor_name} in {stock_path}")
                         continue
 
                     try:
@@ -576,23 +708,22 @@ class DataInterface:
                         
                         if isinstance(factor_series, pd.Series) and not factor_series.empty:
                             logger.debug(f"Loaded factor {factor_name} for {code} in {year}, size: {len(factor_series)}")
-                            # 确保索引是datetime
-                            if isinstance(factor_series.index, pd.MultiIndex):
-                                if code in factor_series.index.get_level_values(0):
-                                    factor_series = factor_series.xs(code, level=0)
-                                else:
-                                    continue
                             
-                            factor_series.index = pd.to_datetime(factor_series.index).tz_localize(None)
+                            # 处理时区信息 - 保持本地时间不变，只移除时区信息
+                            if hasattr(factor_series.index, 'tz') and factor_series.index.tz is not None:
+                                # 直接移除时区信息，保持本地时间不变
+                                factor_series.index = factor_series.index.tz_localize(None)
+                            else:
+                                factor_series.index = pd.to_datetime(factor_series.index)
                             
                             # 按日期过滤
                             filtered_series = factor_series[(factor_series.index >= start_dt) & (factor_series.index <= end_dt)]
                             
                             if not filtered_series.empty:
-                                logger.debug(f"Filtered series for {factor_name} is not empty.")
+                                logger.debug(f"Filtered series for {factor_name} has {len(filtered_series)} records.")
                                 df = filtered_series.to_frame(name=factor_name)
                                 df['symbol'] = code
-                                df = df.reset_index().set_index(['symbol', 'time'])
+                                df = df.reset_index().set_index(['time', 'symbol'])
                                 all_factor_data.append(df)
 
                     except Exception as e:
@@ -600,96 +731,32 @@ class DataInterface:
 
         if not all_factor_data:
             logger.debug("No factor data loaded.")
-            return pd.DataFrame()
+            index = pd.MultiIndex.from_arrays([[], []], names=['time', 'symbol'])
+            return pd.DataFrame(columns=factor_names, index=index)
         
         # 合并所有DataFrame
         logger.debug(f"Concatenating {len(all_factor_data)} factor dataframes.")
-        result_df = pd.concat(all_factor_data, axis=1)
         
-        result_df = result_df.reset_index().rename(columns={'index': 'time'}).set_index(['time', 'symbol'])
+        # 使用concat合并所有数据
+        result_df = pd.concat(all_factor_data, axis=0, sort=False)
+        
+        # 如果有重复的索引，进行分组聚合（取平均值或最后一个值）
+        if result_df.index.duplicated().any():
+            logger.debug("Found duplicated index, aggregating...")
+            result_df = result_df.groupby(level=[0, 1]).last()
         
         # 确保所有请求的列都存在
-        missing_cols = set(factor_names) - set(result_df.columns)
+        existing_cols = [col for col in factor_names if col in result_df.columns]
+        missing_cols = set(factor_names) - set(existing_cols)
+        
         for col in missing_cols:
             result_df[col] = np.nan
         
-        logger.info(f"Successfully loaded factors: {list(result_df.columns)}")
+        # 按时间和代码排序
+        result_df = result_df.sort_index()
+        
+        logger.info(f"Successfully loaded factors: {existing_cols}, missing: {list(missing_cols)}")
         return result_df[factor_names]
-    
-    def _load_stock_factors(self, factor_base_path: str, stock_code: str,
-                          factor_names: List[str], date_str: str, 
-                          current_date: datetime) -> Optional[Dict]:
-        """加载单个股票的因子数据"""
-        stock_path = os.path.join(factor_base_path, stock_code)
-        
-        if not os.path.exists(stock_path):
-            return None
-        
-        stock_factor_data = {'date': date_str, 'symbol': stock_code}
-        
-        # 遍历所需因子
-        for factor_name in factor_names:
-            factor_file = os.path.join(stock_path, f"{factor_name}_0.pkl")
-            
-            if os.path.exists(factor_file):
-                try:
-                    with open(factor_file, 'rb') as f:
-                        factor_series = pickle.load(f)
-                    
-                    # 根据文档，因子数据是pandas.Series，索引是MultiIndex (code, time)
-                    factor_value = self._extract_factor_value(factor_series, stock_code, current_date)
-                    
-                    if factor_value is not None:
-                        stock_factor_data[factor_name] = factor_value
-                        
-                except Exception as e:
-                    logger.warning(f"读取因子文件失败 {factor_file}: {str(e)}")
-                    continue
-        
-        # 只有当至少有一个因子数据时才返回记录
-        if len(stock_factor_data) > 2:  # 除了date和symbol
-            return stock_factor_data
-        
-        return None
-    
-    def _extract_factor_value(self, factor_series: Any, stock_code: str, current_date: datetime) -> Any:
-        """从因子Series中提取指定日期的值"""
-        if hasattr(factor_series, 'index'):
-            # 尝试不同的日期格式匹配
-            date_formats = [
-                current_date.strftime('%Y-%m-%d'),
-                current_date.strftime('%Y%m%d'),
-                current_date,
-                pd.Timestamp(current_date)
-            ]
-            
-            for date_fmt in date_formats:
-                try:
-                    if isinstance(factor_series.index, pd.MultiIndex):
-                        # MultiIndex (code, time)
-                        matching_rows = factor_series.index.get_level_values(0) == stock_code
-                        if matching_rows.any():
-                            stock_data = factor_series[matching_rows]
-                            # 查找对应日期
-                            for idx_date in stock_data.index.get_level_values(1):
-                                if str(idx_date).startswith(str(date_fmt)[:10]):
-                                    return stock_data.loc[(stock_code, idx_date)]
-                    else:
-                        # 单索引，直接查找日期
-                        for idx in factor_series.index:
-                            if str(idx).startswith(str(date_fmt)[:10]):
-                                return factor_series.loc[idx]
-                except:
-                    continue
-            
-            # 如果找不到精确日期，使用最后一个值
-            if len(factor_series) > 0:
-                return factor_series.iloc[-1] if hasattr(factor_series, 'iloc') else factor_series[-1]
-        else:
-            # 如果不是Series，直接使用值
-            return factor_series
-        
-        return None
     
     def _load_vector_factors(self, factor_names: List[str], codes: List[str],
                            market: str, freq: str, start_date: str, end_date: str) -> pd.DataFrame:
@@ -746,69 +813,6 @@ class DataInterface:
         
         return result_df
     
-    def save_factors(self, df_factors: pd.DataFrame, factor_list: List[str],
-                    market: str, freq: str, factor_type: str = 'matrix',
-                    max_workers: int = 8, buffer_size: int = 50) -> bool:
-        """
-        保存因子数据
-        
-        Args:
-            df_factors: 计算得到的因子数据DataFrame
-            factor_list: 需要保存的因子列表
-            market: 市场类型
-            freq: 频率
-            factor_type: 因子类型
-            max_workers: 最大线程数
-            buffer_size: 内存缓冲区大小
-            
-        Returns:
-            bool: 保存是否成功
-        """
-        try:
-            if factor_type == 'matrix':
-                return self._save_matrix_factors(df_factors, factor_list, market, freq, max_workers, buffer_size)
-            elif factor_type == 'vector':
-                return self._save_vector_factors(df_factors, factor_list, market, freq)
-            else:
-                raise ValueError(f"不支持的因子类型: {factor_type}")
-        except Exception as e:
-            logger.error(f"保存因子数据失败: {e}")
-            return False
-    
-    def _save_matrix_factors(self, df_factors: pd.DataFrame, factor_list: List[str],
-                           market: str, freq: str, max_workers: int, buffer_size: int) -> bool:
-        """保存matrix格式因子数据"""
-        base_path = os.path.join(self.factors_data_dir, 'matrix', market, freq)
-        
-        # 检查索引格式
-        if not isinstance(df_factors.index, pd.MultiIndex) or 'time' not in df_factors.index.names or 'code' not in df_factors.index.names:
-            logger.error("因子数据索引格式不正确，需要包含time和code")
-            return False
-        
-        # 使用现有的保存逻辑（参考factorManager.saveFactors）
-        from finhack.factor.default.factorManager import factorManager
-        factorManager.saveFactors(df_factors, factor_list, market, freq, max_workers, buffer_size)
-        
-        return True
-    
-    def _save_vector_factors(self, df_factors: pd.DataFrame, factor_list: List[str],
-                           market: str, freq: str) -> bool:
-        """保存vector格式因子数据"""
-        base_path = os.path.join(self.factors_data_dir, 'vector', market, freq)
-        os.makedirs(base_path, exist_ok=True)
-        
-        for factor_name in factor_list:
-            if factor_name in df_factors.columns:
-                factor_path = os.path.join(base_path, f"{factor_name}.pkl")
-                
-                # 准备vector格式数据
-                factor_data = df_factors[['code', 'time', factor_name]].copy()
-                factor_data.to_pickle(factor_path)
-                
-                logger.info(f"保存向量因子: {factor_name}")
-        
-        return True
-    
     # ==================== 参考数据接口 ====================
     
     def get_stock_list(self, market: str = 'cn_stock', use_cache: bool = True) -> pd.DataFrame:
@@ -837,6 +841,10 @@ class DataInterface:
                        start_date: str = None, end_date: str = None,
                        use_cache: bool = True) -> pd.DataFrame:
         """获取复权因子"""
+        if not MarketConfig.supports_adjustment(market):
+            logger.debug(f"市场 {market} 不支持复权")
+            return pd.DataFrame()
+        
         cache_key = self._generate_cache_key('adj_factors', market, tuple(sorted(codes)) if codes else None, start_date, end_date)
         
         if use_cache:
@@ -885,20 +893,36 @@ class DataInterface:
         
         if not os.path.exists(calendar_file):
             logger.warning(f"交易日历文件不存在: {calendar_file}")
-            # 生成默认交易日历（排除周末）
-            if isinstance(start_date, str):
-                start_dt = pd.to_datetime(start_date)
-            else:
-                start_dt = pd.Timestamp(start_date)
+            # 生成默认交易日历
+            if MarketConfig.is_continuous_market(market):
+                # 连续市场按天生成
+                if isinstance(start_date, str):
+                    start_dt = pd.to_datetime(start_date)
+                else:
+                    start_dt = pd.Timestamp(start_date)
+                    
+                if isinstance(end_date, str):
+                    end_dt = pd.to_datetime(end_date)
+                else:
+                    end_dt = pd.Timestamp(end_date)
                 
-            if isinstance(end_date, str):
-                end_dt = pd.to_datetime(end_date)
+                date_range = pd.date_range(start_dt, end_dt, freq='D')
+                result_dates = [d.date() for d in date_range]
             else:
-                end_dt = pd.Timestamp(end_date)
-            
-            date_range = pd.date_range(start_dt, end_dt, freq='D')
-            trading_days = date_range[date_range.weekday < 5]
-            result_dates = [d.date() for d in trading_days]
+                # 传统市场排除周末
+                if isinstance(start_date, str):
+                    start_dt = pd.to_datetime(start_date)
+                else:
+                    start_dt = pd.Timestamp(start_date)
+                    
+                if isinstance(end_date, str):
+                    end_dt = pd.to_datetime(end_date)
+                else:
+                    end_dt = pd.Timestamp(end_date)
+                
+                date_range = pd.date_range(start_dt, end_dt, freq='D')
+                trading_days = date_range[date_range.weekday < 5]
+                result_dates = [d.date() for d in trading_days]
         else:
             calendar_df = pd.read_csv(calendar_file)
             
@@ -960,6 +984,17 @@ class DataInterface:
         price_fields = {'open', 'high', 'low', 'close'}
         return bool(set(fields) & price_fields)
     
+    def _normalize_adj_type(self, adj_type: str) -> str:
+        """标准化复权类型参数"""
+        adj_type_mapping = {
+            'qfq': 'front',  # 前复权
+            'hfq': 'back',   # 后复权  
+            'front': 'front',
+            'back': 'back',
+            'none': 'none'
+        }
+        return adj_type_mapping.get(adj_type, adj_type)
+    
     def _apply_adjustment(self, df: pd.DataFrame, market: str, adj_type: str, 
                          start_date: str, end_date: str) -> pd.DataFrame:
         """
@@ -968,14 +1003,17 @@ class DataInterface:
         Args:
             df: K线数据，index为MultiIndex(time, symbol)
             market: 市场名称
-            adj_type: 复权类型 ('front': 前复权, 'back': 后复权)
+            adj_type: 复权类型 ('qfq'/'front': 前复权, 'hfq'/'back': 后复权)
             start_date: 开始日期
             end_date: 结束日期
             
         Returns:
             pd.DataFrame: 复权后的数据
         """
-        if df.empty or adj_type == 'none':
+        # 标准化复权类型
+        adj_type = self._normalize_adj_type(adj_type)
+        
+        if df.empty or adj_type == 'none' or not MarketConfig.supports_adjustment(market):
             return df
         
         try:
@@ -1025,10 +1063,18 @@ class DataInterface:
                 # 合并复权因子（使用向前填充）
                 symbol_data['time'] = pd.to_datetime(symbol_data['time'])
                 
+                # 准备复权因子数据，确保时间戳类型一致
+                adj_for_merge = symbol_adj[['date', 'adj_factor']].copy()
+                adj_for_merge['time'] = pd.to_datetime(adj_for_merge['date'])
+                
+                # 确保两个时间序列都是相同的datetime精度
+                symbol_data['time'] = symbol_data['time'].astype('datetime64[ns]')
+                adj_for_merge['time'] = adj_for_merge['time'].astype('datetime64[ns]')
+                
                 # 将复权因子数据与K线数据对齐
                 merged_data = pd.merge_asof(
                     symbol_data.sort_values('time'),
-                    symbol_adj[['date', 'adj_factor']].sort_values('date').rename(columns={'date': 'time'}),
+                    adj_for_merge[['time', 'adj_factor']].sort_values('time'),
                     on='time',
                     direction='backward'  # 使用向前查找
                 )
@@ -1036,17 +1082,35 @@ class DataInterface:
                 # 应用复权计算
                 if adj_type == 'front':
                     # 前复权：当前价格 = 原始价格 * 当前复权因子 / 最新复权因子
-                    latest_adj_factor = symbol_adj['adj_factor'].iloc[-1] if not symbol_adj.empty else 1.0
+                    # 获取该股票历史上的最新复权因子（不限于查询日期范围）
+                    latest_adj_factors = self.get_adj_factors(
+                        market=market,
+                        codes=[symbol],
+                        start_date=None,
+                        end_date=None,  # 获取全部历史数据
+                        use_cache=True
+                    )
+                    latest_adj_factor = latest_adj_factors['adj_factor'].iloc[-1] if not latest_adj_factors.empty else 1.0
                     
                     for field in available_price_fields:
                         if field in merged_data.columns and not merged_data['adj_factor'].isna().all():
                             merged_data[field] = merged_data[field] * merged_data['adj_factor'] / latest_adj_factor
                 
                 elif adj_type == 'back':
-                    # 后复权：当前价格 = 原始价格 * 复权因子
+                    # 后复权：当前价格 = 原始价格 * 当前复权因子 / 首个复权因子
+                    # 获取该股票历史上的首个复权因子
+                    first_adj_factors = self.get_adj_factors(
+                        market=market,
+                        codes=[symbol],
+                        start_date=None,
+                        end_date=None,  # 获取全部历史数据
+                        use_cache=True
+                    )
+                    first_adj_factor = first_adj_factors['adj_factor'].iloc[0] if not first_adj_factors.empty else 1.0
+                    
                     for field in available_price_fields:
                         if field in merged_data.columns and not merged_data['adj_factor'].isna().all():
-                            merged_data[field] = merged_data[field] * merged_data['adj_factor']
+                            merged_data[field] = merged_data[field] * merged_data['adj_factor'] / first_adj_factor
                 
                 # 更新结果数据
                 merged_data = merged_data.set_index(['time'])

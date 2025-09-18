@@ -44,35 +44,48 @@ class tsAStockIndex:
         for ts_code in index_list:
             try:
                 lastdate = tsSHelper.getLastDateAndDelete('astock_index_daily', 'trade_date', ts_code=ts_code, db=db)
-                try_times = 0
                 
-                while True:
-                    try:
-                        df = pro.index_daily(ts_code=ts_code, start_date=lastdate, end_date=today)
-                        if not df.empty:
-                            # 使用线程锁保护数据库写入操作
-                            with tsAStockIndex._lock:
-                                DB.safe_to_sql(df, table, db, index=False, if_exists='append', chunksize=5000)
-                        break
-                    except Exception as e:
-                        if "每天最多访问" in str(e) or "每小时最多访问" in str(e):
-                            Log.logger.warning(f"线程处理{ts_code}时触发最多访问限制: {str(e)}")
-                            return
-                        if "最多访问" in str(e):
-                            Log.logger.warning(f'线程处理{ts_code}时触发限流，等待重试: {str(e)}')
-                            time.sleep(15)
-                            continue
-                        else:
-                            if try_times < 10:
-                                try_times += 1
-                                Log.logger.error(f"线程处理{ts_code}时函数异常，等待重试: {str(e)}")
+                # 按天循环获取数据，避免日期范围导致的重复数据问题
+                begin = datetime.datetime.strptime(lastdate, "%Y%m%d")
+                end = datetime.datetime.strptime(today, "%Y%m%d")
+                current_date = begin
+                
+                while current_date <= end:
+                    day = current_date.strftime("%Y%m%d")
+                    try_times = 0
+                    
+                    while True:
+                        try:
+                            # 统一使用trade_date参数获取单日数据
+                            df = pro.index_daily(ts_code=ts_code, trade_date=day)
+                            if not df.empty:
+                                # 使用线程锁保护数据库写入操作
+                                with tsAStockIndex._lock:
+                                    DB.safe_to_sql(df, table, db, index=False, if_exists='append', chunksize=5000)
+                            break
+                        except Exception as e:
+                            if "每天最多访问" in str(e) or "每小时最多访问" in str(e):
+                                Log.logger.warning(f"线程处理{ts_code}日期{day}时触发最多访问限制: {str(e)}")
+                                return
+                            if "最多访问" in str(e):
+                                Log.logger.warning(f'线程处理{ts_code}日期{day}时触发限流，等待重试: {str(e)}')
                                 time.sleep(15)
                                 continue
                             else:
-                                info = traceback.format_exc()
-                                alert.send('index_daily', f'线程处理{ts_code}异常', str(info))
-                                Log.logger.error(f'线程处理{ts_code}异常: {info}')
-                                break
+                                if try_times < 10:
+                                    try_times += 1
+                                    Log.logger.error(f"线程处理{ts_code}日期{day}时函数异常，等待重试: {str(e)}")
+                                    time.sleep(15)
+                                    continue
+                                else:
+                                    info = traceback.format_exc()
+                                    alert.send('index_daily', f'线程处理{ts_code}日期{day}异常', str(info))
+                                    Log.logger.error(f'线程处理{ts_code}日期{day}异常: {info}')
+                                    break
+                    
+                    # 移动到下一天
+                    current_date += datetime.timedelta(days=1)
+                    time.sleep(0.1)  # 避免请求过快
             except Exception as e:
                 Log.logger.error(f"处理指数{ts_code}时发生未预期的错误: {str(e)}")
                 continue

@@ -37,7 +37,10 @@ def main():
             child_process_action(core)
         else:  # 父进程中继续执行
             Utils.write_pids(pid)
-            print("启动后台任务！")
+            if core.args.action == "stop":
+                print("停止后台任务！")
+            else:
+                print("启动后台任务！")
     else:
         # 注册父进程退出时的清理函数
         # atexit.register(Utils.auto_exit)
