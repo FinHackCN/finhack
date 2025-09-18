@@ -314,6 +314,19 @@ class SQLiteAdapter(DbAdapter):
             Log.logger.warning(f"尝试写入空DataFrame到表 {table_name}, 操作已跳过")
             return 0
         
+        # 检查是否启用详细分批监控
+        chunksize = kwargs.get('chunksize', None)
+        enable_detailed_logging = chunksize and chunksize > 1 and len(df) > chunksize
+        
+        if enable_detailed_logging:
+            # 使用自定义分批写入，提供详细日志
+            return self._to_sql_with_detailed_logging(df, table_name, if_exists, **kwargs)
+        else:
+            # 使用原有的简单写入方式
+            return self._to_sql_simple(df, table_name, if_exists, **kwargs)
+    
+    def _to_sql_simple(self, df: pd.DataFrame, table_name: str, if_exists='append', **kwargs) -> int:
+        """简单写入方式（数据量小时使用）"""
         max_retries = 100
         for attempt in range(max_retries):
             try:
@@ -336,20 +349,158 @@ class SQLiteAdapter(DbAdapter):
                 })
                 
                 result = df.to_sql(table_name, engine, **kwargs)
-                Log.logger.debug(f"成功写入 {len(df)} 条记录到表 {table_name}")
+                
+                # 增强日志记录：包含日期范围信息和重试信息
+                date_info = self._extract_date_range_info(df)
+                if attempt > 0:
+                    # 重试成功的情况
+                    if date_info:
+                        Log.logger.info(f"✅ 数据库重试成功：第 {attempt + 1} 次尝试写入 {len(df)} 条记录到表 {table_name} ({date_info})")
+                    else:
+                        Log.logger.info(f"✅ 数据库重试成功：第 {attempt + 1} 次尝试写入 {len(df)} 条记录到表 {table_name}")
+                else:
+                    # 第一次就成功的情况
+                    if date_info:
+                        Log.logger.info(f"成功写入 {len(df)} 条记录到表 {table_name} ({date_info})")
+                    else:
+                        Log.logger.info(f"成功写入 {len(df)} 条记录到表 {table_name}")
                 return result if result is not None else len(df)
                 
             except Exception as e:
                 if attempt < max_retries - 1 and ("database is locked" in str(e) or "database is busy" in str(e)):
                     backoff_delay = 0.1 * (2 *  attempt)
-                    Log.logger.warning(f"写入DataFrame到表 {table_name} 失败，重试 {attempt + 1}/{max_retries}，延迟 {backoff_delay:.3f}秒: {str(e)}")
+                    Log.logger.warning(f"🔄 数据库重试：写入表 {table_name} 第 {attempt + 1}/{max_retries} 次失败，{backoff_delay:.3f}秒后重试: {str(e)}")
                     time.sleep(backoff_delay)
                     continue
                 else:
-                    Log.logger.error(f"写入DataFrame到表 {table_name} 最终失败: {str(e)}")
+                    if attempt > 0:
+                        Log.logger.error(f"💥 数据库重试失败：表 {table_name} 经过 {attempt + 1} 次尝试最终失败: {str(e)}")
+                    else:
+                        Log.logger.error(f"❌ 写入DataFrame到表 {table_name} 失败: {str(e)}")
                     raise
         
         return 0
+    
+    def _to_sql_with_detailed_logging(self, df: pd.DataFrame, table_name: str, if_exists='append', **kwargs) -> int:
+        """
+        详细分批写入方式，提供每个批次的状态监控
+        """
+        chunksize = kwargs.get('chunksize', 100)
+        total_chunks = (len(df) + chunksize - 1) // chunksize
+        successful_rows = 0
+        
+        Log.logger.info(f"开始分批写入到表 {table_name}：总数据 {len(df)} 条，分 {total_chunks} 个批次，每批 {chunksize} 条")
+        
+        # 准备写入参数
+        engine = self.get_engine()
+        write_kwargs = kwargs.copy()
+        write_kwargs.update({
+            'index': False,
+            'if_exists': if_exists if successful_rows == 0 else 'append',  # 第一批使用原始策略，后续都是append
+            'chunksize': None,  # 不使用pandas的内置分批，我们手动控制
+            'method': 'multi'
+        })
+        write_kwargs.pop('connection', None)
+        write_kwargs.pop('con', None)
+        
+        for i in range(total_chunks):
+            start_idx = i * chunksize
+            end_idx = min((i + 1) * chunksize, len(df))
+            chunk_df = df.iloc[start_idx:end_idx].copy()
+            
+            batch_info = f"批次 {i+1}/{total_chunks}"
+            
+            try:
+                # 单批次写入（成功时不打印详细日志，减少日志输出）
+                current_if_exists = write_kwargs['if_exists'] if i == 0 else 'append'
+                chunk_kwargs = write_kwargs.copy()
+                chunk_kwargs['if_exists'] = current_if_exists
+                
+                result = chunk_df.to_sql(table_name, engine, **chunk_kwargs)
+                successful_rows += len(chunk_df)
+                
+            except Exception as e:
+                Log.logger.error(f"❌ {batch_info} 写入失败：{str(e)} → 表 {table_name}")
+                Log.logger.error(f"❌ 失败详情：第{start_idx+1}-{end_idx}行，包含 {len(chunk_df)} 条记录 → 表 {table_name}")
+                
+                # 如果是关键错误，准备重试整个写入过程  
+                if "database is locked" in str(e) or "database is busy" in str(e):
+                    Log.logger.warning(f"🔐 数据库锁定/繁忙，此批次写入将触发上层重试机制")
+                    # 清理已写入的部分数据
+                    try:
+                        if successful_rows > 0:
+                            Log.logger.warning(f"🧹 需要清理已写入的 {successful_rows} 条记录以便重试")
+                            # 这里可以根据需要决定是否清理部分数据
+                    except Exception as cleanup_e:
+                        Log.logger.error(f"❌ 清理部分数据失败：{str(cleanup_e)}")
+                
+                raise Exception(f"分批写入在{batch_info}失败：{str(e)} → 表 {table_name}，已成功写入 {successful_rows} 条，失败 {len(df) - successful_rows} 条")
+        
+        # 最终验证（只在完成时打印汇总日志）
+        date_info = self._extract_date_range_info(df)
+        if date_info:
+            Log.logger.info(f"✅ 分批写入完成：总计 {successful_rows} 条记录到表 {table_name} ({date_info})")
+        else:
+            Log.logger.info(f"✅ 分批写入完成：总计 {successful_rows} 条记录到表 {table_name}")
+        
+        return successful_rows
+    
+    def _extract_date_range_info(self, df: pd.DataFrame) -> str:
+        """
+        从DataFrame中提取日期范围信息用于日志记录
+        
+        Args:
+            df: DataFrame数据
+            
+        Returns:
+            包含日期范围的字符串，如果没有找到日期列则返回空字符串
+        """
+        if df.empty:
+            return ""
+            
+        # 常见的日期列名
+        date_columns = [
+            'trade_date', 'ann_date', 'end_date', 'start_date', 'list_date', 
+            'delist_date', 'date', 'cal_date', 'pre_date', 'actual_date'
+        ]
+        
+        # 查找第一个存在的日期列
+        date_col = None
+        for col in date_columns:
+            if col in df.columns:
+                date_col = col
+                break
+                
+        if date_col is None:
+            # 查找列名包含"date"的列
+            for col in df.columns:
+                if 'date' in col.lower():
+                    date_col = col
+                    break
+                    
+        if date_col is None:
+            return ""
+            
+        try:
+            # 获取该列的非空值
+            date_series = df[date_col].dropna()
+            if date_series.empty:
+                return ""
+                
+            # 转换为字符串并排序（处理不同格式的日期）
+            date_strings = date_series.astype(str).sort_values()
+            min_date = date_strings.iloc[0]
+            max_date = date_strings.iloc[-1]
+            
+            # 如果最小日期和最大日期相同，只显示一个日期
+            if min_date == max_date:
+                return f"日期: {min_date}"
+            else:
+                return f"日期范围: {min_date} ~ {max_date}"
+                
+        except Exception as e:
+            # 如果日期解析出错，返回空字符串
+            return ""
     
     def safe_to_sql(self, df: pd.DataFrame, table_name: str, **kwargs) -> int:
         """安全地将DataFrame写入数据库，处理可能的列缺失问题。类型转换已移除。"""

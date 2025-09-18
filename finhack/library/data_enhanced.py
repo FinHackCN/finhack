@@ -335,9 +335,8 @@ class DataInterface:
             result_df = result_df[fields]
             
             # 应用复权逻辑
-            normalized_adj_type = self._normalize_adj_type(adj_type)
-            if normalized_adj_type != 'none' and MarketConfig.supports_adjustment(market) and self._has_price_fields(fields):
-                result_df = self._apply_adjustment(result_df, market, normalized_adj_type, start_date, end_date)
+            if adj_type != 'none' and MarketConfig.supports_adjustment(market) and self._has_price_fields(fields):
+                result_df = self._apply_adjustment(result_df, market, adj_type, start_date, end_date)
             
             # 缓存结果
             if use_cache:
@@ -401,8 +400,8 @@ class DataInterface:
                     continue
         
         # 如果codebased没有找到数据，尝试timebased格式或loadKline
-        if not codebased_found:
-            logger.debug(f"未找到{symbol}的codebased数据，尝试timebased/loadKline格式")
+        if not codebased_found and os.path.exists(timebased_dir):
+            logger.debug(f"未找到{symbol}的codebased数据，尝试timebased格式")
             try:
                 from finhack.library.kline import loadKline
                 # 使用现有的loadKline函数加载数据
@@ -426,15 +425,9 @@ class DataInterface:
                         # 确保列名一致
                         symbol_data = symbol_data[['time', 'open', 'high', 'low', 'close', 'volume', 'amount']].copy()
                         all_data.append(symbol_data)
-                        logger.debug(f"通过loadKline成功加载{symbol}数据: {len(symbol_data)}条记录")
                         
             except Exception as e:
-                logger.warning(f"使用loadKline加载{symbol}数据失败: {e}")
-        
-        # 如果还是没有数据，记录调试信息
-        if not all_data:
-            logger.debug(f"未能找到{symbol}在{start_date}~{end_date}期间的{freq}数据")
-            logger.debug(f"检查路径: codebased={codebased_dir}, timebased={timebased_dir}")
+                logger.warning(f"使用timebased格式加载{symbol}数据失败: {e}")
         
         if all_data:
             result = pd.concat(all_data, ignore_index=True)
@@ -486,6 +479,11 @@ class DataInterface:
         if fields is None:
             fields = ['open', 'high', 'low', 'close', 'volume']
         
+        # 修复时间比较问题：如果查询时间是日期开始时间(00:00:00)，
+        # 调整为当天结束时间以包含当天的交易数据
+        if time.hour == 0 and time.minute == 0 and time.second == 0:
+            time = time.replace(hour=23, minute=59, second=59)
+        
         # 生成缓存键
         cache_key = self._generate_cache_key(
             'quotes', tuple(sorted(codes)), market, freq, str(time), tuple(sorted(fields)), adj_type
@@ -501,11 +499,6 @@ class DataInterface:
         # 确保时间是naive datetime便于比较
         if hasattr(time, 'tz') and time.tz is not None:
             time = time.replace(tzinfo=None)
-            
-        # 修复时间比较问题：如果查询时间是日期开始时间(00:00:00)，
-        # 调整为当天结束时间以包含当天的交易数据
-        if time.hour == 0 and time.minute == 0 and time.second == 0:
-            time = time.replace(hour=23, minute=59, second=59)
         
         result_data = []
         
@@ -558,23 +551,18 @@ class DataInterface:
             result_df = result_df[fields]
             
             # 应用复权逻辑（将DataFrame转换为与get_klines相同的格式）
-            normalized_adj_type = self._normalize_adj_type(adj_type)
-            if normalized_adj_type != 'none' and MarketConfig.supports_adjustment(market) and self._has_price_fields(fields):
+            if adj_type != 'none' and MarketConfig.supports_adjustment(market) and self._has_price_fields(fields):
                 # 为行情快照数据添加时间列以便复权处理
                 temp_df = result_df.copy()
                 temp_df['time'] = time  # 添加查询时间
                 temp_df = temp_df.reset_index().set_index(['time', 'symbol'])
                 
                 # 应用复权
-                # 修复：对于行情快照，需要获取足够的历史复权因子数据
-                # 使用更广泛的日期范围来确保有足够的复权因子用于向前查找
-                lookback_days = 365 if freq == '1d' else 90  # 日频数据需要更长的查找范围
-                start_for_adj = (time - timedelta(days=lookback_days)).strftime('%Y-%m-%d')
-                end_for_adj = time.strftime('%Y-%m-%d')
-                
-                temp_df = self._apply_adjustment(temp_df, market, normalized_adj_type, 
-                                               start_for_adj, 
-                                               end_for_adj)
+                # 修复：使用正确的日期范围，不应该减去1天
+                # 对于行情快照，应该使用当天的复权因子
+                temp_df = self._apply_adjustment(temp_df, market, adj_type, 
+                                               time.strftime('%Y-%m-%d'), 
+                                               time.strftime('%Y-%m-%d'))
                 
                 # 转换回原始格式
                 result_df = temp_df.reset_index(level=0, drop=True)  # 去掉time索引
@@ -984,17 +972,6 @@ class DataInterface:
         price_fields = {'open', 'high', 'low', 'close'}
         return bool(set(fields) & price_fields)
     
-    def _normalize_adj_type(self, adj_type: str) -> str:
-        """标准化复权类型参数"""
-        adj_type_mapping = {
-            'qfq': 'front',  # 前复权
-            'hfq': 'back',   # 后复权  
-            'front': 'front',
-            'back': 'back',
-            'none': 'none'
-        }
-        return adj_type_mapping.get(adj_type, adj_type)
-    
     def _apply_adjustment(self, df: pd.DataFrame, market: str, adj_type: str, 
                          start_date: str, end_date: str) -> pd.DataFrame:
         """
@@ -1003,16 +980,13 @@ class DataInterface:
         Args:
             df: K线数据，index为MultiIndex(time, symbol)
             market: 市场名称
-            adj_type: 复权类型 ('qfq'/'front': 前复权, 'hfq'/'back': 后复权)
+            adj_type: 复权类型 ('front': 前复权, 'back': 后复权)
             start_date: 开始日期
             end_date: 结束日期
             
         Returns:
             pd.DataFrame: 复权后的数据
         """
-        # 标准化复权类型
-        adj_type = self._normalize_adj_type(adj_type)
-        
         if df.empty or adj_type == 'none' or not MarketConfig.supports_adjustment(market):
             return df
         
@@ -1063,18 +1037,10 @@ class DataInterface:
                 # 合并复权因子（使用向前填充）
                 symbol_data['time'] = pd.to_datetime(symbol_data['time'])
                 
-                # 准备复权因子数据，确保时间戳类型一致
-                adj_for_merge = symbol_adj[['date', 'adj_factor']].copy()
-                adj_for_merge['time'] = pd.to_datetime(adj_for_merge['date'])
-                
-                # 确保两个时间序列都是相同的datetime精度
-                symbol_data['time'] = symbol_data['time'].astype('datetime64[ns]')
-                adj_for_merge['time'] = adj_for_merge['time'].astype('datetime64[ns]')
-                
                 # 将复权因子数据与K线数据对齐
                 merged_data = pd.merge_asof(
                     symbol_data.sort_values('time'),
-                    adj_for_merge[['time', 'adj_factor']].sort_values('time'),
+                    symbol_adj[['date', 'adj_factor']].sort_values('date').rename(columns={'date': 'time'}),
                     on='time',
                     direction='backward'  # 使用向前查找
                 )
@@ -1082,35 +1048,17 @@ class DataInterface:
                 # 应用复权计算
                 if adj_type == 'front':
                     # 前复权：当前价格 = 原始价格 * 当前复权因子 / 最新复权因子
-                    # 获取该股票历史上的最新复权因子（不限于查询日期范围）
-                    latest_adj_factors = self.get_adj_factors(
-                        market=market,
-                        codes=[symbol],
-                        start_date=None,
-                        end_date=None,  # 获取全部历史数据
-                        use_cache=True
-                    )
-                    latest_adj_factor = latest_adj_factors['adj_factor'].iloc[-1] if not latest_adj_factors.empty else 1.0
+                    latest_adj_factor = symbol_adj['adj_factor'].iloc[-1] if not symbol_adj.empty else 1.0
                     
                     for field in available_price_fields:
                         if field in merged_data.columns and not merged_data['adj_factor'].isna().all():
                             merged_data[field] = merged_data[field] * merged_data['adj_factor'] / latest_adj_factor
                 
                 elif adj_type == 'back':
-                    # 后复权：当前价格 = 原始价格 * 当前复权因子 / 首个复权因子
-                    # 获取该股票历史上的首个复权因子
-                    first_adj_factors = self.get_adj_factors(
-                        market=market,
-                        codes=[symbol],
-                        start_date=None,
-                        end_date=None,  # 获取全部历史数据
-                        use_cache=True
-                    )
-                    first_adj_factor = first_adj_factors['adj_factor'].iloc[0] if not first_adj_factors.empty else 1.0
-                    
+                    # 后复权：当前价格 = 原始价格 * 复权因子
                     for field in available_price_fields:
                         if field in merged_data.columns and not merged_data['adj_factor'].isna().all():
-                            merged_data[field] = merged_data[field] * merged_data['adj_factor'] / first_adj_factor
+                            merged_data[field] = merged_data[field] * merged_data['adj_factor']
                 
                 # 更新结果数据
                 merged_data = merged_data.set_index(['time'])

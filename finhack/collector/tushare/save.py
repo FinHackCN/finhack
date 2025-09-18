@@ -7,6 +7,7 @@ import numpy as np
 from finhack.library.db import DB
 from finhack.library.config import Config
 import finhack.library.log as Log
+from runtime.constant import DATA_DIR
 
 class TushareSaver:
     def __init__(self):
@@ -82,7 +83,7 @@ class TushareSaver:
             'global_fx': '%Y-%m-%d 00:00:00+08:00'
         }
         
-        self.base_dir = os.path.join(os.getcwd(), "data")
+        self.base_dir = DATA_DIR
         self.freq = "1d"
         self.start_year = 1998  # 历史数据开始年份
         self.current_year = datetime.now().year

@@ -1,5 +1,6 @@
 import sys
 import time
+from datetime import datetime
 from finhack.library.db import DB
 from finhack.library.config import Config
 from finhack.library.thread import collectThread
@@ -115,11 +116,10 @@ class TushareCollector:
                 Log.logger.warning(f"SQLite数据库配置中未指定path参数")
                 return False
             
-            # 如果是相对路径，尝试转换为绝对路径
+            # 如果是相对路径，使用项目数据目录作为基础路径
             if not os.path.isabs(db_path):
-                # 当前工作目录
-                cwd = os.getcwd()
-                abs_db_path = os.path.abspath(os.path.join(cwd, db_path))
+                from runtime.constant import BASE_DIR
+                abs_db_path = os.path.abspath(os.path.join(BASE_DIR, db_path))
                 Log.logger.info(f"数据库相对路径: {db_path}")
                 Log.logger.info(f"转换为绝对路径: {abs_db_path}")
                 db_path = abs_db_path
@@ -674,6 +674,18 @@ class TushareCollector:
             Log.logger.info("获取基金分红...")
             self.mTread(tsFund, 'fund_div', 'fund_basic')
             
+            # 获取基金日线数据
+            Log.logger.info("获取基金日线数据...")
+            self.mTread(tsFund, 'fund_daily', 'fund_basic')
+            
+            # 获取基金持仓数据
+            Log.logger.info("获取基金持仓数据...")
+            self.mTread(tsFund, 'fund_portfolio', 'fund_basic')
+            
+            # 获取基金复权数据
+            Log.logger.info("获取基金复权数据...")
+            self.mTread(tsFund, 'fund_adj', 'fund_basic')
+            
             return True
         except Exception as e:
             Log.logger.error(f"获取基金数据时发生错误: {str(e)}")
@@ -915,6 +927,790 @@ class TushareCollector:
         
         # 短暂等待，避免同时启动过多线程导致数据库锁定
         time.sleep(0.1)
+    
+    def _get_date_range(self):
+        """获取数据修复的日期范围，支持从参数中读取或使用默认值"""
+        try:
+            # 尝试从args中获取日期参数
+            start_date_param = getattr(self.args, 'start_date', '') if hasattr(self, 'args') else ''
+            end_date_param = getattr(self.args, 'end_date', '') if hasattr(self, 'args') else ''
+            
+            # 处理start_date
+            if start_date_param and start_date_param.strip():
+                start_date = self._parse_date(start_date_param.strip())
+            else:
+                # 默认使用10年前
+                end_date = datetime.now().date()
+                start_date = end_date - timedelta(days=365 * 10)
+            
+            # 处理end_date  
+            if end_date_param and end_date_param.strip():
+                end_date = self._parse_date(end_date_param.strip())
+            else:
+                # 默认使用今天
+                end_date = datetime.now().date()
+            
+            # 如果只指定了start_date但没有指定end_date，确保end_date是今天
+            if start_date_param and start_date_param.strip() and (not end_date_param or not end_date_param.strip()):
+                end_date = datetime.now().date()
+                
+            return start_date, end_date
+            
+        except Exception as e:
+            Log.logger.warning(f"解析日期参数时出错: {str(e)}，使用默认的10年范围")
+            end_date = datetime.now().date()
+            start_date = end_date - timedelta(days=365 * 10)
+            return start_date, end_date
+    
+    def _parse_date(self, date_str):
+        """解析日期字符串，支持YYYY-MM-DD或YYYYMMDD格式"""
+        try:
+            # 去除空格
+            date_str = date_str.strip()
+            
+            # 尝试解析YYYY-MM-DD格式
+            if '-' in date_str:
+                return datetime.strptime(date_str, '%Y-%m-%d').date()
+            
+            # 尝试解析YYYYMMDD格式
+            elif len(date_str) == 8 and date_str.isdigit():
+                return datetime.strptime(date_str, '%Y%m%d').date()
+            
+            else:
+                raise ValueError(f"不支持的日期格式: {date_str}")
+                
+        except Exception as e:
+            raise ValueError(f"解析日期'{date_str}'失败: {str(e)}")
+    
+    def fix(self):
+        """检测并修复丢失的数据，限于近10年的数据"""
+        try:
+            Log.logger.info("开始数据修复检测...")
+            
+            # 初始化Tushare API
+            cfgTS = Config.get_config('ts')
+            ts.set_token(cfgTS['token'])
+            self.pro = ts.pro_api()
+            self.db = cfgTS['db']
+            
+            # 确保数据库目录存在
+            if not self.ensure_db_directory(self.db):
+                Log.logger.error("数据库目录检查失败，终止数据修复")
+                return False
+            
+            # 定义数据映射关系
+            data_mappings = {
+                'cn_stock': {
+                    'calendar': 'astock_trade_cal',
+                    'collector_class': tsAStockPrice,
+                    'table_method_mappings': {
+                        'astock_price_daily': 'daily',
+                        'astock_price_daily_basic': 'daily_basic'
+                    }
+                },
+                'cn_fund': {
+                    'calendar': 'astock_trade_cal',
+                    'collector_class': tsFund,
+                    'table_method_mappings': {
+                        'fund_daily': 'fund_daily'
+                    }
+                },
+                'cn_index': {
+                    'calendar': 'astock_trade_cal',
+                    'collector_class': tsAStockIndex,
+                    'table_method_mappings': {
+                        'astock_index_daily': 'index_daily'
+                    }
+                },
+                'cn_cb': {
+                    'calendar': 'astock_trade_cal',
+                    'collector_class': tsCB,
+                    'table_method_mappings': {
+                        'cb_daily': 'cb_daily'
+                    }
+                },
+                'cn_future': {
+                    'calendar': 'futures_trade_cal',
+                    'collector_class': tsFuntures,
+                    'table_method_mappings': {
+                        'futures_daily': 'fut_daily'
+                    }
+                },
+                'fx_daily': {
+                    'calendar': None,  # 外汇没有日历，每天都有数据
+                    'collector_class': tsFX,
+                    'table_method_mappings': {
+                        'fx_daily': 'fx_daily'
+                    }
+                }
+            }
+            
+            # 获取日期范围 - 支持从参数中读取或使用默认的10年范围
+            start_date, end_date = self._get_date_range()
+            
+            Log.logger.info(f"检测时间范围: {start_date} 至 {end_date}")
+            
+            # 统计修复结果
+            fix_results = {}
+            
+            # 遍历每种数据类型进行检测和修复
+            total_markets = len(data_mappings)
+            for i, (market_type, config) in enumerate(data_mappings.items(), 1):
+                Log.logger.info(f"开始检测 {market_type} 数据... ({i}/{total_markets})")
+                print(f"\n{'='*60}")
+                print(f"正在处理: {market_type.upper()} ({i}/{total_markets})")
+                print('='*60)
+                
+                fix_results[market_type] = self._fix_market_data(
+                    market_type, config, start_date, end_date
+                )
+                
+                # 显示当前市场的简要结果
+                result = fix_results[market_type]
+                print(f"✓ {market_type} 处理完成:")
+                print(f"  - 总交易日: {result['total_trading_days']}")
+                print(f"  - 缺失日期: {len(result['missing_days'])}")
+                print(f"  - 修复成功: {len(result['fixed_days'])}")
+                print(f"  - 修复失败: {len(result['failed_days'])}")
+                print(f"  - 质量警告: {len(result['quality_warnings'])}")
+                
+                if i < total_markets:
+                    Log.logger.info(f"即将开始下一个市场数据检测...")
+            
+            # 输出修复结果
+            self._print_fix_summary(fix_results)
+            
+            Log.logger.info("数据修复检测完成")
+            return True
+            
+        except Exception as e:
+            Log.logger.error(f"数据修复检测失败: {str(e)}")
+            Log.logger.error(traceback.format_exc())
+            return False
+
+    def _get_trading_dates(self, calendar_table, start_date, end_date):
+        """获取指定时间范围内的交易日日期集合"""
+        if calendar_table is None:
+            # 外汇数据每天都有，生成所有日期
+            dates = []
+            current_date = start_date
+            while current_date <= end_date:
+                dates.append(current_date.strftime('%Y%m%d'))
+                current_date += timedelta(days=1)
+            return dates
+        
+        try:
+            # 查询交易日历表
+            sql = f"""
+            SELECT DISTINCT cal_date 
+            FROM {calendar_table} 
+            WHERE cal_date >= '{start_date.strftime('%Y%m%d')}' 
+            AND cal_date <= '{end_date.strftime('%Y%m%d')}' 
+            AND is_open = '1'
+            ORDER BY cal_date
+            """
+            results = DB.select_to_list(sql, self.db)
+            return [row['cal_date'] for row in results]
+        except Exception as e:
+            Log.logger.error(f"获取交易日期失败: {str(e)}")
+            return []
+
+    def _fix_market_data(self, market_type, config, start_date, end_date):
+        """修复特定市场的数据"""
+        fix_result = {
+            'total_trading_days': 0,
+            'missing_days': [],
+            'fixed_days': [],
+            'failed_days': [],
+            'quality_warnings': []
+        }
+        
+        try:
+            # 获取交易日日期集合
+            trading_dates = self._get_trading_dates(config['calendar'], start_date, end_date)
+            fix_result['total_trading_days'] = len(trading_dates)
+            
+            if not trading_dates:
+                Log.logger.warning(f"{market_type}: 未找到交易日日期")
+                return fix_result
+            
+            Log.logger.info(f"{market_type}: 共找到 {len(trading_dates)} 个交易日")
+            
+            # 检查每个表的数据完整性，使用正确的表和方法映射
+            for table_name, method_name in config['table_method_mappings'].items():
+                Log.logger.info(f"{market_type}: 检查表 {table_name}（对应方法：{method_name}）")
+                
+                missing_dates = self._check_missing_data(table_name, trading_dates)
+                fix_result['missing_days'].extend(missing_dates)
+                
+                # 检查数据质量（ts_code数量变化）
+                quality_warnings = self._check_data_quality(table_name, trading_dates)
+                fix_result['quality_warnings'].extend(quality_warnings)
+                
+                # 修复缺失的数据
+                if missing_dates:
+                    Log.logger.info(f"{market_type}: 表 {table_name} 发现 {len(missing_dates)} 个缺失交易日，使用方法 {method_name} 开始修复...")
+                    
+                    if hasattr(config['collector_class'], method_name):
+                        fixed_dates, failed_dates = self._fix_missing_dates(
+                            config['collector_class'], method_name, missing_dates, table_name
+                        )
+                        fix_result['fixed_days'].extend(fixed_dates)
+                        fix_result['failed_days'].extend(failed_dates)
+                    else:
+                        Log.logger.warning(f"{market_type}: 方法 {method_name} 不存在")
+                
+                # 处理质量异常数据
+                if quality_warnings:
+                    should_fix_quality = self._handle_quality_warnings(market_type, table_name, quality_warnings)
+                    
+                    if should_fix_quality:
+                        if hasattr(config['collector_class'], method_name):
+                            fixed_quality_dates, failed_quality_dates = self._fix_quality_warnings(
+                                config['collector_class'], method_name, quality_warnings, table_name
+                            )
+                            fix_result['fixed_days'].extend(fixed_quality_dates)
+                            fix_result['failed_days'].extend(failed_quality_dates)
+                            
+                            # 统计质量修复结果
+                            if 'quality_fixed' not in fix_result:
+                                fix_result['quality_fixed'] = []
+                            if 'quality_failed' not in fix_result:
+                                fix_result['quality_failed'] = []
+                            fix_result['quality_fixed'].extend(fixed_quality_dates)
+                            fix_result['quality_failed'].extend(failed_quality_dates)
+                        else:
+                            Log.logger.warning(f"{market_type}: 方法 {method_name} 不存在，无法修复质量异常")
+                    else:
+                        Log.logger.info(f"{market_type}: 跳过表 {table_name} 的质量异常修复")
+                else:
+                    Log.logger.info(f"{market_type}: 表 {table_name} 无质量异常")
+        
+        except Exception as e:
+            Log.logger.error(f"{market_type}: 数据修复过程中发生错误: {str(e)}")
+        
+        return fix_result
+
+    def _check_missing_data(self, table_name, trading_dates):
+        """检查缺失的数据"""
+        missing_dates = []
+        
+        try:
+            # 检查表是否存在
+            adapter = DB.get_adapter(self.db)
+            if not adapter.table_exists(table_name):
+                Log.logger.warning(f"表 {table_name} 不存在，所有交易日都缺失")
+                return trading_dates
+            
+            # 检查每个交易日是否有数据 - 批量处理提高效率
+            Log.logger.info(f"开始检查 {len(trading_dates)} 个交易日的数据...")
+            
+            # 批量查询缺失日期，更高效
+            if trading_dates:
+                dates_str = "','".join(trading_dates)
+                batch_sql = f"""
+                SELECT trade_date, COUNT(*) as count 
+                FROM {table_name} 
+                WHERE trade_date IN ('{dates_str}')
+                GROUP BY trade_date
+                """
+                
+                try:
+                    existing_dates = {}
+                    result = DB.select_to_list(batch_sql, self.db)
+                    for row in result:
+                        if row['count'] > 0:
+                            existing_dates[row['trade_date']] = row['count']
+                    
+                    # 找出缺失的日期
+                    for i, trade_date in enumerate(trading_dates):
+                        if trade_date not in existing_dates:
+                            missing_dates.append(trade_date)
+                        
+                        # 每检查100个日期显示一次进度
+                        if (i + 1) % 100 == 0 or (i + 1) == len(trading_dates):
+                            progress = (i + 1) / len(trading_dates) * 100
+                            Log.logger.info(f"数据检查进度: {i + 1}/{len(trading_dates)} ({progress:.1f}%)")
+                            print(f"  数据完整性检查: {progress:.1f}% ({i + 1}/{len(trading_dates)})")
+                            
+                except Exception as e:
+                    Log.logger.error(f"批量检查数据时出错: {str(e)}，回退到逐个检查")
+                    # 如果批量查询失败，回退到逐个检查
+                    missing_dates = []
+                    for i, trade_date in enumerate(trading_dates):
+                        sql = f"SELECT COUNT(*) as count FROM {table_name} WHERE trade_date = '{trade_date}'"
+                        try:
+                            result = DB.select_to_list(sql, self.db)
+                            if result and result[0]['count'] == 0:
+                                missing_dates.append(trade_date)
+                        except Exception as e:
+                            Log.logger.error(f"检查日期 {trade_date} 数据时出错: {str(e)}")
+                            missing_dates.append(trade_date)
+                        
+                        # 每检查100个日期显示一次进度
+                        if (i + 1) % 100 == 0 or (i + 1) == len(trading_dates):
+                            progress = (i + 1) / len(trading_dates) * 100
+                            Log.logger.info(f"数据检查进度: {i + 1}/{len(trading_dates)} ({progress:.1f}%)")
+                            print(f"  数据完整性检查(逐个): {progress:.1f}% ({i + 1}/{len(trading_dates)})")
+            
+            Log.logger.info(f"数据检查完成，发现 {len(missing_dates)} 个缺失日期")
+        
+        except Exception as e:
+            Log.logger.error(f"检查表 {table_name} 缺失数据时出错: {str(e)}")
+            
+        return missing_dates
+
+    def _check_data_quality(self, table_name, trading_dates):
+        """检查数据质量，识别ts_code数量异常变化"""
+        warnings = []
+        
+        try:
+            # 检查表是否存在
+            adapter = DB.get_adapter(self.db)
+            if not adapter.table_exists(table_name):
+                return warnings
+            
+            prev_count = None
+            prev_date = None
+            
+            Log.logger.info(f"开始数据质量检查...")
+            
+            for i, trade_date in enumerate(trading_dates):
+                sql = f"SELECT COUNT(DISTINCT ts_code) as count FROM {table_name} WHERE trade_date = '{trade_date}'"
+                try:
+                    result = DB.select_to_list(sql, self.db)
+                    if result:
+                        current_count = result[0]['count']
+                        
+                        if prev_count is not None and current_count > 0 and prev_count > 0:
+                            # 计算变化百分比
+                            change_percent = abs(current_count - prev_count) / prev_count
+                            
+                            # 如果变化超过10%，且当天以及上个交易日均非周末
+                            if change_percent > 0.1:
+                                # 检查当天是否为周末
+                                current_date_obj = datetime.strptime(trade_date, '%Y%m%d').date()
+                                prev_date_obj = datetime.strptime(prev_date, '%Y%m%d').date()
+                                
+                                # 只有当前日期和上个交易日都不是周末时才提示
+                                if current_date_obj.weekday() < 5 and prev_date_obj.weekday() < 5:  
+                                    warning = {
+                                        'table': table_name,
+                                        'date': trade_date,
+                                        'prev_date': prev_date,
+                                        'current_count': current_count,
+                                        'prev_count': prev_count,
+                                        'change_percent': change_percent * 100
+                                    }
+                                    warnings.append(warning)
+                        
+                        prev_count = current_count
+                        prev_date = trade_date
+                
+                except Exception as e:
+                    Log.logger.error(f"检查日期 {trade_date} 数据质量时出错: {str(e)}")
+                
+                # 每检查50个日期显示一次进度
+                if (i + 1) % 50 == 0 or (i + 1) == len(trading_dates):
+                    progress = (i + 1) / len(trading_dates) * 100
+                    Log.logger.info(f"质量检查进度: {i + 1}/{len(trading_dates)} ({progress:.1f}%) [当前: {trade_date}]")
+                    print(f"  质量检查进度: {progress:.1f}% ({i + 1}/{len(trading_dates)})")
+            
+            Log.logger.info(f"数据质量检查完成，发现 {len(warnings)} 个质量警告")
+            
+            # 输出详细的警告信息
+            if warnings:
+                Log.logger.warning(f"数据质量警告详情:")
+                for i, warning in enumerate(warnings, 1):
+                    Log.logger.warning(f"  警告 {i}: 表 {warning['table']} 在 {warning['date']} 的记录数从 {warning['prev_date']} 的 {warning['prev_count']} 条变化到 {warning['current_count']} 条，变化幅度 {warning['change_percent']:.1f}%")
+        
+        except Exception as e:
+            Log.logger.error(f"检查表 {table_name} 数据质量时出错: {str(e)}")
+            
+        return warnings
+
+    def _handle_quality_warnings(self, market_type, table_name, quality_warnings):
+        """处理数据质量警告，根据auto参数决定是否需要确认"""
+        if not quality_warnings:
+            return False
+        
+        # 检查是否开启自动修复模式
+        auto_fix = getattr(self.args, 'auto', 'false').lower() == 'true'
+        
+        print(f"\n{'='*60}")
+        print(f"发现 {market_type} 市场表 {table_name} 的质量异常数据")
+        print(f"{'='*60}")
+        
+        # 显示质量警告详情
+        print(f"质量异常详情（共{len(quality_warnings)}项）:")
+        for i, warning in enumerate(quality_warnings[:5], 1):  # 最多显示前5个
+            print(f"  {i}. 日期 {warning['date']}: 记录数从 {warning['prev_count']} 条变为 {warning['current_count']} 条")
+            print(f"     变化幅度: {warning['change_percent']:.1f}% (相比 {warning['prev_date']})")
+        
+        if len(quality_warnings) > 5:
+            print(f"  ... 还有 {len(quality_warnings) - 5} 项异常未显示")
+        
+        # 自动模式直接修复
+        if auto_fix:
+            print(f"\n✅ 自动修复模式已开启，将自动修复这些质量异常数据")
+            Log.logger.info(f"{market_type}: 自动修复模式，开始修复表 {table_name} 的 {len(quality_warnings)} 个质量异常")
+            return True
+        
+        # 交互模式需要用户确认
+        print(f"\n❓ 是否修复这些质量异常数据？")
+        print("   y/Y/yes - 修复这些异常数据")
+        print("   n/N/no  - 跳过质量异常修复")
+        print("   提示: 可使用 --auto=true 参数启用自动修复模式")
+        
+        while True:
+            try:
+                choice = input(f"\n请选择 (y/n): ").strip().lower()
+                if choice in ['y', 'yes']:
+                    print(f"✅ 确认修复表 {table_name} 的质量异常数据")
+                    Log.logger.info(f"{market_type}: 用户确认修复表 {table_name} 的质量异常数据")
+                    return True
+                elif choice in ['n', 'no']:
+                    print(f"⏭️ 跳过表 {table_name} 的质量异常修复")
+                    Log.logger.info(f"{market_type}: 用户选择跳过表 {table_name} 的质量异常修复")
+                    return False
+                else:
+                    print("❌ 无效选择，请输入 y 或 n")
+            except KeyboardInterrupt:
+                print(f"\n\n⏹️ 用户中断操作，跳过质量异常修复")
+                Log.logger.info(f"{market_type}: 用户中断操作，跳过质量异常修复")
+                return False
+            except Exception as e:
+                print(f"❌ 输入处理错误: {str(e)}，跳过质量异常修复")
+                Log.logger.warning(f"{market_type}: 输入处理错误 {str(e)}，跳过质量异常修复")
+                return False
+
+    def _fix_quality_warnings(self, collector_class, method_name, quality_warnings, table_name):
+        """修复质量异常数据"""
+        if not quality_warnings:
+            return [], []
+        
+        fixed_dates = []
+        failed_dates = []
+        
+        # 提取需要修复的日期
+        warning_dates = [warning['date'] for warning in quality_warnings]
+        
+        Log.logger.info(f"开始修复 {len(warning_dates)} 个质量异常日期的数据")
+        
+        for warning in quality_warnings:
+            trade_date = warning['date']
+            retry_count = 0
+            max_retries = 2  # 质量异常修复减少重试次数
+            success = False
+            
+            while retry_count < max_retries and not success:
+                try:
+                    if retry_count > 0:
+                        Log.logger.info(f"修复质量异常日期 {trade_date} 的数据... (重试 {retry_count}/{max_retries})")
+                    else:
+                        Log.logger.info(f"修复质量异常日期 {trade_date} 的数据...")
+                        print(f"  修复日期: {trade_date} (记录数异常: {warning['prev_count']} -> {warning['current_count']})")
+                    
+                    # 删除该日期的现有数据
+                    try:
+                        DB.exec(f"DELETE FROM {table_name} WHERE trade_date = '{trade_date}'", self.db)
+                    except Exception as e:
+                        Log.logger.debug(f"删除质量异常日期 {trade_date} 数据时出错: {str(e)}")
+                    
+                    # 使用对应方法重新获取数据
+                    success = self._fix_single_date_data(collector_class, method_name, trade_date, table_name)
+                    
+                    if success:
+                        # 验证修复结果
+                        sql = f"SELECT COUNT(*) as count FROM {table_name} WHERE trade_date = '{trade_date}'"
+                        result = DB.select_to_list(sql, self.db)
+                        if result and result[0]['count'] > 0:
+                            fixed_dates.append(trade_date)
+                            Log.logger.info(f"成功修复质量异常日期 {trade_date} 的数据")
+                            break
+                        else:
+                            Log.logger.warning(f"修复质量异常日期 {trade_date} 后未发现数据")
+                            success = False
+                    
+                    retry_count += 1
+                    if not success and retry_count < max_retries:
+                        time.sleep(1)
+                        
+                except Exception as e:
+                    Log.logger.error(f"修复质量异常日期 {trade_date} 时出错: {str(e)}")
+                    retry_count += 1
+                    if retry_count < max_retries:
+                        time.sleep(1)
+            
+            if not success:
+                failed_dates.append(trade_date)
+                Log.logger.error(f"修复质量异常日期 {trade_date} 失败，已重试 {max_retries} 次")
+        
+        return fixed_dates, failed_dates
+
+    def _fix_missing_dates(self, collector_class, method_name, missing_dates, table_name):
+        """修复缺失日期的数据"""
+        fixed_dates = []
+        failed_dates = []
+        
+        # 过滤出需要修复的日期（排除今天及未来日期）
+        today = datetime.now().date()
+        valid_missing_dates = []
+        
+        for trade_date in missing_dates:
+            date_obj = datetime.strptime(trade_date, '%Y%m%d').date()
+            if date_obj < today:  # 只修复过去的日期
+                valid_missing_dates.append(trade_date)
+            else:
+                Log.logger.info(f"跳过未来日期 {trade_date}（大于等于今天 {today}）")
+        
+        if not valid_missing_dates:
+            Log.logger.info("没有需要修复的历史日期")
+            return fixed_dates, failed_dates
+        
+        Log.logger.info(f"开始修复 {len(valid_missing_dates)} 个历史缺失日期")
+        
+        for trade_date in valid_missing_dates:
+            retry_count = 0
+            max_retries = 3
+            success = False
+            
+            while retry_count < max_retries and not success:
+                try:
+                    if retry_count > 0:
+                        Log.logger.info(f"修复日期 {trade_date} 的数据... (重试 {retry_count}/{max_retries})")
+                    else:
+                        Log.logger.info(f"修复日期 {trade_date} 的数据...")
+                    
+                    # 删除该日期的现有数据（如果有）
+                    try:
+                        DB.exec(f"DELETE FROM {table_name} WHERE trade_date = '{trade_date}'", self.db)
+                    except Exception as e:
+                        Log.logger.debug(f"删除日期 {trade_date} 数据时出错: {str(e)}")
+                    
+                    # 使用特殊的按日期修复方法
+                    success = self._fix_single_date_data(collector_class, method_name, trade_date, table_name)
+                    
+                    if success:
+                        # 验证数据是否已成功写入
+                        sql = f"SELECT COUNT(*) as count FROM {table_name} WHERE trade_date = '{trade_date}'"
+                        result = DB.select_to_list(sql, self.db)
+                        if result and result[0]['count'] > 0:
+                            fixed_dates.append(trade_date)
+                            Log.logger.info(f"成功修复日期 {trade_date} 的数据")
+                            break
+                        else:
+                            Log.logger.warning(f"修复日期 {trade_date} 后未发现数据")
+                            success = False
+                    
+                    if not success:
+                        retry_count += 1
+                        if retry_count < max_retries:
+                            Log.logger.warning(f"修复日期 {trade_date} 失败，将重试...")
+                            time.sleep(1)  # 重试前等待更长时间
+                    
+                except Exception as e:
+                    retry_count += 1
+                    Log.logger.error(f"修复日期 {trade_date} 时发生错误 (尝试 {retry_count}/{max_retries}): {str(e)}")
+                    if retry_count < max_retries:
+                        time.sleep(1)
+            
+            if not success:
+                failed_dates.append(trade_date)
+                Log.logger.error(f"修复日期 {trade_date} 失败，已重试 {max_retries} 次，跳过此日期")
+            
+            # 短暂等待，避免API限制
+            time.sleep(0.5)
+        
+        return fixed_dates, failed_dates
+
+    def _fix_single_date_data(self, collector_class, method_name, trade_date, table_name):
+        """修复单个日期的数据，使用特殊的历史数据获取方法"""
+        try:
+            # 对于大多数Tushare API方法，需要使用特殊的按日期获取方式
+            # 这里需要根据不同的方法使用不同的策略
+            
+            if hasattr(collector_class, method_name):
+                method = getattr(collector_class, method_name)
+                
+                # 检查是否是外汇数据 - 外汇数据需要特殊处理
+                if 'fx_daily' in method_name.lower():
+                    # 对于外汇数据，使用helper的方法按日期获取
+                    from finhack.collector.tushare.helper import tsSHelper
+                    # 外汇数据使用特殊的按日期获取方式
+                    try:
+                        # 调用tsSHelper的按日期获取方法
+                        df = self.pro.fx_daily(trade_date=trade_date)
+                        if df is not None and not df.empty:
+                            # 直接写入数据库
+                            adapter = DB.get_adapter(self.db)
+                            adapter.to_sql(df, table_name, if_exists='append')
+                            Log.logger.debug(f"成功获取并写入 {trade_date} 的外汇数据，共 {len(df)} 条记录")
+                            return True
+                        else:
+                            Log.logger.warning(f"日期 {trade_date} 的外汇数据为空")
+                            return False
+                    except Exception as e:
+                        Log.logger.error(f"获取日期 {trade_date} 的外汇数据时出错: {str(e)}")
+                        return False
+                else:
+                    # 对于支持单日期修复的方法，使用新的target_date参数进行单日期修复
+                    if method_name in ['daily', 'daily_basic']:
+                        Log.logger.info(f"使用增强的{method_name}方法修复日期 {trade_date} 的数据")
+                        return method(self.pro, self.db, target_date=trade_date)
+                    else:
+                        # 对于其他类型的数据，尝试调用原方法
+                        # 注意：大多数Tushare API无法获取历史特定日期的数据
+                        # 这里仅作为fallback，实际效果可能有限
+                        Log.logger.warning(f"方法 {method_name} 可能无法获取历史日期 {trade_date} 的数据，尝试调用...")
+                        return method(self.pro, self.db)
+            else:
+                Log.logger.error(f"方法 {method_name} 不存在于类 {collector_class}")
+                return False
+                
+        except Exception as e:
+            Log.logger.error(f"修复单日期数据时出错: {str(e)}")
+            return False
+
+    def _print_fix_summary(self, fix_results):
+        """打印修复结果摘要"""
+        print("\n" + "="*80)
+        print("数据修复检测结果摘要")
+        print("="*80)
+        
+        total_missing = 0
+        total_fixed = 0
+        total_failed = 0
+        total_warnings = 0
+        total_quality_fixed = 0
+        total_quality_failed = 0
+        
+        for market_type, result in fix_results.items():
+            print(f"\n【{market_type.upper()}】")
+            print(f"  总交易日数: {result['total_trading_days']}")
+            print(f"  缺失日期数: {len(result['missing_days'])}")
+            print(f"  修复成功数: {len(result['fixed_days'])}")
+            print(f"  修复失败数: {len(result['failed_days'])}")
+            print(f"  质量警告数: {len(result['quality_warnings'])}")
+            
+            # 显示质量修复统计
+            if 'quality_fixed' in result and result['quality_fixed']:
+                print(f"  质量修复成功数: {len(result['quality_fixed'])}")
+            if 'quality_failed' in result and result['quality_failed']:
+                print(f"  质量修复失败数: {len(result['quality_failed'])}")
+            
+            # 显示质量警告详情（限制显示数量）
+            if result['quality_warnings']:
+                print("  质量警告详情:")
+                display_count = min(3, len(result['quality_warnings']))
+                for i, warning in enumerate(result['quality_warnings'][:display_count]):
+                    print(f"    - {warning['date']}: ts_code数量从{warning['prev_count']}变化到{warning['current_count']} "
+                          f"(变化{warning['change_percent']:.1f}%)")
+                if len(result['quality_warnings']) > display_count:
+                    print(f"    - ... 还有 {len(result['quality_warnings']) - display_count} 个质量警告")
+            
+            total_missing += len(result['missing_days'])
+            total_fixed += len(result['fixed_days'])
+            total_failed += len(result['failed_days'])
+            total_warnings += len(result['quality_warnings'])
+            
+            # 累加质量修复统计
+            if 'quality_fixed' in result:
+                total_quality_fixed += len(result['quality_fixed'])
+            if 'quality_failed' in result:
+                total_quality_failed += len(result['quality_failed'])
+        
+        print(f"\n【总计】")
+        print(f"  总缺失日期数: {total_missing}")
+        print(f"  总修复成功数: {total_fixed}")
+        print(f"  总修复失败数: {total_failed}")
+        print(f"  总质量警告数: {total_warnings}")
+        
+        if total_quality_fixed > 0:
+            print(f"  质量修复成功数: {total_quality_fixed}")
+        if total_quality_failed > 0:
+            print(f"  质量修复失败数: {total_quality_failed}")
+        
+        if total_failed > 0:
+            print(f"\n⚠️  有 {total_failed} 个日期修复失败，建议检查网络连接和API限制")
+        
+        if total_warnings > 0:
+            print(f"\n⚠️  发现 {total_warnings} 个数据质量异常，建议进一步检查")
+        
+        if total_missing == 0:
+            print(f"\n✅ 所有数据完整，无需修复")
+        elif total_fixed == total_missing:
+            print(f"\n✅ 所有缺失数据已成功修复")
+        
+        print("="*80)
+
+    def count(self):
+        """统计分析Tushare数据库"""
+        try:
+            # 导入数据库分析器
+            from finhack.library.db_analyzer import DatabaseAnalyzer
+            
+            Log.logger.info("开始Tushare数据库统计分析...")
+            
+            # 获取数据库配置
+            cfgTS = Config.get_config('ts')
+            db_name = cfgTS['db']
+            
+            print(f"开始分析数据库: {db_name}")
+            print("-" * 80)
+            
+            # 创建数据库分析器
+            analyzer = DatabaseAnalyzer(db_name)
+            
+            # 显示数据库基本信息
+            file_size = analyzer.get_database_file_size()
+            if file_size:
+                print(f"数据库文件大小: {file_size:.2f} GB")
+                print("-" * 80)
+            
+            # 分析所有表
+            start_time = time.time()
+            results = analyzer.analyze_all_tables()
+            total_time = time.time() - start_time
+            
+            print(f"\n分析完成! 总耗时: {total_time:.2f} 秒")
+            print("-" * 80)
+            
+            # 生成并显示报告
+            report = analyzer.generate_report(results)
+            print(report)
+            
+            # 保存报告和数据
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            
+            # 保存到项目的test目录（如果存在）或数据目录
+            if os.path.exists(BASE_DIR + "/test"):
+                report_dir = BASE_DIR + "/test"
+            else:
+                report_dir = BASE_DIR + "/data/reports"
+                os.makedirs(report_dir, exist_ok=True)
+            
+            report_file = f"{report_dir}/tushare_db_analysis_report_{timestamp}.txt"
+            csv_file = f"{report_dir}/tushare_db_analysis_data_{timestamp}.csv"
+            
+            # 保存文本报告
+            with open(report_file, 'w', encoding='utf-8') as f:
+                f.write(report)
+            print(f"\n报告已保存到: {report_file}")
+            
+            # 保存CSV数据
+            analyzer.save_to_csv(results, csv_file)
+            
+            Log.logger.info("Tushare数据库分析完成")
+            
+        except Exception as e:
+            Log.logger.error(f"Tushare数据库分析失败: {e}")
+            import traceback
+            traceback.print_exc()
+            print(f"分析过程中发生错误: {e}")
+            return False
+        
+        return True
 
 
 

@@ -158,6 +158,47 @@ def inspectKline(market='cn_stock', freq='1m'):
             "error": str(e)
         }
 
+def load_day_data_helper(day_tuple, market, freq, code_list, KLINE_DIR):
+    """辅助函数：加载单天的timebased数据"""
+    current_dt, _ = day_tuple
+    year = current_dt.strftime("%Y")
+    month = current_dt.strftime("%m")
+    day = current_dt.strftime("%d")
+    
+    # 首先尝试加载merged文件
+    file_path = f"{KLINE_DIR}/timebased/{market}/{freq}/{year}/{month}/{day}/{market}_kline_merged.csv"
+    
+    if not os.path.exists(file_path):
+        # 如果没有merged文件，尝试找到任意一个源文件
+        pattern = f"{KLINE_DIR}/timebased/{market}/{freq}/{year}/{month}/{day}/{market}_kline_*.csv"
+        files = glob.glob(pattern)
+        if files:
+            file_path = files[0]
+    
+    if os.path.exists(file_path):
+        try:
+            df = pd.read_csv(file_path, header=None, 
+                             names=['time', 'code', 'open', 'high', 'low', 'close', 'volume', 'amount'])
+            
+            # 过滤代码
+            if code_list:
+                df = df[df['code'].isin(code_list)]
+            
+            if not df.empty:
+                # 处理时间和时区
+                df['time'] = pd.to_datetime(df['time'])
+                if hasattr(df['time'].dt, 'tz') and df['time'].dt.tz is not None:
+                    df['time'] = df['time'].dt.tz_localize(None)
+                # 将limit_amount列的空字符串转换为None（会被存储为NULL）
+                if 'limit_amount' in df.columns:
+                    df['limit_amount'] = df['limit_amount'].replace('', None)
+                return df
+        except Exception as e:
+            logging.error(f"Error loading {file_path}: {str(e)}")
+    
+    return None
+
+
 def loadKline(market='cn_stock', freq='1m', start_date="20200101", end_date="20201231", code_list=[], cache=False, max_workers=8):
     """
     加载K线数据，根据参数智能选择最优加载方式，使用多线程/多进程加速
@@ -330,46 +371,8 @@ def loadKline(market='cn_stock', freq='1m', start_date="20200101", end_date="202
             if dfs:
                 kline_data = pd.concat(dfs, ignore_index=True)
     
-    # 使用 timebased 方式加载 - 使用进程池加速
-    else:
-        def load_day_data(day_tuple, market, freq, code_list, KLINE_DIR):
-            current_dt, _ = day_tuple
-            year = current_dt.strftime("%Y")
-            month = current_dt.strftime("%m")
-            day = current_dt.strftime("%d")
-            
-            # 首先尝试加载merged文件
-            file_path = f"{KLINE_DIR}/timebased/{market}/{freq}/{year}/{month}/{day}/{market}_kline_merged.csv"
-            
-            if not os.path.exists(file_path):
-                # 如果没有merged文件，尝试找到任意一个源文件
-                pattern = f"{KLINE_DIR}/timebased/{market}/{freq}/{year}/{month}/{day}/{market}_kline_*.csv"
-                files = glob.glob(pattern)
-                if files:
-                    file_path = files[0]
-            
-            if os.path.exists(file_path):
-                try:
-                    df = pd.read_csv(file_path, header=None, 
-                                     names=['time', 'code', 'open', 'high', 'low', 'close', 'volume', 'amount'])
-                    
-                    # 过滤代码
-                    if code_list:
-                        df = df[df['code'].isin(code_list)]
-                    
-                    if not df.empty:
-                        # 处理时间和时区
-                        df['time'] = pd.to_datetime(df['time'])
-                        if hasattr(df['time'].dt, 'tz') and df['time'].dt.tz is not None:
-                            df['time'] = df['time'].dt.tz_localize(None)
-                        # 将limit_amount列的空字符串转换为None（会被存储为NULL）
-                        if 'limit_amount' in df.columns:
-                            df['limit_amount'] = df['limit_amount'].replace('', None)
-                        return df
-                except Exception as e:
-                    logging.error(f"Error loading {file_path}: {str(e)}")
-            
-            return None
+    # 如果codebased方式没有加载到数据，或者本来就需要使用timebased方式，则使用timebased方式加载
+    if kline_data is None or kline_data.empty:
         
         # 创建日期范围
         days = []
@@ -381,7 +384,7 @@ def loadKline(market='cn_stock', freq='1m', start_date="20200101", end_date="202
         # 使用进程池处理
         dfs = []
         with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-            load_func = partial(load_day_data, market=market, freq=freq, 
+            load_func = partial(load_day_data_helper, market=market, freq=freq, 
                                code_list=code_list, KLINE_DIR=KLINE_DIR)
             
             # 提交所有任务到进程池
