@@ -7,6 +7,7 @@ from finhack.library.thread import collectThread
 from finhack.collector.tushare.astockbasic import tsAStockBasic
 from finhack.collector.tushare.astockprice import tsAStockPrice
 from finhack.collector.tushare.astockfinance import tsAStockFinance
+from finhack.collector.tushare.astockfinance_vip import tsAStockFinanceVIP
 from finhack.collector.tushare.astockindex import tsAStockIndex
 from finhack.collector.tushare.astockother import tsAStockOther
 from finhack.collector.tushare.astockmarket import tsAStockMarket
@@ -461,31 +462,31 @@ class TushareCollector:
             
             # 获取利润表（VIP接口）
             Log.logger.info("获取利润表（VIP接口）...")
-            tsAStockFinance.income_vip(self.pro, self.db)
+            tsAStockFinanceVIP.income_vip(self.pro, self.db)
             
             # 获取资产负债表（VIP接口）
             Log.logger.info("获取资产负债表（VIP接口）...")
-            tsAStockFinance.balancesheet_vip(self.pro, self.db)
+            tsAStockFinanceVIP.balancesheet_vip(self.pro, self.db)
             
             # 获取现金流量表（VIP接口）
             Log.logger.info("获取现金流量表（VIP接口）...")
-            tsAStockFinance.cashflow_vip(self.pro, self.db)
+            tsAStockFinanceVIP.cashflow_vip(self.pro, self.db)
             
             # 获取业绩预告（VIP接口）
             Log.logger.info("获取业绩预告（VIP接口）...")
-            tsAStockFinance.forecast_vip(self.pro, self.db)
+            tsAStockFinanceVIP.forecast_vip(self.pro, self.db)
             
             # 获取业绩快报（VIP接口）
             Log.logger.info("获取业绩快报（VIP接口）...")
-            tsAStockFinance.express_vip(self.pro, self.db)
+            tsAStockFinanceVIP.express_vip(self.pro, self.db)
             
             # 获取财务指标数据（VIP接口）
             Log.logger.info("获取财务指标数据（VIP接口）...")
-            tsAStockFinance.fina_indicator_vip(self.pro, self.db)
+            tsAStockFinanceVIP.fina_indicator_vip(self.pro, self.db)
             
             # 获取财务审计意见（VIP接口）
             Log.logger.info("获取财务审计意见（VIP接口）...")
-            tsAStockFinance.fina_audit_vip(self.pro, self.db)
+            tsAStockFinanceVIP.fina_audit_vip(self.pro, self.db)
             
             # 保留原有的其他方法（传统方法）
             # 获取主营业务构成

@@ -167,7 +167,7 @@ class tsAStockPrice:
             current_start_str = current_start_date.strftime('%Y%m%d')
             current_end_str = current_end_date.strftime('%Y%m%d')
             
-            Log.logger.info(f"{api}: 获取数据, 日期范围: {current_start_str} 至 {current_end_str}")
+            Log.logger.info(f"{api}: 获取数据, 日期: {current_start_str}")
             
             # 涨跌停接口更换处理
             current_api = api
@@ -192,7 +192,7 @@ class tsAStockPrice:
                         # 输出去重结果
                         removed_count = original_count - len(df)
                         if removed_count > 0:
-                            Log.logger.warning(f"{api}: 在日期范围 {current_start_str} 至 {current_end_str} 的源数据中发现 {removed_count} 条重复记录已被去除")
+                            Log.logger.warning(f"{api}: 在日期 {current_start_str} 的源数据中发现 {removed_count} 条重复记录已被去除")
                     
                     # 预处理数据，确保关键字段为字符串类型 - 修复SettingWithCopyWarning
                     for col in df.columns:
@@ -245,9 +245,9 @@ class tsAStockPrice:
                         # 确保使用正确的API名称保存检查点
                         tsAStockPrice.save_checkpoint(api, table, max_date)
                     
-                    Log.logger.info(f"{api}: 日期 {current_start_str} 至 {current_end_str} 数据写入完成，共 {len(df)} 条")
+                    Log.logger.info(f"{api}: 日期 {current_start_str} 数据写入完成，共 {len(df)} 条")
                 else:
-                    Log.logger.warning(f"{api}: 未获取到任何数据，日期范围: {current_start_str} 至 {current_end_str}")
+                    Log.logger.warning(f"{api}: 未获取到任何数据，日期: {current_start_str}")
                 
             except Exception as e:
                 if "每天最多访问" in str(e) or "每小时最多访问" in str(e):
@@ -265,8 +265,8 @@ class tsAStockPrice:
                     tsAStockPrice.save_checkpoint(api, table, current_start_str)
                     # 继续处理下一批次，不中断整个流程
             
-            # 移动到下一个批次
-            current_start_date = current_end_date + datetime.timedelta(days=1)
+            # 移动到下一个批次（修复日期递增bug）
+            current_start_date = current_start_date + datetime.timedelta(days=1)
             
             # 防止过快请求导致API限制，每批次间隔一些时间
             time.sleep(1)
@@ -336,7 +336,7 @@ class tsAStockPrice:
             if target_date is not None:
                 Log.logger.info(f"获取单日期修复数据, 日期: {current_start_str}")
             else:
-                Log.logger.info(f"获取日线数据, 日期范围: {current_start_str} 至 {current_end_str}")
+                Log.logger.info(f"获取日线数据, 日期: {current_start_str}")
             
             try:
                 # 统一使用trade_date参数获取单日数据，避免日期范围导致的重复数据问题
@@ -353,7 +353,7 @@ class tsAStockPrice:
                     # 输出去重结果
                     removed_count = original_count - len(df)
                     if removed_count > 0:
-                        Log.logger.warning(f"在日期范围 {current_start_str} 至 {current_end_str} 的源数据中发现 {removed_count} 条重复记录已被去除")
+                        Log.logger.warning(f"在日期 {current_start_str} 的源数据中发现 {removed_count} 条重复记录已被去除")
                     
                     # 预处理数据，确保股票代码等字段为字符串类型 - 修复SettingWithCopyWarning
                     for col in df.columns:
@@ -391,7 +391,7 @@ class tsAStockPrice:
                         else:
                             Log.logger.warning(f"跳过写入不完整的数据：{current_start_str}")
                             # ⭐ 修复：在continue前先更新日期，避免无限循环
-                            current_start_date = current_end_date + datetime.timedelta(days=1)
+                            current_start_date = current_start_date + datetime.timedelta(days=1)
                             continue
                     else:
                         Log.logger.info(f"✅ 数据完整性验证通过，日期 {current_start_str}，准备写入 {len(df)} 条记录")
@@ -508,14 +508,14 @@ class tsAStockPrice:
                         if target_date is not None:
                             return False
                         # ⭐ 修复：在continue前先更新日期，避免无限循环
-                        current_start_date = current_end_date + datetime.timedelta(days=1)
+                        current_start_date = current_start_date + datetime.timedelta(days=1)
                         continue
                     else:
                         Log.logger.error(f"❌ 数据写入完全失败：日期 {current_start_str}，预期 {expected_count} 条，实际 {actual_count} 条")
                         if target_date is not None:
                             return False
                         # ⭐ 修复：在continue前先更新日期，避免无限循环  
-                        current_start_date = current_end_date + datetime.timedelta(days=1)
+                        current_start_date = current_start_date + datetime.timedelta(days=1)
                         continue
                     
                     # ⭐ 改进：只有在数据完整且写入成功后才保存检查点
@@ -526,12 +526,12 @@ class tsAStockPrice:
                     if target_date is not None:
                         Log.logger.info(f"单日期修复数据写入完成，日期: {current_start_str}，共 {len(df)} 条")
                     else:
-                        Log.logger.info(f"日期 {current_start_str} 至 {current_end_str} 数据写入完成，共 {len(df)} 条")
+                        Log.logger.info(f"日期 {current_start_str} 数据写入完成，共 {len(df)} 条")
                 else:
                     if target_date is not None:
                         Log.logger.warning(f"未获取到任何日线数据，日期: {current_start_str}")
                     else:
-                        Log.logger.warning(f"未获取到任何日线数据，日期范围: {current_start_str} 至 {current_end_str}")
+                        Log.logger.warning(f"未获取到任何日线数据，日期: {current_start_str}")
             
             except Exception as e:
                 if "每天最多访问" in str(e) or "每小时最多访问" in str(e):
@@ -554,8 +554,8 @@ class tsAStockPrice:
                         return False
                     # 继续处理下一批次，不中断整个流程
             
-            # 移动到下一个批次
-            current_start_date = current_end_date + datetime.timedelta(days=1)
+            # 移动到下一个日期 - 修复off-by-one错误
+            current_start_date += datetime.timedelta(days=1)
             
             # 防止过快请求导致API限制，每批次间隔一些时间
             time.sleep(1)
@@ -677,8 +677,8 @@ class tsAStockPrice:
                     tsAStockPrice.save_checkpoint("weekly", table, current_start_str)
                     # 继续处理下一批次，不中断整个流程
             
-            # 移动到下一个批次
-            current_start_date = current_end_date + datetime.timedelta(days=1)
+            # 移动到下一个日期 - 修复off-by-one错误
+            current_start_date += datetime.timedelta(days=1)
             
             # 防止过快请求导致API限制，每批次间隔一些时间
             time.sleep(1)
@@ -795,8 +795,8 @@ class tsAStockPrice:
                     tsAStockPrice.save_checkpoint("monthly", table, current_start_str)
                     # 继续处理下一批次，不中断整个流程
             
-            # 移动到下一个批次
-            current_start_date = current_end_date + datetime.timedelta(days=1)
+            # 移动到下一个日期 - 修复off-by-one错误
+            current_start_date += datetime.timedelta(days=1)
             
             # 防止过快请求导致API限制，每批次间隔一些时间
             time.sleep(1)
