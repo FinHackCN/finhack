@@ -279,6 +279,9 @@ class DataInterface:
             
         Returns:
             pd.DataFrame: K线数据，MultiIndex(time, symbol)
+            
+        Note:
+            当指定时间范围内没有数据时，会自动扩展查找范围以获取最近的数据
         """
         # 验证市场和频率支持
         if not MarketConfig.is_freq_supported(market, freq):
@@ -327,6 +330,36 @@ class DataInterface:
             except Exception as e:
                 logger.warning(f"获取{code}的K线数据失败: {e}")
                 continue
+        
+        # 如果没有数据，尝试扩展查找范围
+        if not all_data:
+            logger.debug(f"在{start_date}~{end_date}范围内未找到数据，尝试扩展查找范围")
+            
+            # 扩大时间范围，向前和向后各扩展一年
+            extended_start_dt = pd.to_datetime(start_date) - timedelta(days=365)
+            extended_end_dt = pd.to_datetime(end_date) + timedelta(days=365)
+            extended_start_date = extended_start_dt.strftime('%Y-%m-%d')
+            extended_end_date = extended_end_dt.strftime('%Y-%m-%d')
+            
+            # 并行获取每个股票的数据
+            futures = []
+            for code in codes:
+                future = self.thread_pool.submit(
+                    self._load_single_kline, market, code, freq, extended_start_date, extended_end_date
+                )
+                futures.append((code, future))
+            
+            # 收集结果
+            for code, future in futures:
+                try:
+                    klines = future.result()
+                    if not klines.empty:
+                        klines['symbol'] = code
+                        all_data.append(klines)
+                        logger.debug(f"通过扩展范围找到{code}的数据: {len(klines)}条记录")
+                except Exception as e:
+                    logger.warning(f"扩展获取{code}的K线数据失败: {e}")
+                    continue
         
         # 合并数据
         if all_data:
@@ -400,17 +433,116 @@ class DataInterface:
                     logger.warning(f"读取{symbol}的{year}年codebased数据失败: {e}")
                     continue
         
-        # 如果codebased没有找到数据，尝试timebased格式或loadKline
-        if not codebased_found:
-            logger.debug(f"未找到{symbol}的codebased数据，尝试timebased/loadKline格式")
+        # 为了补齐codebased可能缺失的日期，始终尝试补充timebased/loadKline数据
+        try:
+            from finhack.library.kline import loadKline
+            
+            # 处理可能包含时间的日期字符串
+            try:
+                # 尝试解析为datetime，然后格式化为YYYYMMDD
+                start_dt = pd.to_datetime(start_date)
+                start_date_str = start_dt.strftime('%Y%m%d')
+            except:
+                # 如果解析失败，尝试直接转换（处理YYYYMMDD格式）
+                start_date_str = start_date.replace('-', '').replace(' ', '').replace(':', '')
+            
+            try:
+                # 尝试解析为datetime，然后格式化为YYYYMMDD
+                end_dt = pd.to_datetime(end_date)
+                end_date_str = end_dt.strftime('%Y%m%d')
+            except:
+                # 如果解析失败，尝试直接转换（处理YYYYMMDD格式）
+                end_date_str = end_date.replace('-', '').replace(' ', '').replace(':', '')
+            
+            kline_data = loadKline(
+                market=market,
+                freq=freq,
+                start_date=start_date_str,
+                end_date=end_date_str,
+                code_list=[symbol],
+                cache=False
+            )
+            
+            if not kline_data.empty and symbol in kline_data['code'].values:
+                symbol_data = kline_data[kline_data['code'] == symbol].copy()
+                if not symbol_data.empty:
+                    # 重新格式化时间列
+                    symbol_data['time'] = pd.to_datetime(symbol_data['time'], utc=False, errors='coerce')
+                    if hasattr(symbol_data['time'].dt, 'tz') and symbol_data['time'].dt.tz is not None:
+                        symbol_data['time'] = symbol_data['time'].dt.tz_localize(None)
+                    
+                    # 确保列名一致
+                    symbol_data = symbol_data[['time', 'open', 'high', 'low', 'close', 'volume', 'amount']].copy()
+                    all_data.append(symbol_data)
+                    logger.debug(f"通过loadKline补充{symbol}数据: {len(symbol_data)}条记录")
+        except Exception as e:
+            logger.warning(f"使用loadKline加载/补充{symbol}数据失败: {e}")
+        
+        # 如果还是没有数据，尝试获取更广泛范围的数据
+        if not all_data:
+            # 扩大时间范围，向前和向后各扩展一年
+            extended_start_dt = pd.to_datetime(start_date) - timedelta(days=365)
+            extended_end_dt = pd.to_datetime(end_date) + timedelta(days=365)
+            extended_start_date = extended_start_dt.strftime('%Y-%m-%d')
+            extended_end_date = extended_end_dt.strftime('%Y-%m-%d')
+            
+            # 获取扩展年份范围
+            extended_start_year = extended_start_dt.year
+            extended_end_year = extended_end_dt.year
+            
+            # 再次尝试codebased格式
+            for year in range(extended_start_year, extended_end_year + 1):
+                year_dir = os.path.join(codebased_dir, str(year))
+                symbol_file = os.path.join(year_dir, f"{symbol}.csv")
+                
+                if os.path.exists(symbol_file):
+                    try:
+                        # 读取CSV文件（无header）
+                        year_data = pd.read_csv(symbol_file, header=None, 
+                                              names=['time', 'code', 'open', 'high', 'low', 'close', 'volume', 'amount'])
+                        
+                        # 转换时间格式，统一处理时区
+                        year_data['time'] = pd.to_datetime(year_data['time'], utc=False)
+                        if hasattr(year_data['time'].dt, 'tz') and year_data['time'].dt.tz is not None:
+                            year_data['time'] = year_data['time'].dt.tz_localize(None)
+                
+                        # 过滤日期范围
+                        year_data = year_data[(year_data['time'] >= extended_start_dt) & (year_data['time'] <= extended_end_dt)]
+                        
+                        if not year_data.empty:
+                            all_data.append(year_data)
+                            logger.debug(f"通过扩展范围找到{symbol}的{year}年数据: {len(year_data)}条记录")
+                            
+                    except Exception as e:
+                        logger.warning(f"读取{symbol}的{year}年扩展codebased数据失败: {e}")
+                        continue
+            
+            # 再次尝试loadKline
             try:
                 from finhack.library.kline import loadKline
-                # 使用现有的loadKline函数加载数据
+                
+                # 处理可能包含时间的日期字符串
+                try:
+                    # 尝试解析为datetime，然后格式化为YYYYMMDD
+                    start_dt = pd.to_datetime(extended_start_date)
+                    start_date_str = start_dt.strftime('%Y%m%d')
+                except:
+                    # 如果解析失败，尝试直接转换（处理YYYYMMDD格式）
+                    start_date_str = extended_start_date.replace('-', '').replace(' ', '').replace(':', '')
+                
+                try:
+                    # 尝试解析为datetime，然后格式化为YYYYMMDD
+                    end_dt = pd.to_datetime(extended_end_date)
+                    end_date_str = end_dt.strftime('%Y%m%d')
+                except:
+                    # 如果解析失败，尝试直接转换（处理YYYYMMDD格式）
+                    end_date_str = extended_end_date.replace('-', '').replace(' ', '').replace(':', '')
+                
                 kline_data = loadKline(
                     market=market,
                     freq=freq,
-                    start_date=start_date.replace('-', ''),
-                    end_date=end_date.replace('-', ''),
+                    start_date=start_date_str,
+                    end_date=end_date_str,
                     code_list=[symbol],
                     cache=False
                 )
@@ -426,10 +558,9 @@ class DataInterface:
                         # 确保列名一致
                         symbol_data = symbol_data[['time', 'open', 'high', 'low', 'close', 'volume', 'amount']].copy()
                         all_data.append(symbol_data)
-                        logger.debug(f"通过loadKline成功加载{symbol}数据: {len(symbol_data)}条记录")
-                        
+                        logger.debug(f"通过扩展范围loadKline补充{symbol}数据: {len(symbol_data)}条记录")
             except Exception as e:
-                logger.warning(f"使用loadKline加载{symbol}数据失败: {e}")
+                logger.warning(f"使用扩展范围loadKline加载/补充{symbol}数据失败: {e}")
         
         # 如果还是没有数据，记录调试信息
         if not all_data:
@@ -439,8 +570,8 @@ class DataInterface:
         if all_data:
             result = pd.concat(all_data, ignore_index=True)
             result = result.sort_values('time').reset_index(drop=True)
-            # 去除重复数据
-            result = result.drop_duplicates(subset=['time'], keep='last')
+            # 去除重复数据；优先保留codebased（codebased先加入，因此保留first）
+            result = result.drop_duplicates(subset=['time'], keep='first')
             # 确保列名正确
             expected_columns = ['time', 'open', 'high', 'low', 'close', 'volume', 'amount']
             result = result.reindex(columns=expected_columns)
@@ -547,6 +678,109 @@ class DataInterface:
                     result_data.append(row_data)
                 else:
                     logger.debug(f"{code}: 在指定时间{time}之前未找到历史数据")
+                    # 尝试扩展查找范围
+                    extended_end_date = (time + timedelta(days=lookback_days * 2)).strftime('%Y-%m-%d')
+                    extended_start_date = (time - timedelta(days=lookback_days * 2)).strftime('%Y-%m-%d')
+                    
+                    try:
+                        extended_klines = self._load_single_kline(market, code, freq, extended_start_date, extended_end_date)
+                        
+                        if not extended_klines.empty:
+                            # 查找指定时间点之后的数据（使用大于等于的最近时间）
+                            klines_after = extended_klines[extended_klines['time'] > time]
+                            
+                            if not klines_after.empty:
+                                next_data = klines_after.iloc[0]
+                                logger.debug(f"{code}: 查询时间{time}, 使用下一个时间点{next_data['time']}")
+                                
+                                row_data = {'symbol': code}
+                                for field in fields:
+                                    if field in next_data:
+                                        row_data[field] = next_data[field]
+                                    else:
+                                        row_data[field] = np.nan
+                                
+                                result_data.append(row_data)
+                            else:
+                                # 如果还是没有数据，使用整个数据集的最后一行
+                                last_data = extended_klines.iloc[-1]
+                                logger.debug(f"{code}: 查询时间{time}, 使用数据集最后一行{last_data['time']}")
+                                
+                                row_data = {'symbol': code}
+                                for field in fields:
+                                    if field in last_data:
+                                        row_data[field] = last_data[field]
+                                    else:
+                                        row_data[field] = np.nan
+                                
+                                result_data.append(row_data)
+                    except Exception as e:
+                        logger.warning(f"扩展查找{code}行情数据失败: {e}")
+                        
+                        # 最后尝试：使用loadKline获取更广泛的数据
+                        try:
+                            from finhack.library.kline import loadKline
+                            # 对于分钟数据，尝试获取更广范围
+                            if freq == '1m':
+                                # 扩大时间范围
+                                wide_start_dt = pd.to_datetime(start_date) - timedelta(days=lookback_days * 3)
+                                wide_end_dt = pd.to_datetime(end_date) + timedelta(days=lookback_days * 3)
+                                wide_start = wide_start_dt.strftime('%Y%m%d')
+                                wide_end = wide_end_dt.strftime('%Y%m%d')
+                            else:
+                                # 处理可能包含时间的日期字符串
+                                try:
+                                    wide_start_dt = pd.to_datetime(start_date)
+                                    wide_start = wide_start_dt.strftime('%Y%m%d')
+                                except:
+                                    wide_start = start_date.replace('-', '').replace(' ', '').replace(':', '')
+                                
+                                try:
+                                    wide_end_dt = pd.to_datetime(end_date)
+                                    wide_end = wide_end_dt.strftime('%Y%m%d')
+                                except:
+                                    wide_end = end_date.replace('-', '').replace(' ', '').replace(':', '')
+                                
+                            kline_data = loadKline(
+                                market=market,
+                                freq=freq,
+                                start_date=wide_start,
+                                end_date=wide_end,
+                                code_list=[code],
+                                cache=False
+                            )
+                            
+                            if not kline_data.empty and code in kline_data['code'].values:
+                                symbol_data = kline_data[kline_data['code'] == code].copy()
+                                if not symbol_data.empty:
+                                    # 重新格式化时间列
+                                    symbol_data['time'] = pd.to_datetime(symbol_data['time'], utc=False, errors='coerce')
+                                    if hasattr(symbol_data['time'].dt, 'tz') and symbol_data['time'].dt.tz is not None:
+                                        symbol_data['time'] = symbol_data['time'].dt.tz_localize(None)
+                                    
+                                    # 查找最近的时间点
+                                    symbol_data = symbol_data.sort_values('time')
+                                    
+                                    # 先尝试查找小于等于指定时间的最近数据
+                                    before_data = symbol_data[symbol_data['time'] <= time]
+                                    if not before_data.empty:
+                                        latest_data = before_data.iloc[-1]
+                                        logger.debug(f"{code}: 通过loadKline找到数据，查询时间{time}, 使用时间{latest_data['time']}")
+                                    else:
+                                        # 如果没有，使用最早的数据
+                                        latest_data = symbol_data.iloc[0]
+                                        logger.debug(f"{code}: 通过loadKline找到数据，查询时间{time}, 使用最早时间{latest_data['time']}")
+                                    
+                                    row_data = {'symbol': code}
+                                    for field in fields:
+                                        if field in latest_data:
+                                            row_data[field] = latest_data[field]
+                                        else:
+                                            row_data[field] = np.nan
+                                    
+                                    result_data.append(row_data)
+                        except Exception as e2:
+                            logger.warning(f"使用loadKline查找{code}行情数据也失败: {e2}")
                     
             except Exception as e:
                 logger.warning(f"获取{code}行情数据失败: {e}")
@@ -862,12 +1096,36 @@ class DataInterface:
                 adj_factors = adj_factors[adj_factors['code'].isin(codes)]
             
             if start_date:
-                start_date_int = int(start_date.replace('-', ''))
-                adj_factors = adj_factors[adj_factors['date'] >= start_date_int]
+                # 处理可能包含时间的日期字符串
+                try:
+                    # 尝试解析为datetime，然后格式化为YYYYMMDD
+                    start_dt = pd.to_datetime(start_date)
+                    start_date_int = int(start_dt.strftime('%Y%m%d'))
+                    adj_factors = adj_factors[adj_factors['date'] >= start_date_int]
+                except Exception as e:
+                    logger.warning(f"解析开始日期失败: {start_date}, 错误: {e}")
+                    # 尝试直接转换为整数（处理YYYYMMDD格式）
+                    try:
+                        start_date_int = int(start_date.replace('-', '').replace(' ', '').replace(':', ''))
+                        adj_factors = adj_factors[adj_factors['date'] >= start_date_int]
+                    except:
+                        logger.warning(f"无法解析开始日期: {start_date}")
             
             if end_date:
-                end_date_int = int(end_date.replace('-', ''))
-                adj_factors = adj_factors[adj_factors['date'] <= end_date_int]
+                # 处理可能包含时间的日期字符串
+                try:
+                    # 尝试解析为datetime，然后格式化为YYYYMMDD
+                    end_dt = pd.to_datetime(end_date)
+                    end_date_int = int(end_dt.strftime('%Y%m%d'))
+                    adj_factors = adj_factors[adj_factors['date'] <= end_date_int]
+                except Exception as e:
+                    logger.warning(f"解析结束日期失败: {end_date}, 错误: {e}")
+                    # 尝试直接转换为整数（处理YYYYMMDD格式）
+                    try:
+                        end_date_int = int(end_date.replace('-', '').replace(' ', '').replace(':', ''))
+                        adj_factors = adj_factors[adj_factors['date'] <= end_date_int]
+                    except:
+                        logger.warning(f"无法解析结束日期: {end_date}")
             
             if use_cache:
                 self.reference_cache.put(cache_key, adj_factors)

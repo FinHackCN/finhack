@@ -76,14 +76,27 @@ class tsAStockFinanceVIP:
             return False
     
     @staticmethod
-    def get_periods_to_update(table_name, db='default'):
+    def get_periods_to_update(table_name, db='default', batch_size=20):
         """
         获取需要更新的期间列表
         逻辑：获取所有季度期间，排除已存在的期间，按时间顺序返回
+        
+        Args:
+            table_name: 表名
+            db: 数据库名称
+            batch_size: 每批处理的期间数量，避免API限制
         """
         try:
             # 获取所有可能的期间
             all_periods = tsAStockFinanceVIP.get_next_quarter_periods()
+            
+            # 检查表是否存在
+            from finhack.library.db import DB
+            adapter = DB.get_adapter(db)
+            if not adapter.table_exists(table_name):
+                # 表不存在，返回前batch_size个期间开始获取
+                Log.logger.info(f"表 {table_name} 不存在，将从最早期间开始获取数据")
+                return all_periods[:batch_size] if all_periods else []
             
             # 获取表中已存在的期间
             sql = f"select distinct end_date from {table_name} order by end_date"
@@ -96,74 +109,125 @@ class tsAStockFinanceVIP:
             # 找出需要更新的期间（不在现有期间中的）
             periods_to_update = [p for p in all_periods if p not in existing_periods]
             
-            # 只返回下一个需要更新的期间
-            if periods_to_update:
-                return periods_to_update[:1]  # 只返回第一个
-            else:
+            if not periods_to_update:
+                Log.logger.info(f"表 {table_name} 的所有期间数据都已存在，无需更新")
                 return []
+            
+            # 返回需要更新的期间，但限制每次处理的数量
+            periods_count = len(periods_to_update)
+            batch_periods = periods_to_update[:batch_size]
+            
+            Log.logger.info(f"表 {table_name} 共有 {periods_count} 个期间需要更新，本批次处理 {len(batch_periods)} 个期间")
+            Log.logger.info(f"本批次期间范围: {batch_periods[0]} - {batch_periods[-1]}")
+            
+            return batch_periods
                 
         except Exception as e:
             Log.logger.error(f"获取需要更新的期间列表失败: {str(e)}")
             # 如果表不存在或查询失败，返回最早的期间
-            return [tsAStockFinanceVIP.get_next_quarter_periods()[0]]
+            all_periods = tsAStockFinanceVIP.get_next_quarter_periods()
+            return [all_periods[0]] if all_periods else []
     
     @staticmethod
-    def collect_vip_data(pro, api_name, table_name, fields, db='default'):
+    def collect_vip_data(pro, api_name, table_name, fields, db='default', max_retries=3):
         """
         使用VIP接口收集财务数据的通用方法
+        支持批量获取和自动重试机制
+        
+        Args:
+            pro: tushare pro对象
+            api_name: API名称
+            table_name: 表名
+            fields: 字段列表
+            db: 数据库名称
+            max_retries: 最大重试次数
         """
         try:
+            Log.logger.info(f"{api_name} - 开始收集数据到表 {table_name}")
+            
             # 获取最大end_date
             max_end_date = tsAStockFinanceVIP.get_max_end_date_from_table(table_name, db)
             
-            # 如果存在最大end_date，先删除该期间的数据
+            # 如果存在最大end_date，先删除该期间的数据（确保数据完整性）
             if max_end_date:
                 Log.logger.info(f"{api_name} - 发现最大end_date: {max_end_date}")
                 tsAStockFinanceVIP.delete_max_end_date_records(table_name, max_end_date, db)
             
-            # 获取需要更新的期间
-            periods_to_update = tsAStockFinanceVIP.get_periods_to_update(table_name, db)
+            # 循环获取数据直到所有期间都获取完毕
+            retry_count = 0
+            while retry_count <= max_retries:
+                # 获取需要更新的期间
+                periods_to_update = tsAStockFinanceVIP.get_periods_to_update(table_name, db, batch_size=20)
+                
+                if not periods_to_update:
+                    Log.logger.info(f"{api_name} - 所有期间数据已获取完毕")
+                    break
+                
+                Log.logger.info(f"{api_name} - 开始获取期间: {periods_to_update}")
+                
+                # 获取API函数
+                api_func = getattr(pro, f"{api_name}_vip")
+                
+                success_count = 0
+                failed_periods = []
+                
+                for i, period in enumerate(periods_to_update, 1):
+                    try:
+                        Log.logger.info(f"{api_name} - 正在获取期间 {period} 的数据 ({i}/{len(periods_to_update)})")
+                        
+                        # 调用VIP接口
+                        if fields:
+                            df = api_func(period=period, fields=fields)
+                        else:
+                            df = api_func(period=period)
+                        
+                        if df is not None and not df.empty:
+                            # 保存数据
+                            DB.safe_to_sql(df, table_name, db, index=False, if_exists='append', chunksize=5000)
+                            Log.logger.info(f"{api_name} - 成功获取并保存期间 {period} 的数据，共 {len(df)} 条记录")
+                            success_count += 1
+                        else:
+                            Log.logger.warning(f"{api_name} - 期间 {period} 没有返回数据")
+                            success_count += 1  # 空数据也算成功，避免无限重试
+                        
+                        # 避免请求过于频繁
+                        time.sleep(0.5)
+                        
+                    except Exception as e:
+                        error_str = str(e)
+                        if "每天最多访问" in error_str or "每小时最多访问" in error_str:
+                            Log.logger.warning(f"{api_name} - 触发每日/每小时访问限制: {error_str}")
+                            Log.logger.info(f"{api_name} - 本次已成功获取 {success_count} 个期间的数据，请稍后重新运行继续获取剩余数据")
+                            return
+                        elif "最多访问" in error_str:
+                            Log.logger.warning(f"{api_name} - 触发访问限制，等待重试: {error_str}")
+                            time.sleep(30)  # 增加等待时间
+                            failed_periods.append(period)
+                            continue
+                        else:
+                            Log.logger.error(f"{api_name} - 获取期间 {period} 数据失败: {error_str}")
+                            failed_periods.append(period)
+                            continue
+                
+                # 如果有失败的期间，记录并继续下次批处理
+                if failed_periods:
+                    Log.logger.warning(f"{api_name} - 本批次有 {len(failed_periods)} 个期间获取失败，将在下次运行时重试")
+                
+                Log.logger.info(f"{api_name} - 本批次处理完成，成功获取 {success_count} 个期间的数据")
+                
+                # 如果本批次处理完成且没有触发访问限制，检查是否还有更多数据需要获取
+                remaining_periods = tsAStockFinanceVIP.get_periods_to_update(table_name, db, batch_size=1)
+                if not remaining_periods:
+                    Log.logger.info(f"{api_name} - 所有历史数据获取完毕！")
+                    break
+                else:
+                    Log.logger.info(f"{api_name} - 还有更多数据需要获取，继续下一批次...")
+                    time.sleep(2)  # 批次间稍作等待
+                
+                retry_count += 1
             
-            if not periods_to_update:
-                Log.logger.info(f"{api_name} - 没有需要更新的期间")
-                return
-            
-            Log.logger.info(f"{api_name} - 开始获取期间: {periods_to_update}")
-            
-            # 获取API函数
-            api_func = getattr(pro, f"{api_name}_vip")
-            
-            for period in periods_to_update:
-                try:
-                    Log.logger.info(f"{api_name} - 开始获取期间 {period} 的数据")
-                    
-                    # 调用VIP接口
-                    if fields:
-                        df = api_func(period=period, fields=fields)
-                    else:
-                        df = api_func(period=period)
-                    
-                    if df is not None and not df.empty:
-                        # 保存数据
-                        DB.safe_to_sql(df, table_name, db, index=False, if_exists='append', chunksize=5000)
-                        Log.logger.info(f"{api_name} - 成功获取并保存期间 {period} 的数据，共 {len(df)} 条记录")
-                    else:
-                        Log.logger.warning(f"{api_name} - 期间 {period} 没有返回数据")
-                    
-                    # 避免请求过于频繁
-                    time.sleep(0.5)
-                    
-                except Exception as e:
-                    if "每天最多访问" in str(e) or "每小时最多访问" in str(e):
-                        Log.logger.warning(f"{api_name} - 触发每日/每小时访问限制: {str(e)}")
-                        break
-                    elif "最多访问" in str(e):
-                        Log.logger.warning(f"{api_name} - 触发访问限制，等待重试: {str(e)}")
-                        time.sleep(15)
-                        continue
-                    else:
-                        Log.logger.error(f"{api_name} - 获取期间 {period} 数据失败: {str(e)}")
-                        continue
+            if retry_count > max_retries:
+                Log.logger.warning(f"{api_name} - 达到最大重试次数，请稍后重新运行继续获取剩余数据")
             
         except Exception as e:
             Log.logger.error(f"{api_name} - 收集数据失败: {str(e)}")
