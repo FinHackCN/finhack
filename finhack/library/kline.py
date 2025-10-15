@@ -212,6 +212,7 @@ def loadKline(market='cn_stock', freq='1m', start_date="20200101", end_date="202
     cache: 是否使用缓存
     max_workers: 最大工作线程/进程数
     """
+    
     # 定义K线目录
     KLINE_DIR = f"{DATA_DIR}/market/kline"
     

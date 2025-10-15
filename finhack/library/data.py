@@ -210,6 +210,10 @@ class DataInterface:
         # 线程池
         self.thread_pool = ThreadPoolExecutor(max_workers=12)  # 增加线程数
         
+        # 预加载复权因子数据
+        self.adj_factors_cache = {}  # 市场 -> DataFrame 的映射
+        self._preload_adj_factors()
+        
         # 启动缓存清理任务
         self._start_cache_cleanup()
         
@@ -227,6 +231,22 @@ class DataInterface:
         
         # 元数据缓存（股票列表等）
         self.metadata_cache = LRUCache(cache_size // 10, cache_ttl * 10)
+    
+    def _preload_adj_factors(self):
+        """预加载复权因子数据"""
+        try:
+            # 预加载支持复权的市场数据
+            for market in ['cn_stock', 'cn_fund']:  # 目前只有这两个市场支持复权
+                adj_file = os.path.join(self.reference_data_dir, market, f"{market}_adj.csv")
+                if os.path.exists(adj_file):
+                    logger.debug(f"预加载 {market} 复权因子数据...")
+                    adj_factors = pd.read_csv(adj_file)
+                    self.adj_factors_cache[market] = adj_factors
+                    logger.debug(f"预加载 {market} 复权因子完成: {len(adj_factors)} 条记录")
+                else:
+                    logger.debug(f"复权因子文件不存在: {adj_file}")
+        except Exception as e:
+            logger.warning(f"预加载复权因子数据失败: {e}")
     
     def _start_cache_cleanup(self):
         """启动缓存清理任务"""
@@ -460,7 +480,7 @@ class DataInterface:
                 start_date=start_date_str,
                 end_date=end_date_str,
                 code_list=[symbol],
-                cache=False
+                cache=True
             )
             
             if not kline_data.empty and symbol in kline_data['code'].values:
@@ -544,7 +564,7 @@ class DataInterface:
                     start_date=start_date_str,
                     end_date=end_date_str,
                     code_list=[symbol],
-                    cache=False
+                    cache=True
                 )
                 
                 if not kline_data.empty and symbol in kline_data['code'].values:
@@ -747,7 +767,7 @@ class DataInterface:
                                 start_date=wide_start,
                                 end_date=wide_end,
                                 code_list=[code],
-                                cache=False
+                                cache=True
                             )
                             
                             if not kline_data.empty and code in kline_data['code'].values:
@@ -1086,30 +1106,37 @@ class DataInterface:
             if cached_result is not None:
                 return cached_result
         
-        adj_file = os.path.join(self.reference_data_dir, market, f"{market}_adj.csv")
+        # 使用预加载的复权因子数据
+        if market in self.adj_factors_cache:
+            adj_factors = self.adj_factors_cache[market].copy()
+        else:
+            # 如果预加载失败，则回退到文件读取
+            adj_file = os.path.join(self.reference_data_dir, market, f"{market}_adj.csv")
+            if os.path.exists(adj_file):
+                adj_factors = pd.read_csv(adj_file)
+            else:
+                logger.debug(f"复权因子文件不存在: {adj_file}")
+                return pd.DataFrame()
         
-        if os.path.exists(adj_file):
-            adj_factors = pd.read_csv(adj_file)
-            
-            # 过滤条件
-            if codes:
-                adj_factors = adj_factors[adj_factors['code'].isin(codes)]
-            
-            if start_date:
-                # 处理可能包含时间的日期字符串
+        # 过滤条件
+        if codes:
+            adj_factors = adj_factors[adj_factors['code'].isin(codes)]
+        
+        if start_date:
+            # 处理可能包含时间的日期字符串
+            try:
+                # 尝试解析为datetime，然后格式化为YYYYMMDD
+                start_dt = pd.to_datetime(start_date)
+                start_date_int = int(start_dt.strftime('%Y%m%d'))
+                adj_factors = adj_factors[adj_factors['date'] >= start_date_int]
+            except Exception as e:
+                logger.warning(f"解析开始日期失败: {start_date}, 错误: {e}")
+                # 尝试直接转换为整数（处理YYYYMMDD格式）
                 try:
-                    # 尝试解析为datetime，然后格式化为YYYYMMDD
-                    start_dt = pd.to_datetime(start_date)
-                    start_date_int = int(start_dt.strftime('%Y%m%d'))
+                    start_date_int = int(start_date.replace('-', '').replace(' ', '').replace(':', ''))
                     adj_factors = adj_factors[adj_factors['date'] >= start_date_int]
-                except Exception as e:
-                    logger.warning(f"解析开始日期失败: {start_date}, 错误: {e}")
-                    # 尝试直接转换为整数（处理YYYYMMDD格式）
-                    try:
-                        start_date_int = int(start_date.replace('-', '').replace(' ', '').replace(':', ''))
-                        adj_factors = adj_factors[adj_factors['date'] >= start_date_int]
-                    except:
-                        logger.warning(f"无法解析开始日期: {start_date}")
+                except:
+                    logger.warning(f"无法解析开始日期: {start_date}")
             
             if end_date:
                 # 处理可能包含时间的日期字符串
@@ -1127,13 +1154,10 @@ class DataInterface:
                     except:
                         logger.warning(f"无法解析结束日期: {end_date}")
             
-            if use_cache:
-                self.reference_cache.put(cache_key, adj_factors)
-            
-            return adj_factors
-        else:
-            logger.warning(f"复权因子文件不存在: {adj_file}")
-            return pd.DataFrame()
+        if use_cache:
+            self.reference_cache.put(cache_key, adj_factors)
+        
+        return adj_factors
     
     def get_trading_calendar(self, market: str = 'cn_stock', 
                            start_date: Union[str, date] = None,
