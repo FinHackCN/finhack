@@ -277,22 +277,79 @@ class BacktestTrader:
         with open(strategy_path, 'r', encoding='utf-8') as f:
             strategy_code = f.read()
         
-        self.strategy = strategy_module
+        # 实例化策略类 - 查找策略模块中的策略类并实例化
+        strategy_instance = None
+        Log.logger.info(f"开始查找策略类，模块中的对象: {[n for n in dir(strategy_module) if not n.startswith('_')]}")
+        print(f"[Trader] 模块中的类: {[n for n in dir(strategy_module) if not n.startswith('_')]}", flush=True)
+        
+        for name in dir(strategy_module):
+            obj = getattr(strategy_module, name)
+            # 查找继承自StrategyBase的类
+            is_type = isinstance(obj, type)
+            ends_with_strategy = name.endswith('Strategy')
+            is_not_base = name != 'StrategyBase'
+            
+            print(f"[Trader] 检查 {name}: is_type={is_type}, ends_with_strategy={ends_with_strategy}, is_not_base={is_not_base}", flush=True)
+            
+            if is_type and ends_with_strategy and is_not_base:
+                try:
+                    # 尝试实例化策略类，传入配置
+                    config = self.context.get('params', {})
+                    Log.logger.info(f"尝试实例化策略类: {name}, config={config}")
+                    print(f"[Trader] 尝试实例化 {name}", flush=True)
+                    strategy_instance = obj(config)
+                    Log.logger.info(f"成功实例化策略类: {name}")
+                    print(f"[Trader] 成功实例化 {name}", flush=True)
+                    break
+                except Exception as e:
+                    Log.logger.warning(f"实例化策略类 {name} 失败: {e}")
+                    print(f"[Trader] 实例化 {name} 失败: {e}", flush=True)
+                    import traceback
+                    traceback.print_exc()
+        
+        if strategy_instance is None:
+            # 如果没有找到策略类，回退到使用模块对象
+            Log.logger.warning("未找到策略类，使用模块对象")
+            strategy_instance = strategy_module
+        
+        self.strategy = strategy_instance
         self.context['trade'] = {'strategy_code': strategy_code}
         
         Log.logger.info(f"策略加载完成: {strategy_path}")
         
     def init_strategy(self):
         """初始化策略"""
+        Log.logger.info("开始初始化策略...")
+        print(f"[Trader] 开始初始化策略, strategy类型: {type(self.strategy)}", flush=True)
+        
         # 绑定API函数到策略模块
         self.bind_strategy_api()
+        Log.logger.info("API绑定完成")
         
         # 调用策略的initialize函数
         if hasattr(self.strategy, 'initialize'):
-            self.strategy.initialize(self.context)
-            Log.logger.info("策略初始化完成")
+            Log.logger.info("调用strategy.initialize()...")
+            print(f"[Trader] 调用strategy.initialize()", flush=True)
+            try:
+                self.strategy.initialize(self.context)
+                Log.logger.info("策略初始化完成")
+                print(f"[Trader] 策略初始化完成", flush=True)
+            except Exception as e:
+                Log.logger.error(f"策略初始化失败: {e}")
+                print(f"[Trader] 策略初始化失败: {e}", flush=True)
+                import traceback
+                traceback.print_exc()
+                raise
         else:
             Log.logger.warning("策略没有initialize函数")
+            print(f"[Trader] 策略没有initialize函数", flush=True)
+        
+        # 将策略的universe同步到context中
+        if hasattr(self.strategy, 'universe') and self.strategy.universe:
+            self.context['settings']['universe'] = self.strategy.universe
+            self.context['universe'] = self.strategy.universe  # 同时设置顶层快捷方式
+            Log.logger.info(f"从策略同步universe: {len(self.strategy.universe)}只股票/标的")
+            print(f"[Trader] 同步universe: {len(self.strategy.universe)}只", flush=True)
             
     def bind_strategy_api(self):
         """绑定策略所需的API函数"""
@@ -317,6 +374,8 @@ class BacktestTrader:
         self.strategy.get_positions = self.get_positions_sync
         self.strategy.get_orders = self.get_orders_sync
         self.strategy.get_trades = self.get_trades_sync
+        self.strategy.get_cash = self.get_cash_sync
+        self.strategy.get_current_price = self.get_current_price_sync
         
         # 绑定便利方法
         self.strategy.order_buy = self.order_buy_sync
@@ -334,14 +393,28 @@ class BacktestTrader:
     def get_price_sync(self, code, time=None):
         """获取单个股票价格的同步方法（get_quotes的简化版本）"""
         try:
-            quotes = self.data_center.get_quotes([code], freq='1d', time=time, fields=['close'])
+            # 获取回测频率，使用实际频率而不是固定1d
+            freq = self.context.get('settings', {}).get('freq', '1d')
+            
+            # 确保传入正确的当前回测时间
+            current_time = self.context.get('current_dt', datetime.now())
+            if time is None:
+                time = current_time
+            
+            logger.debug(f"获取价格数据: {code}, 频率: {freq}, 时间: {time}")
+            
+            # 直接使用DataCenter的get_quotes方法
+            quotes = self.data_center.get_quotes([code], freq=freq, time=time, fields=['close'])
             if not quotes.empty:
-                return quotes.iloc[0]['close']
+                price = quotes.iloc[0]['close']
+                logger.debug(f"成功获取 {code} 价格: {price}")
+                return price
             else:
-                logger.warning(f"无法获取股票 {code} 的价格数据")
+                logger.warning(f"无法获取股票 {code} 的价格数据 (时间: {time})")
                 return None
+                
         except Exception as e:
-            logger.error(f"获取股票价格失败: {e}")
+            logger.error(f"获取股票价格失败: {code} - {str(e)}")
             return None
     
     def place_order_sync(self, adapter_id, symbol, side, order_type, volume, price=None, **kwargs):
@@ -477,14 +550,28 @@ class BacktestTrader:
             logger.error(f"获取成交信息失败: {e}")
             return []
     
-    def order_buy_sync(self, symbol, volume, price=None):
-        """便利买入方法"""
+    def order_buy_sync(self, context, symbol, volume, price=None):
+        """便利买入方法
+        
+        Args:
+            context: 回测上下文（兼容策略调用方式）
+            symbol: 股票代码
+            volume: 数量
+            price: 价格（可选）
+        """
         from finhack.trader.backtest.models.enums import Side, OrderType
         order_type = OrderType.LIMIT if price else OrderType.MARKET
         return self.place_order_sync('backtest', symbol, Side.BUY, order_type, volume, price)
     
-    def order_sell_sync(self, symbol, volume, price=None):
-        """便利卖出方法"""
+    def order_sell_sync(self, context, symbol, volume, price=None):
+        """便利卖出方法
+        
+        Args:
+            context: 回测上下文（兼容策略调用方式）
+            symbol: 股票代码
+            volume: 数量
+            price: 价格（可选）
+        """
         from finhack.trader.backtest.models.enums import Side, OrderType
         order_type = OrderType.LIMIT if price else OrderType.MARKET
         return self.place_order_sync('backtest', symbol, Side.SELL, order_type, volume, price)
@@ -588,4 +675,31 @@ class BacktestTrader:
             end_date=self.context['settings']['end_date'],
             strategy=self.strategy,
             scheduled_tasks=self.context['scheduled_tasks']
-        ) 
+        )
+    
+    def get_cash_sync(self, context=None):
+        """获取当前可用现金"""
+        try:
+            if hasattr(self, 'context') and 'account' in self.context:
+                return self.context['account']['cash_available']
+            return 0.0
+        except Exception as e:
+            logger.error(f"获取现金失败: {e}")
+            return 0.0
+    
+    def get_current_price_sync(self, context, code):
+        """获取当前价格"""
+        try:
+            current_time = context.get('current_dt', self.context.get('current_dt'))
+            freq = self.context['settings']['freq']
+            
+            # 获取最新价格
+            quote_df = self.data_center.get_quotes([code], freq=freq, time=current_time, fields=['close'])
+            
+            if not quote_df.empty and code in quote_df.index:
+                return quote_df.loc[code, 'close']
+            
+            return None
+        except Exception as e:
+            logger.error(f"获取{code}价格失败: {e}")
+            return None 

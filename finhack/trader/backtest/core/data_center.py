@@ -3,7 +3,7 @@
 
 负责管理回测中的所有数据，包括行情数据、因子数据、参考数据等
 支持多市场多频次，从真实数据源加载
-现已重构为使用统一的数据接口
+现已重构为使用统一的数据接口，并实现按月预加载策略
 """
 
 import logging
@@ -13,6 +13,8 @@ import pandas as pd
 from datetime import datetime, date, timedelta
 from typing import Dict, List, Any, Optional, Union
 import numpy as np
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 from finhack.library.data import get_data_interface
 
@@ -22,7 +24,7 @@ logger = logging.getLogger(__name__)
 class DataCenter:
     """数据中心
     
-    管理回测中的所有数据，支持多市场多频次
+    管理回测中的所有数据，支持多市场多频次，实现按月预加载策略
     """
     
     def __init__(self, project_path: str, market: str = 'cn_stock', freq: str = '1d'):
@@ -47,7 +49,24 @@ class DataCenter:
         self.factors_data_dir = os.path.join(self.base_data_dir, 'factors')
         self.reference_data_dir = os.path.join(self.base_data_dir, 'market', 'reference')
         
-        logger.info(f"数据中心初始化完成: {market} {freq} (使用统一数据接口)")
+        # 多频率数据缓存
+        self.kline_cache = {}  # 格式: {market: {freq: {symbol: DataFrame}}}
+        self.factor_cache = {}  # 格式: {market: {freq: {factor_name: DataFrame}}}
+        
+        # 支持的频率列表
+        self.supported_frequencies = ['1m', '30m', '120m', '1d']
+        
+        # 按月预加载策略相关属性
+        self.preloaded_months = {}  # 格式: {market: {year_month: datetime}}
+        self.preload_lock = threading.Lock()  # 线程锁，确保预加载过程线程安全
+        # 增加线程池大小以提高并行加载性能
+        import os as _os
+        cpu_count = _os.cpu_count() or 4
+        max_workers = min(cpu_count, 8)  # 最多8个worker，避免过多线程
+        self.preload_thread_pool = ThreadPoolExecutor(max_workers=max_workers)
+        logger.info(f"数据预加载线程池初始化: {max_workers} workers")
+        
+        logger.info(f"数据中心初始化完成: {market} {freq} (使用统一数据接口，支持按月预加载)")
     
     def set_context(self, context: Dict[str, Any]):
         """设置上下文
@@ -58,9 +77,222 @@ class DataCenter:
         self.context = context
         logger.debug("数据中心已设置上下文")
     
+    def preload_monthly_data(self, market: str, year: int, month: int, 
+                            universe: List[str] = None, frequency: str = '1m'):
+        """预加载指定月份的1分钟数据 - 优化版
+        
+        Args:
+            market: 市场名称
+            year: 年份
+            month: 月份
+            universe: 股票池，如果为空则只加载当前策略需要的股票
+            frequency: 数据频率
+        """
+        month_key = f"{year}-{month:02d}"
+        
+        # 检查是否已经预加载
+        with self.preload_lock:
+            if market in self.preloaded_months and month_key in self.preloaded_months[market]:
+                logger.debug(f"{market} {month_key} 数据已预加载，跳过")
+                return
+        
+        # 如果没有提供universe，尝试从context中获取
+        if universe is None and self.context:
+            universe = []
+            # 从context中获取当前策略需要的股票（context是字典）
+            context_universe = self.context.get('universe', None)
+            if context_universe:
+                if isinstance(context_universe, dict):
+                    # 多市场情况
+                    if market in context_universe:
+                        universe = context_universe[market]
+                else:
+                    # 单市场情况
+                    universe = context_universe
+        
+        # 如果仍然没有universe，则不进行预加载，避免加载全市场数据
+        if not universe:
+            logger.warning(f"没有提供股票池，跳过 {market} {month_key} 的预加载")
+            return
+        
+        import time
+        start_time = time.time()
+        logger.info(f"[预加载] 开始预加载 {market} {month_key} 的1分钟数据，股票数量: {len(universe)}")
+        print(f"[预加载] 开始加载 {market} {month_key}，共{len(universe)}只股票", flush=True)
+        
+        try:
+            # 计算月份的开始和结束日期
+            start_date = datetime(year, month, 1)
+            if month == 12:
+                end_date = datetime(year + 1, 1, 1) - timedelta(days=1)
+            else:
+                end_date = datetime(year, month + 1, 1) - timedelta(days=1)
+            
+            # 优化批次大小：减小到5只股票一批，增加并行度
+            batch_size = 5  # 每批5只股票，提高并行度
+            batches = [universe[i:i + batch_size] for i in range(0, len(universe), batch_size)]
+            logger.info(f"[预加载] 分为 {len(batches)} 个批次，每批 {batch_size} 只股票")
+            print(f"[预加载] 分为{len(batches)}个批次进行并行加载", flush=True)
+            
+            # 使用线程池并行加载
+            futures = {}
+            for idx, batch in enumerate(batches):
+                future = self.preload_thread_pool.submit(
+                    self._preload_batch, market, batch, frequency, start_date, end_date
+                )
+                futures[future] = (idx, batch)
+            
+            # 等待所有批次加载完成，并显示进度
+            total_records = 0
+            completed = 0
+            for future in as_completed(futures):
+                try:
+                    batch_idx, batch = futures[future]
+                    result = future.result(timeout=60)  # 60秒超时
+                    total_records += sum(result.values())
+                    completed += 1
+                    logger.info(f"[预加载] 批次 {completed}/{len(batches)} 完成: {batch}")
+                    print(f"[预加载] 进度: {completed}/{len(batches)} ({completed*100//len(batches)}%)", flush=True)
+                except Exception as e:
+                    logger.error(f"[预加载] 批次预加载失败: {e}")
+                    import traceback
+                    traceback.print_exc()
+            
+            # 标记该月数据已预加载
+            with self.preload_lock:
+                if market not in self.preloaded_months:
+                    self.preloaded_months[market] = {}
+                self.preloaded_months[market][month_key] = datetime.now()
+            
+            elapsed = time.time() - start_time
+            logger.info(f"[预加载] 完成预加载 {market} {month_key}，共 {len(universe)} 只股票，{total_records} 条记录，耗时 {elapsed:.2f}秒")
+            print(f"[预加载] ✓ 完成！共{total_records}条记录，耗时{elapsed:.2f}秒", flush=True)
+            
+        except Exception as e:
+            logger.error(f"预加载 {market} {month_key} 数据失败: {e}")
+            raise
+    
+    def _preload_batch(self, market: str, batch: List[str], frequency: str,
+                      start_date: datetime, end_date: datetime) -> Dict[str, int]:
+        """预加载一批股票的数据
+        
+        Args:
+            market: 市场名称
+            batch: 股票代码批次
+            frequency: 数据频率
+            start_date: 开始日期
+            end_date: 结束日期
+            
+        Returns:
+            Dict[str, int]: 每只股票加载的记录数
+        """
+        import time
+        batch_start = time.time()
+        results = {}
+        
+        try:
+            logger.debug(f"[预加载批次] 开始加载 {batch}")
+            
+            # 使用数据接口批量获取K线数据
+            klines_df = self.data_interface.get_klines(
+                codes=batch,
+                market=market,
+                freq=frequency,
+                start_date=start_date.strftime('%Y-%m-%d'),
+                end_date=end_date.strftime('%Y-%m-%d'),
+                use_cache=True
+            )
+            
+            # 统计每只股票的记录数
+            if not klines_df.empty:
+                for symbol in batch:
+                    symbol_data = klines_df.xs(symbol, level=1) if symbol in klines_df.index.get_level_values(1) else pd.DataFrame()
+                    results[symbol] = len(symbol_data)
+            else:
+                results = {symbol: 0 for symbol in batch}
+            
+            elapsed = time.time() - batch_start
+            total_records = sum(results.values())
+            logger.debug(f"[预加载批次] 完成 {batch}，{total_records}条记录，耗时{elapsed:.2f}秒")
+            
+            return results
+            
+        except Exception as e:
+            elapsed = time.time() - batch_start
+            logger.error(f"[预加载批次] 失败 {batch}，耗时{elapsed:.2f}秒: {e}")
+            import traceback
+            traceback.print_exc()
+            return {symbol: 0 for symbol in batch}
+    
+    def ensure_monthly_data_loaded(self, market: str, current_date: datetime, 
+                                 universe: List[str] = None, frequency: str = '1m'):
+        """确保当前月份和上个月的数据已预加载 - 优化版
+        
+        Args:
+            market: 市场名称
+            current_date: 当前日期
+            universe: 股票池
+            frequency: 数据频率
+        """
+        # 当前月份
+        current_year = current_date.year
+        current_month = current_date.month
+        
+        # 上个月
+        if current_month == 1:
+            prev_year = current_year - 1
+            prev_month = 12
+        else:
+            prev_year = current_year
+            prev_month = current_month - 1
+        
+        # 检查并预加载当前月份和上个月的数据
+        months_to_load = [
+            (current_year, current_month),
+            (prev_year, prev_month)
+        ]
+        
+        # 如果没有提供universe，尝试从context中获取
+        if universe is None and self.context:
+            universe = []
+            # 从context中获取当前策略需要的股票（context是字典）
+            context_universe = self.context.get('universe', None)
+            if context_universe:
+                if isinstance(context_universe, dict):
+                    # 多市场情况
+                    if market in context_universe:
+                        universe = context_universe[market]
+                else:
+                    # 单市场情况
+                    universe = context_universe
+        
+        # 并行预加载多个月份的数据
+        futures = []
+        for year, month in months_to_load:
+            month_key = f"{year}-{month:02d}"
+            
+            # 检查是否已经预加载
+            with self.preload_lock:
+                if market in self.preloaded_months and month_key in self.preloaded_months[market]:
+                    logger.debug(f"{market} {month_key} 数据已预加载，跳过")
+                    continue
+            
+            # 提交预加载任务
+            future = self.preload_thread_pool.submit(
+                self.preload_monthly_data, market, year, month, universe, frequency
+            )
+            futures.append(future)
+        
+        # 等待所有预加载任务完成
+        for future in as_completed(futures):
+            try:
+                future.result()
+            except Exception as e:
+                logger.error(f"预加载任务失败: {e}")
+    
     def preload_data(self, market: str, start_date: str, end_date: str, 
                     universe: List[str] = None, frequency: str = '1d'):
-        """预加载数据
+        """预加载数据（兼容旧接口，内部调用按月预加载）
         
         Args:
             market: 市场名称
@@ -91,20 +323,39 @@ class DataCenter:
             )
             logger.debug(f"加载复权因子: {len(adj_factors)} 条记录")
             
-            # 智能预加载K线数据（使用统一接口）
-            if universe:
-                logger.info(f"预加载universe中的K线数据: {len(universe)} 只股票")
-                # 预加载universe中股票的K线数据到缓存
-                self.data_interface.get_klines(
-                    codes=universe,
-                    market=market,
-                    freq=frequency,
-                    start_date=start_date,
-                    end_date=end_date,
-                    use_cache=True
-                )
+            # 如果是1分钟频率，使用按月预加载策略
+            if frequency == '1m':
+                # 计算需要预加载的月份范围
+                start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+                end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+                
+                current_year = start_dt.year
+                current_month = start_dt.month
+                
+                while (current_year < end_dt.year) or (current_year == end_dt.year and current_month <= end_dt.month):
+                    self.preload_monthly_data(market, current_year, current_month, universe, frequency)
+                    
+                    # 移动到下个月
+                    if current_month == 12:
+                        current_year += 1
+                        current_month = 1
+                    else:
+                        current_month += 1
             else:
-                logger.info("智能预加载模式：universe为空，将按需加载数据")
+                # 其他频率，使用原有预加载逻辑
+                if universe:
+                    logger.info(f"预加载universe中的K线数据: {len(universe)} 只股票")
+                    # 预加载universe中股票的K线数据到缓存
+                    self.data_interface.get_klines(
+                        codes=universe,
+                        market=market,
+                        freq=frequency,
+                        start_date=start_date,
+                        end_date=end_date,
+                        use_cache=True
+                    )
+                else:
+                    logger.info("智能预加载模式：universe为空，将按需加载数据")
             
             logger.info("数据预加载完成")
                 
@@ -175,6 +426,13 @@ class DataCenter:
         
         market = self._get_market_from_context()
         
+        # 检查频率是否支持
+        if freq not in self.supported_frequencies:
+            logger.warning(f"不支持的频率: {freq}, 将使用1m数据进行聚合")
+            # 如果请求的频率不是1m，则从1m数据聚合
+            if freq != '1m':
+                return self._aggregate_klines(codes, '1m', freq, start_time, end_time, fields, adj_type)
+        
         # 使用统一数据接口获取K线数据
         return self.data_interface.get_klines(
             codes=codes,
@@ -186,6 +444,70 @@ class DataCenter:
             adj_type=adj_type,
             use_cache=True
         )
+    
+    def _aggregate_klines(self, codes: Union[str, List[str]], source_freq: str, target_freq: str,
+                         start_time: Union[str, datetime] = None, end_time: Union[str, datetime] = None,
+                         fields: List[str] = None, adj_type: str = 'none') -> pd.DataFrame:
+        """从低频数据聚合到高频数据
+        
+        Args:
+            codes: 股票代码或代码列表
+            source_freq: 源频率
+            target_freq: 目标频率
+            start_time: 开始时间
+            end_time: 结束时间
+            fields: 需要的字段列表
+            adj_type: 复权类型
+            
+        Returns:
+            pd.DataFrame: 聚合后的K线数据
+        """
+        # 获取1m数据
+        df_1m = self.data_interface.get_klines(
+            codes=codes,
+            market=self._get_market_from_context(),
+            freq=source_freq,
+            start_date=start_time,
+            end_date=end_time,
+            fields=fields,
+            adj_type=adj_type,
+            use_cache=True
+        )
+        
+        if df_1m.empty:
+            return df_1m
+        
+        # 计算聚合规则
+        if target_freq == '30m':
+            rule = '30T'
+        elif target_freq == '120m':
+            rule = '120T'
+        elif target_freq == '1d':
+            rule = '1D'
+        else:
+            logger.warning(f"不支持的目标频率: {target_freq}")
+            return df_1m
+        
+        # 聚合数据
+        agg_dict = {}
+        for field in fields:
+            if field in ['open']:
+                agg_dict[field] = 'first'
+            elif field in ['high']:
+                agg_dict[field] = 'max'
+            elif field in ['low']:
+                agg_dict[field] = 'min'
+            elif field in ['close']:
+                agg_dict[field] = 'last'
+            elif field in ['volume', 'amount']:
+                agg_dict[field] = 'sum'
+            else:
+                agg_dict[field] = 'mean'
+        
+        # 按时间和代码分组聚合
+        df_agg = df_1m.groupby([pd.Grouper(level=0, freq=rule), pd.Grouper(level=1)]).agg(agg_dict)
+        
+        return df_agg
     
     def get_factors(self, factor_names: Union[str, List[str]], codes: Union[str, List[str]] = None,
                    freq: str = '1d', start_date: Union[str, datetime] = None, 
@@ -235,6 +557,30 @@ class DataCenter:
             use_cache=True
         )
     
+    def get_corporate_actions(self, date, market):
+        """获取指定日期的公司行为数据
+        
+        Args:
+            date: 日期
+            market: 市场名称
+            
+        Returns:
+            List[Dict]: 公司行为事件列表
+        """
+        try:
+            # 使用统一数据接口获取公司行为数据
+            corporate_actions = self.data_interface.get_corporate_actions(
+                market=market,
+                date=date,
+                use_cache=True
+            )
+            
+            return corporate_actions
+            
+        except Exception as e:
+            logger.error(f"获取公司行为数据失败: {e}")
+            return []
+    
     def _get_market_from_context(self) -> str:
         """从context获取当前市场"""
         if self.context:
@@ -247,3 +593,166 @@ class DataCenter:
         self.data_interface.clear_cache()
         
         logger.info("数据中心已停止")
+
+    def calculate_macd(self, codes: Union[str, List[str]], freq: str = '1d',
+                      start_time: Union[str, datetime] = None, end_time: Union[str, datetime] = None,
+                      fast_period: int = 12, slow_period: int = 26, signal_period: int = 9) -> pd.DataFrame:
+        """计算MACD指标
+        
+        Args:
+            codes: 股票代码或代码列表
+            freq: 数据频率
+            start_time: 开始时间
+            end_time: 结束时间
+            fast_period: 快线周期
+            slow_period: 慢线周期
+            signal_period: 信号线周期
+            
+        Returns:
+            pd.DataFrame: MACD指标数据，MultiIndex(time, symbol)
+        """
+        # 获取收盘价数据
+        close_df = self.get_klines(codes, freq, start_time, end_time, ['close'])
+        
+        if close_df.empty:
+            return close_df
+        
+        # 计算MACD指标
+        macd_results = {}
+        
+        for symbol in close_df.index.get_level_values(1).unique():
+            symbol_data = close_df.xs(symbol, level=1)
+            close_prices = symbol_data['close']
+            
+            # 计算EMA
+            ema_fast = close_prices.ewm(span=fast_period).mean()
+            ema_slow = close_prices.ewm(span=slow_period).mean()
+            
+            # 计算MACD线
+            macd_line = ema_fast - ema_slow
+            
+            # 计算信号线
+            signal_line = macd_line.ewm(span=signal_period).mean()
+            
+            # 计算MACD柱
+            macd_histogram = macd_line - signal_line
+            
+            # 组合结果
+            macd_results[symbol] = pd.DataFrame({
+                'macd': macd_line,
+                'signal': signal_line,
+                'histogram': macd_histogram
+            })
+        
+        # 合并所有股票的结果
+        if macd_results:
+            result_df = pd.concat(macd_results, names=['symbol'])
+            return result_df
+        else:
+            return pd.DataFrame()
+    
+    def calculate_rsi(self, codes: Union[str, List[str]], freq: str = '1d',
+                     start_time: Union[str, datetime] = None, end_time: Union[str, datetime] = None,
+                     period: int = 14) -> pd.DataFrame:
+        """计算RSI指标
+        
+        Args:
+            codes: 股票代码或代码列表
+            freq: 数据频率
+            start_time: 开始时间
+            end_time: 结束时间
+            period: 计算周期
+            
+        Returns:
+            pd.DataFrame: RSI指标数据，MultiIndex(time, symbol)
+        """
+        # 获取收盘价数据
+        close_df = self.get_klines(codes, freq, start_time, end_time, ['close'])
+        
+        if close_df.empty:
+            return close_df
+        
+        # 计算RSI指标
+        rsi_results = {}
+        
+        for symbol in close_df.index.get_level_values(1).unique():
+            symbol_data = close_df.xs(symbol, level=1)
+            close_prices = symbol_data['close']
+            
+            # 计算价格变化
+            delta = close_prices.diff()
+            
+            # 分离涨跌
+            gain = delta.where(delta > 0, 0)
+            loss = -delta.where(delta < 0, 0)
+            
+            # 计算平均涨跌幅
+            avg_gain = gain.rolling(window=period).mean()
+            avg_loss = loss.rolling(window=period).mean()
+            
+            # 计算RS和RSI
+            rs = avg_gain / avg_loss
+            rsi = 100 - (100 / (1 + rs))
+            
+            # 组合结果
+            rsi_results[symbol] = pd.DataFrame({'rsi': rsi})
+        
+        # 合并所有股票的结果
+        if rsi_results:
+            result_df = pd.concat(rsi_results, names=['symbol'])
+            return result_df
+        else:
+            return pd.DataFrame()
+    
+    def calculate_bollinger_bands(self, codes: Union[str, List[str]], freq: str = '1d',
+                                start_time: Union[str, datetime] = None, end_time: Union[str, datetime] = None,
+                                period: int = 20, std_dev: float = 2.0) -> pd.DataFrame:
+        """计算布林带指标
+        
+        Args:
+            codes: 股票代码或代码列表
+            freq: 数据频率
+            start_time: 开始时间
+            end_time: 结束时间
+            period: 计算周期
+            std_dev: 标准差倍数
+            
+        Returns:
+            pd.DataFrame: 布林带指标数据，MultiIndex(time, symbol)
+        """
+        # 获取收盘价数据
+        close_df = self.get_klines(codes, freq, start_time, end_time, ['close'])
+        
+        if close_df.empty:
+            return close_df
+        
+        # 计算布林带指标
+        bb_results = {}
+        
+        for symbol in close_df.index.get_level_values(1).unique():
+            symbol_data = close_df.xs(symbol, level=1)
+            close_prices = symbol_data['close']
+            
+            # 计算移动平均线
+            sma = close_prices.rolling(window=period).mean()
+            
+            # 计算标准差
+            rolling_std = close_prices.rolling(window=period).std()
+            
+            # 计算上下轨
+            upper_band = sma + (rolling_std * std_dev)
+            lower_band = sma - (rolling_std * std_dev)
+            
+            # 组合结果
+            bb_results[symbol] = pd.DataFrame({
+                'middle': sma,
+                'upper': upper_band,
+                'lower': lower_band
+            })
+        
+        # 合并所有股票的结果
+        if bb_results:
+            result_df = pd.concat(bb_results, names=['symbol'])
+            return result_df
+        else:
+            return pd.DataFrame()

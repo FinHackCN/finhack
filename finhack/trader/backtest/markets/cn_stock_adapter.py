@@ -121,6 +121,10 @@ class CnStockMarketAdapter:
         # 按时间和优先级排序
         events.sort(key=lambda x: (x.event_time, x.priority.value))
         
+        # 添加调试日志
+        try_match_events = [e for e in events if e.event_type == EventTypeEnum.TRY_MATCH]
+        print(f"生成 {trade_date.date()} {frequency} 的事件: {len(events)} 个，其中撮合事件: {len(try_match_events)} 个")
+        
         return events
     
     def _get_event_priority(self, event_type: EventTypeEnum) -> EventPriorityEnum:
@@ -161,11 +165,12 @@ class CnStockMarketAdapter:
         return (morning_start <= time_obj <= morning_end) or \
                (afternoon_start <= time_obj <= afternoon_end)
     
-    def get_trading_sessions(self, trade_date: datetime) -> List[Dict[str, datetime]]:
+    def get_trading_sessions(self, trade_date: datetime, frequency: str = '1d') -> List[Dict[str, datetime]]:
         """获取交易时段
         
         Args:
             trade_date: 交易日期
+            frequency: 数据频率
             
         Returns:
             List[Dict]: 交易时段列表
@@ -173,13 +178,13 @@ class CnStockMarketAdapter:
         sessions = [
             {
                 'name': 'morning',
-                'start': datetime.combine(trade_date.date(), time(9, 30, 0)),
-                'end': datetime.combine(trade_date.date(), time(11, 30, 0))
+                'start': datetime.combine(trade_date, time(9, 30, 0)),
+                'end': datetime.combine(trade_date, time(11, 30, 0))
             },
             {
-                'name': 'afternoon', 
-                'start': datetime.combine(trade_date.date(), time(13, 0, 0)),
-                'end': datetime.combine(trade_date.date(), time(15, 0, 0))
+                'name': 'afternoon',
+                'start': datetime.combine(trade_date, time(13, 0, 0)),
+                'end': datetime.combine(trade_date, time(15, 0, 0))
             }
         ]
         return sessions 
