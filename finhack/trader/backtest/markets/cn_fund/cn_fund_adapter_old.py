@@ -365,34 +365,64 @@ class CnStockMarketAdapter(BaseMarket):
 CnStockAdapter = CnStockMarketAdapter
 
 
-class CnFundMarketAdapter(CnStockMarketAdapter):
-    """中国基金市场适配器
-    
-    基于中国股票市场规则，但有一些特殊差异
-    """
+class CnFundMarketAdapter(BaseMarket):
+    """中国基金市场适配器"""
     
     def __init__(self, config: Dict[str, Any] = None):
-        """初始化中国基金市场适配器"""
-        # 如果没有提供配置，使用默认配置
-        if not config:
-            config = self._get_default_config()
-            
-        # 修改市场名称
-        config['market_name'] = 'cn_fund'
+        self.market_name = 'cn_fund'
         
-        # 基金特有的配置
-        config['trading_rules']['commission']['fund'] = {
-            'open_commission': 0.0003,
-            'close_commission': 0.0003,
-            'open_tax': 0.0,
-            'close_tax': 0.0,             # 基金免印花税
-            'min_commission': 5.0
+        # 基金市场配置
+        self.config = {
+            'market': 'cn_fund',
+            'trading_hours': {
+                '1d': {
+                    'morning_start': '09:30',
+                    'morning_end': '11:30',
+                    'afternoon_start': '13:00',
+                    'afternoon_end': '15:00'
+                },
+                '1m': {
+                    'morning_start': '09:30',
+                    'morning_end': '11:30',
+                    'afternoon_start': '13:00',
+                    'afternoon_end': '15:00'
+                },
+                '30m': {
+                    'morning_start': '09:30',
+                    'morning_end': '11:30',
+                    'afternoon_start': '13:00',
+                    'afternoon_end': '15:00'
+                },
+                '120m': {
+                    'morning_start': '09:30',
+                    'morning_end': '11:30',
+                    'afternoon_start': '13:00',
+                    'afternoon_end': '15:00'
+                }
+            },
+            'trading_rules': {
+                'commission': {
+                    'fund': {
+                        'open_commission': 0.0003,
+                        'close_commission': 0.0003,
+                        'open_tax': 0.0,
+                        'close_tax': 0.0,  # 基金无印花税
+                        'min_commission': 5.0
+                    }
+                },
+                'slippage': {
+                    'slip_type': 'pricerelated',
+                    'slip_value': 0.001
+                },
+                'limits': {
+                    'lot_size': 100,  # 最小交易单位
+                    'min_order_volume': 100,  # 最小下单数量
+                    'max_order_volume': 1000000  # 最大下单数量
+                }
+            }
         }
         
-        super().__init__(config)
-        
-        # 基金特有属性
-        self.market_name = 'cn_fund'
+        super().__init__(self.market_name, self.config)
         
         logger.info(f"中国基金市场适配器初始化完成，支持频率: {self.supported_frequencies}")
     

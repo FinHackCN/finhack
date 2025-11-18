@@ -45,7 +45,37 @@ class EventCenter:
         self.current_date = None
         self.current_frequency = '1d'
         
+        # 预加载所有市场适配器
+        self._preload_market_adapters()
+        
         logger.info("事件中心初始化完成")
+    
+    def _preload_market_adapters(self):
+        """预加载所有市场适配器"""
+        try:
+            from ..markets import MARKET_ADAPTERS
+            from ..markets.base_market import BaseMarket
+            
+            for market_name, adapter_class in MARKET_ADAPTERS.items():
+                try:
+                    # 只跳过BaseMarket抽象类
+                    if adapter_class is BaseMarket:
+                        logger.warning(f"市场适配器 {market_name} 是抽象类，跳过实例化")
+                        continue
+                    
+                    adapter = adapter_class()
+                    self.market_adapters[market_name] = adapter
+                    logger.info(f"成功加载市场适配器: {market_name}")
+                    
+                except Exception as e:
+                    logger.error(f"加载市场适配器失败 {market_name}: {e}")
+                    continue
+            
+            logger.info(f"预加载市场适配器完成，共加载 {len(self.market_adapters)} 个适配器")
+            
+        except Exception as e:
+            logger.error(f"预加载市场适配器失败: {e}")
+            raise
     
     def set_context(self, context: Dict[str, Any]):
         """设置上下文
@@ -98,11 +128,17 @@ class EventCenter:
             
             if market_name in MARKET_ADAPTERS:
                 adapter_class = MARKET_ADAPTERS[market_name]
+                
+                # 跳过抽象类的实例化
+                if 'Base' in adapter_class.__name__ or 'MarketAdapter' in adapter_class.__name__:
+                    logger.warning(f"市场适配器 {market_name} 是抽象类，跳过实例化")
+                    return
+                
                 self.market_adapters[market_name] = adapter_class()
                 logger.info(f"成功加载市场适配器: {market_name}")
             else:
                 logger.warning(f"未支持的市场类型: {market_name}，使用cn_stock适配器")
-                from ..markets import CnStockMarketAdapter
+                from ..markets.cn_stock.cn_stock_adapter import CnStockMarketAdapter
                 self.market_adapters[market_name] = CnStockMarketAdapter()
             
         except Exception as e:
@@ -160,7 +196,7 @@ class EventCenter:
             return []
         
         market_name = self.context.get('settings', {}).get('market', 'cn_stock')
-        frequency = self.context.get('settings', {}).get('frequency', '1d')
+        frequency = self.context.get('settings', {}).get('freq', '1d')
         self.current_frequency = frequency
         
         events = []
@@ -174,8 +210,16 @@ class EventCenter:
             time_events = self._generate_time_events(trade_date, frequency)
             events.extend(time_events)
             
-            # 3. 按时间排序所有事件
+            # 3. 生成公司行为事件
+            corporate_action_events = self._generate_corporate_action_events(trade_date)
+            events.extend(corporate_action_events)
+            
+            # 4. 按时间排序所有事件
             events.sort(key=lambda x: (x.event_time, x.priority.value))
+            
+            # 添加调试日志
+            try_match_events = [e for e in events if e.event_type == EventTypeEnum.TRY_MATCH]
+            logger.debug(f"生成 {trade_date} 的事件: {len(events)} 个，其中撮合事件: {len(try_match_events)} 个")
             
             logger.debug(f"生成 {trade_date} 的事件: {len(events)} 个")
             
@@ -314,7 +358,11 @@ class EventCenter:
         
         trading_sessions = market_adapter.get_trading_sessions(trade_date, self.current_frequency)
         
-        for start_time, end_time in trading_sessions:
+        for session in trading_sessions:
+            # 从字典中获取开始和结束时间
+            start_time = session['start']
+            end_time = session['end']
+            
             # 从参考时间开始，按间隔生成时间点
             current_time = datetime.combine(trade_date, reference_time)
             
@@ -333,6 +381,49 @@ class EventCenter:
                     current_time += timedelta(hours=interval)
         
         return times
+    
+    def _generate_corporate_action_events(self, trade_date):
+        """生成公司行为事件"""
+        try:
+            # 从DataCenter获取公司行为数据
+            if not self.context or not hasattr(self.context, 'data_center'):
+                return []
+            
+            data_center = self.context.data_center
+            market = self.context.get('settings', {}).get('market', 'cn_stock')
+            
+            # 获取当前日期的公司行为事件
+            corporate_actions = data_center.get_corporate_actions(
+                date=trade_date,
+                market=market
+            )
+            
+            events = []
+            for action in corporate_actions:
+                # 创建公司行为事件
+                event = type('CorporateActionEvent', (), {
+                    'event_type': type('EventType', (), {'value': 'CORPORATE_ACTION'})(),
+                    'event_time': datetime.combine(trade_date, datetime.min.time()),
+                    'symbol': action.get('symbol', ''),
+                    'action_type': action.get('action_type', ''),
+                    'dividend_per_share': action.get('dividend_per_share', 0),
+                    'tax_rate': action.get('tax_rate', 0.10),
+                    'bonus_ratio': action.get('bonus_ratio', 0),
+                    'split_ratio': action.get('split_ratio', 1),
+                    'rights_ratio': action.get('rights_ratio', 0),
+                    'rights_price': action.get('rights_price', 0)
+                })()
+                
+                events.append(event)
+            
+            if events:
+                logger.debug(f"生成了{len(events)}个公司行为事件")
+            
+            return events
+            
+        except Exception as e:
+            logger.error(f"生成公司行为事件失败: {e}")
+            return []
     
     def process_event(self, event: BaseEvent):
         """处理单个事件

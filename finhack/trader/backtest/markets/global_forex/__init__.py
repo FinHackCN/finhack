@@ -1,18 +1,8 @@
 """
-全球外汇市场适配器
-
-包含：
-- ForexAdapter: 外汇市场适配器
-- events_config: 外汇市场事件配置
-- trading_rules: 外汇交易规则
+全球外汇和加密货币现货市场适配器模块
 """
 
-from .forex_adapter import ForexAdapter
-from .events_config import EVENTS_CONFIG
-from .trading_rules import TRADING_RULES
+from .global_forex_adapter import GlobalForexMarketAdapter
+from .global_cryptospot_adapter import GlobalCryptoSpotMarketAdapter
 
-__all__ = [
-    "ForexAdapter",
-    "EVENTS_CONFIG",
-    "TRADING_RULES"
-] 
+__all__ = ['GlobalForexMarketAdapter', 'GlobalCryptoSpotMarketAdapter'] 

@@ -267,13 +267,22 @@ class TradeCenter:
         
     def _update_account_value(self):
         """更新账户总资产"""
-        # 计算持仓市值
+        # 计算持仓市值（使用已更新的市值）
         positions_value = sum(pos.market_value for pos in self.positions.values())
+        
+        # 打印持仓市值
+        Log.logger.info(f"持仓市值计算: {positions_value:.2f}")
         
         # 更新账户
         self.account.market_value = positions_value
         self.account.total_assets = self.account.cash_available + self.account.cash_frozen + positions_value
         self.account.timestamp_updated = self.context.get('current_dt', datetime.now())
+        
+        # 计算未实现盈亏
+        self.account.pnl_unrealized = sum(pos.unrealized_pnl for pos in self.positions.values())
+        
+        # 打印更新后的账户信息
+        Log.logger.info(f"账户更新: 总资产={self.account.total_assets:.2f}, 持仓市值={self.account.market_value:.2f}")
         
     async def _validate_order(self, order: Order) -> bool:
         """验证订单"""
@@ -336,18 +345,25 @@ class TradeCenter:
         """撮合订单 - 同步版本"""
         matched_orders = []
         
+        Log.logger.debug(f"开始撮合，共{len(self.orders)}个订单，市场数据: {list(market_data.keys())}")
+        
         for order_id, order in self.orders.items():
             if order.status != OrderStatus.NEW:
                 continue
                 
             symbol = order.symbol
+            Log.logger.debug(f"检查订单 {order_id}: {symbol}, 类型: {order.order_type}, 方向: {order.side}, 价格: {order.price}")
+            
             if symbol not in market_data:
+                Log.logger.debug(f"跳过订单 {order_id}: {symbol} 不在市场数据中")
                 continue
                 
             quote = market_data[symbol]
             current_price = quote.get('close', 0)
+            Log.logger.debug(f"订单 {order_id} 当前价格: {current_price}")
             
             if current_price <= 0:
+                Log.logger.debug(f"跳过订单 {order_id}: 价格无效 {current_price}")
                 continue
                 
             # 判断是否可以成交
@@ -358,21 +374,29 @@ class TradeCenter:
                 # 市价单直接成交
                 can_fill = True
                 fill_price = self._apply_slippage(current_price, order.side)
+                Log.logger.debug(f"订单 {order_id} 市价单直接成交，价格: {fill_price}")
             elif order.order_type == OrderType.LIMIT:
                 # 限价单需要判断价格
                 if order.side == Side.BUY and order.price >= current_price:
                     can_fill = True
                     fill_price = min(order.price, current_price)
+                    Log.logger.debug(f"订单 {order_id} 限价买单可成交: 订单价格{order.price} >= 当前价格{current_price}, 成交价格: {fill_price}")
                 elif order.side == Side.SELL and order.price <= current_price:
                     can_fill = True
                     fill_price = max(order.price, current_price)
+                    Log.logger.debug(f"订单 {order_id} 限价卖单可成交: 订单价格{order.price} <= 当前价格{current_price}, 成交价格: {fill_price}")
+                else:
+                    Log.logger.debug(f"订单 {order_id} 限价单价格不匹配: 订单价格{order.price}, 当前价格{current_price}")
                     
             if can_fill:
                 # 执行成交
+                Log.logger.info(f"订单 {order_id} 准备成交: {symbol} {order.side} {order.volume} @ {fill_price}")
                 self._execute_trade_sync(order, fill_price)
                 matched_orders.append(order_id)
+            else:
+                Log.logger.debug(f"订单 {order_id} 不可成交")
                 
-        Log.logger.info(f"撮合完成，成交订单数: {len(matched_orders)}")
+        Log.logger.info(f"撮合完成，成交订单数: {len(matched_orders)}，详细: {matched_orders}")
         
     def _execute_trade_sync(self, order: Order, fill_price: float):
         """执行成交 - 同步版本"""
@@ -481,11 +505,6 @@ class TradeCenter:
         # 更新总资产
         self._update_account_value()
         
-    def _update_account_value(self):
-        """更新账户总资产"""
-        self.account.total_assets = self.account.cash_available + self.account.market_value
-        self.account.pnl_unrealized = sum(pos.unrealized_pnl for pos in self.positions.values())
-        
     def _get_cost_price(self, symbol: str) -> float:
         """获取持仓成本价"""
         if symbol in self.positions:
@@ -522,18 +541,35 @@ class BacktestEngine:
             EventTypeEnum.MARKET_END,
             EventTypeEnum.DAILY_BAR_CLOSED,
             EventTypeEnum.AFTER_MARKET,
-            EventTypeEnum.DAY_END,
+            EventTypeEnum.DAY_END
         ]
         
-        # 为所有市场事件注册默认处理器
         for event_type in market_events:
-            self.event_bus.register_handler(event_type, self._handle_market_event)
+            self.event_center.event_bus.register_handler(event_type, self._process_event_sync)
         
-        # 注册交易相关事件处理器
-        self.event_bus.register_handler(EventTypeEnum.ORDER_SUBMISSION, self._handle_order_submission)
-        self.event_bus.register_handler(EventTypeEnum.ORDER_CANCELLATION, self._handle_order_cancellation)
-        self.event_bus.register_handler(EventTypeEnum.TRY_MATCH, self._handle_try_match_sync)
-        self.event_bus.register_handler(EventTypeEnum.ON_TIME, self._handle_on_time_sync)
+        # 注册动态事件的默认处理器
+        dynamic_events = [
+            EventTypeEnum.ON_TIME,
+            EventTypeEnum.TRY_MATCH,
+            EventTypeEnum.ORDER_SUBMISSION,
+            EventTypeEnum.ORDER_CANCELLATION,
+            EventTypeEnum.ORDER_REJECT,
+            EventTypeEnum.ORDER_FILL
+        ]
+        
+        for event_type in dynamic_events:
+            self.event_center.event_bus.register_handler(event_type, self._process_event_sync)
+    
+    def _has_pending_orders(self):
+        """检查是否有挂单（未成交的订单）
+        
+        Returns:
+            bool: True表示有挂单，False表示没有挂单
+        """
+        for order in self.trade_center.orders.values():
+            if order.status == OrderStatus.NEW:
+                return True
+        return False
         
     def _handle_order_submission(self, event: Dict):
         """处理订单提交事件"""
@@ -565,9 +601,14 @@ class BacktestEngine:
         try:
             market_data = {}
             for symbol in symbols:
-                quote_df = self.data_center.get_quotes([symbol], freq, current_time)
+                Log.logger.debug(f"获取 {symbol} 的行情数据，频率: {freq}, 时间: {current_time}")
+                quote_df = self.data_center.get_quotes([symbol], freq=freq, time=current_time, fields=['close'])
+                Log.logger.debug(f"{symbol} 行情数据结果: DataFrame形状={quote_df.shape}, 是否为空={quote_df.empty}")
                 if not quote_df.empty:
                     market_data[symbol] = quote_df.loc[symbol].to_dict()
+                    Log.logger.debug(f"{symbol} 行情数据内容: {market_data[symbol]}")
+                else:
+                    Log.logger.warning(f"无法获取 {symbol} 的行情数据")
                     
             # 执行撮合
             self.trade_center.try_match_orders_sync(market_data)
@@ -642,23 +683,160 @@ class BacktestEngine:
         """运行回测 - 同步版本"""
         Log.logger.info(f"开始回测: {start_date} -> {end_date}")
         
+        # 保存策略引用
+        self.strategy = strategy
+        
+        # 初始化全局函数
+        self.initialize_global_functions()
+        
+        # 如果策略有set_order_functions函数，则调用它
+        if hasattr(strategy, 'set_order_functions'):
+            strategy.set_order_functions(
+                globals()['order_value'],
+                globals()['order_volume']
+            )
+        
         # 生成交易日历
         calendar = self._generate_calendar_sync(start_date, end_date)
+        Log.logger.info(f"交易日历已生成，共{len(calendar)}天")
         
         # 设置调度任务
         self.event_center.set_scheduled_tasks(scheduled_tasks)
+        
+        # 获取市场设置
+        market = self.context.get('settings', {}).get('market', 'cn_stock')
+        frequency = self.context.get('settings', {}).get('freq', '1d')
+        
+        # 如果是1分钟频率，预加载前两个月的数据
+        if frequency == '1m':
+            Log.logger.info("检测到1分钟频率回测，启动按月预加载策略")
+            
+            # 获取股票池
+            universe = self.context.get('universe', None)
+            
+            # 预加载第一个交易日所在月份和上个月的数据（已优化）
+            if calendar:
+                first_trade_date = calendar[0]
+                Log.logger.info(f"开始预加载初始数据: {first_trade_date}")
+                print(f"[回测] 开始预加载 {market} 数据...", flush=True)
+                self.data_center.ensure_monthly_data_loaded(
+                    market=market,
+                    current_date=first_trade_date,
+                    universe=universe,
+                    frequency=frequency
+                )
+                print(f"[回测] 初始数据预加载完成", flush=True)
+        
+        # 记录上一次处理的月份，用于检测月份变化
+        last_processed_month = None
         
         # 主循环：遍历每个交易日
         for trade_date in calendar:
             self.context['current_dt'] = trade_date
             Log.logger.info(f"交易日: {trade_date.strftime('%Y-%m-%d')}")
             
+            # 检查是否进入新的月份，如果是则预加载下个月数据（已优化）
+            if frequency == '1m':
+                current_month = f"{trade_date.year}-{trade_date.month:02d}"
+                if current_month != last_processed_month:
+                    Log.logger.info(f"检测到进入新月份: {current_month}")
+                    print(f"[回测] 进入新月份 {current_month}，预加载数据...", flush=True)
+                    
+                    # 确保当前月份和下个月份数据已预加载
+                    self.data_center.ensure_monthly_data_loaded(
+                        market=market,
+                        current_date=trade_date,
+                        universe=self.context.get('universe', None),
+                        frequency=frequency
+                    )
+                    
+                    last_processed_month = current_month
+                    print(f"[回测] 新月份数据预加载完成", flush=True)
+            
             # 生成当日事件列表
             daily_events = self.event_center.generate_daily_events(trade_date.date())
             
+            # 调试：打印前3个事件
+            Log.logger.info(f"生成了 {len(daily_events)} 个事件")
+            for idx in range(min(3, len(daily_events))):
+                e = daily_events[idx]
+                Log.logger.info(f"  [{idx}] {e.event_time} ({e.event_type.value})")
+                print(f"[事件列表] [{idx}] {e.event_time} ({e.event_type.value})", flush=True)
+            
             # 按时间顺序处理事件
-            for event in daily_events:
+            i = 0
+            while i < len(daily_events):
+                event = daily_events[i]
                 self._process_event_sync(event, strategy)
+                
+                # 智能加速逻辑：仅在1分钟频率下生效
+                frequency = self.context.get('settings', {}).get('freq', '1d')
+                Log.logger.debug(f"智能加速检查：当前频率 {frequency}, 事件类型 {event.event_type}")
+                
+                if frequency == '1m' and event.event_type == EventTypeEnum.TRY_MATCH:
+                    # 检查是否有挂单（未成交的订单）
+                    has_pending_orders = self._has_pending_orders()
+                    Log.logger.debug(f"智能加速检查：当前时间 {event.event_time}, 有挂单: {has_pending_orders}")
+                    
+                    if not has_pending_orders:
+                        # 没有挂单，查找下一个非撮合事件
+                        next_event_idx = i + 1
+                        
+                        # 添加详细的事件序列日志
+                        Log.logger.debug(f"事件序列：当前事件索引 {i}, 当前事件 {event.event_time} ({event.event_type})")
+                        for j in range(max(0, i-2), min(len(daily_events), i+10)):
+                            ev = daily_events[j]
+                            marker = " -> " if j == i else "    "
+                            Log.logger.debug(f"{marker}[{j}] {ev.event_time} ({ev.event_type}) - {ev.event_description if hasattr(ev, 'event_description') else ''}")
+                        
+                        # 优化的跳跃逻辑：寻找重要事件进行更大跳跃
+                        target_event_idx = None
+                        target_event = None
+                        
+                        # 寻找下一个重要事件，允许更大的跳跃
+                        while next_event_idx < len(daily_events):
+                            next_event = daily_events[next_event_idx]
+                            Log.logger.debug(f"检查下一个事件：索引 {next_event_idx}, {next_event.event_time} ({next_event.event_type})")
+                            
+                            # 重要事件优先级列表
+                            important_events = [
+                                EventTypeEnum.ON_TIME,      # 策略事件
+                                EventTypeEnum.MORNING_END,  # 中午休市
+                                EventTypeEnum.AFTERNOON_START,  # 下午开盘
+                                EventTypeEnum.CLOSING_START, # 收盘开始
+                                EventTypeEnum.MARKET_END,   # 市场结束
+                                EventTypeEnum.DAY_START,    # 新一天开始
+                                EventTypeEnum.BEFORE_MARKET # 盘前准备
+                            ]
+                            
+                            if next_event.event_type in important_events:
+                                Log.logger.debug(f"找到重要事件：索引 {next_event_idx}, {next_event.event_time} ({next_event.event_type})")
+                                target_event_idx = next_event_idx
+                                target_event = next_event
+                                break
+                            elif next_event.event_type != EventTypeEnum.TRY_MATCH:
+                                # 如果不是撮合事件，也可以作为跳跃目标
+                                target_event_idx = next_event_idx
+                                target_event = next_event
+                                break
+                            
+                            next_event_idx += 1
+                        
+                        # 执行跳跃 - 降低跳跃阈值并增加更灵活的跳跃条件
+                        if target_event_idx is not None and target_event is not None:
+                            time_diff = (target_event.event_time - event.event_time).total_seconds() / 60
+                            
+                            # 大幅降低跳跃阈值到10秒，任何有意义的跳跃都执行
+                            # 如果跳跃超过30分钟，更是优先执行
+                            if time_diff > 0.17 or time_diff > 30:  # 10秒或者30分钟以上
+                                Log.logger.info(f"智能加速：无挂单，当前事件 {event.event_time} ({event.event_type})，跳转 {time_diff:.1f} 分钟到 {target_event.event_time} ({target_event.event_type})")
+                                # 直接跳到目标事件
+                                i = target_event_idx
+                                continue
+                        else:
+                            Log.logger.debug("未找到下一个非撮合事件，继续正常处理")
+                
+                i += 1
                 
             # 更新前一交易日
             self.context['previous_date'] = trade_date.date()
@@ -668,11 +846,164 @@ class BacktestEngine:
         
         Log.logger.info("回测完成")
         
+        # 返回回测结果
+        return self.context['performance']
+    
+    def initialize_global_functions(self):
+        """初始化全局函数"""
+        global order_value, order_volume
+        
+        def order_value(security, amount, side, order_type=OrderType.MARKET, 
+                         order_cost=None, slippage=None):
+            """下单函数 - 按金额下单"""
+            try:
+                # 获取当前价格
+                current_time = self.context['current_dt']
+                freq = self.context['settings']['freq']
+                
+                # 获取价格数据
+                quote_df = self.data_center.get_quotes([security], freq, current_time)
+                if quote_df.empty or security not in quote_df.index:
+                    Log.logger.warning(f"无法获取 {security} 的价格数据")
+                    return None
+                
+                price = quote_df.loc[security, 'close']
+                
+                # 计算数量
+                volume = amount / price
+                
+                # A股特殊规则：买入必须是100股的整数倍
+                if self.context['settings']['market'] == 'cn_stock' and side.lower() == 'buy':
+                    volume = int(volume / 100) * 100  # 向下取整到100的倍数
+                    if volume <= 0:
+                        volume = 100  # 至少买入100股
+                
+                # 转换订单类型
+                from finhack.trader.backtest.models.enums import Side
+                order_side = Side.BUY if side.lower() == "buy" else Side.SELL
+                
+                # 调用TradeCenter下单（同步版本）
+                import asyncio
+                try:
+                    # 尝试获取当前事件循环
+                    loop = asyncio.get_event_loop()
+                except RuntimeError:
+                    # 如果没有事件循环，创建一个新的
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                
+                # 调用异步方法
+                order_id = loop.run_until_complete(
+                    self.trade_center.place_order(
+                        adapter_id="default",
+                        symbol=security,
+                        side=order_side,
+                        order_type=order_type,
+                        volume=volume,
+                        price=price
+                    )
+                )
+                
+                Log.logger.info(f"下单成功: {security} {side} {volume:.2f} @ {price:.2f}, 订单ID: {order_id}")
+                return order_id
+                
+            except Exception as e:
+                Log.logger.error(f"下单失败: {e}")
+                return None
+        
+        def order_volume(security, volume, side, order_type=OrderType.MARKET,
+                          order_cost=None, slippage=None):
+            """下单函数 - 按数量下单"""
+            try:
+                # 获取当前价格
+                current_time = self.context['current_dt']
+                freq = self.context['settings']['freq']
+                
+                # 获取价格数据
+                quote_df = self.data_center.get_quotes([security], freq, current_time)
+                if quote_df.empty or security not in quote_df.index:
+                    Log.logger.warning(f"无法获取 {security} 的价格数据")
+                    return None
+                
+                price = quote_df.loc[security, 'close']
+                
+                # A股特殊规则：买入必须是100股的整数倍
+                if self.context['settings']['market'] == 'cn_stock' and side.lower() == 'buy':
+                    volume = int(volume / 100) * 100  # 向下取整到100的倍数
+                    if volume <= 0:
+                        volume = 100  # 至少买入100股
+                
+                # 转换订单类型
+                from finhack.trader.backtest.models.enums import Side
+                order_side = Side.BUY if side.lower() == "buy" else Side.SELL
+                
+                # 调用TradeCenter下单（同步版本）
+                import asyncio
+                try:
+                    # 尝试获取当前事件循环
+                    loop = asyncio.get_event_loop()
+                except RuntimeError:
+                    # 如果没有事件循环，创建一个新的
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                
+                # 调用异步方法
+                order_id = loop.run_until_complete(
+                    self.trade_center.place_order(
+                        adapter_id="default",
+                        symbol=security,
+                        side=order_side,
+                        order_type=order_type,
+                        volume=volume,
+                        price=price
+                    )
+                )
+                
+                Log.logger.info(f"下单成功: {security} {side} {volume:.2f} @ {price:.2f}, 订单ID: {order_id}")
+                return order_id
+                
+            except Exception as e:
+                Log.logger.error(f"下单失败: {e}")
+                return None
+        
+        # 设置全局函数
+        globals()['order_value'] = order_value
+        globals()['order_volume'] = order_volume
+        
+        # 设置全局变量'engine'
+        globals()['engine'] = self
+        
+        # 如果策略有set_order_functions函数，则调用它
+        if hasattr(self, 'strategy') and hasattr(self.strategy, 'set_order_functions'):
+            self.strategy.set_order_functions(order_value, order_volume)
+    
     def _generate_calendar_sync(self, start_date: str, end_date: str) -> List[datetime]:
         """生成交易日历 - 同步版本"""
         # 简单实现：生成所有工作日
-        start_dt = datetime.strptime(start_date, '%Y-%m-%d')
-        end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+        # 尝试多种日期格式
+        date_formats = ['%Y-%m-%d %H:%M:%S', '%Y-%m-%d']
+        
+        start_dt = None
+        end_dt = None
+        
+        # 尝试解析开始日期
+        for fmt in date_formats:
+            try:
+                start_dt = datetime.strptime(start_date, fmt)
+                break
+            except ValueError:
+                continue
+        
+        # 尝试解析结束日期
+        for fmt in date_formats:
+            try:
+                end_dt = datetime.strptime(end_date, fmt)
+                break
+            except ValueError:
+                continue
+        
+        if start_dt is None or end_dt is None:
+            raise ValueError(f"无法解析日期: start_date={start_date}, end_date={end_date}")
         
         calendar = []
         current_dt = start_dt
@@ -693,6 +1024,72 @@ class BacktestEngine:
         # 更新当前时间
         self.context['current_dt'] = event_time
         
+        # 添加调试日志
+        if event.event_type == EventTypeEnum.TRY_MATCH:
+            Log.logger.debug(f"处理撮合事件: {event_time}")
+        
+        # ====== 新增：调用策略注册的事件处理器 ======
+        if hasattr(strategy, 'event_handlers'):
+            # 尝试通过枚举值和枚举对象本身查找处理器
+            handlers = None
+            
+            # 添加详细调试
+            if event.event_type.value == 'DAY_START' or event.event_type.value == 'day_start':
+                print(f"[DEBUG] 处理DAY_START事件", flush=True)
+                print(f"[DEBUG] event.event_type = {event.event_type}, type = {type(event.event_type)}", flush=True)
+                print(f"[DEBUG] event.event_type.value = {event.event_type.value}", flush=True)
+                print(f"[DEBUG] strategy.event_handlers.keys() = {list(strategy.event_handlers.keys())}", flush=True)
+                for k in strategy.event_handlers.keys():
+                    print(f"[DEBUG] key = {k}, value = {k.value}, type = {type(k)}", flush=True)
+                    print(f"[DEBUG] k == event.event_type: {k == event.event_type}", flush=True)
+                    print(f"[DEBUG] k.value == event.event_type.value: {k.value == event.event_type.value}", flush=True)
+            
+            # 方法1：直接用枚举对象查找
+            if event.event_type in strategy.event_handlers:
+                handlers = strategy.event_handlers[event.event_type]
+            else:
+                # 方法2：通过枚举值查找（防止不同模块的枚举对象不相等）
+                for registered_event_type, registered_handlers in strategy.event_handlers.items():
+                    if registered_event_type.value == event.event_type.value:
+                        handlers = registered_handlers
+                        print(f"[DEBUG] 通过枚举值匹配找到处理器: {event.event_type.value}", flush=True)
+                        break
+            
+            if handlers:
+                Log.logger.info(f"[事件分发] 调用策略事件处理器: {event.event_type.value}，共{len(handlers)}个处理器")
+                print(f"[事件分发] 调用策略事件处理器: {event.event_type.value}", flush=True)
+                for handler in handlers:
+                    try:
+                        handler(self.context, event)
+                    except Exception as e:
+                        Log.logger.error(f"调用策略事件处理器失败 ({event.event_type.value}): {e}")
+                        import traceback
+                        traceback.print_exc()
+            else:
+                Log.logger.debug(f"事件 {event.event_type.value} 没有注册处理器")
+        else:
+            Log.logger.warning("策略没有event_handlers属性！")
+        
+        # 调用策略的handle_bar函数（如果有）
+        if hasattr(strategy, 'handle_bar') and event.event_type in [
+            EventTypeEnum.MARKET_BAR_1D, EventTypeEnum.MARKET_BAR_1M, 
+            EventTypeEnum.MARKET_BAR_30M, EventTypeEnum.MARKET_BAR_120M,
+            EventTypeEnum.DAILY_BAR_CLOSED
+        ]:
+            try:
+                # 创建bar_dict
+                bar_dict = {
+                    'datetime': event_time,
+                    'open': 0,  # 这里可以获取实际价格
+                    'high': 0,
+                    'low': 0,
+                    'close': 0,
+                    'volume': 0
+                }
+                strategy.handle_bar(self.context, bar_dict)
+            except Exception as e:
+                Log.logger.error(f"调用策略handle_bar失败: {e}")
+        
         # 根据事件类型直接处理
         if event.event_type == EventTypeEnum.ON_TIME:
             self._handle_on_time_sync(event)
@@ -700,10 +1097,14 @@ class BacktestEngine:
             self._handle_try_match_sync(event)
         elif event.event_type == EventTypeEnum.MARKET_END:
             self._handle_market_end_sync(event)
+        elif event.event_type == EventTypeEnum.DAILY_BAR_CLOSED:
+            self._handle_day_end_sync(event)
         elif event.event_type == EventTypeEnum.DAY_END:
             self._handle_day_end_sync(event)
         elif event.event_type == EventTypeEnum.BEFORE_MARKET:
             self._handle_before_market_sync(event)
+        elif event.event_type == EventTypeEnum.CORPORATE_ACTION:
+            self._handle_corporate_action_sync(event)
         else:
             # 其他市场事件的默认处理
             Log.logger.debug(f"市场事件 {event.event_type.value} 已处理")
@@ -746,8 +1147,8 @@ class BacktestEngine:
         
         # 获取所有需要行情的标的
         symbols = set()
-        for order in self.trade_center.orders.values():
-            if order.status == OrderStatus.NEW:
+        for order_id, order in self.trade_center.orders.items():
+            if hasattr(order, 'status') and order.status == OrderStatus.NEW:
                 symbols.add(order.symbol)
                 
         if not symbols:
@@ -757,9 +1158,14 @@ class BacktestEngine:
         try:
             market_data = {}
             for symbol in symbols:
-                quote_df = self.data_center.get_quotes([symbol], freq, current_time)
+                Log.logger.debug(f"获取 {symbol} 的行情数据，频率: {freq}, 时间: {current_time}")
+                quote_df = self.data_center.get_quotes([symbol], freq=freq, time=current_time, fields=['close'])
+                Log.logger.debug(f"{symbol} 行情数据结果: DataFrame形状={quote_df.shape}, 是否为空={quote_df.empty}")
                 if not quote_df.empty:
                     market_data[symbol] = quote_df.loc[symbol].to_dict()
+                    Log.logger.debug(f"{symbol} 行情数据内容: {market_data[symbol]}")
+                else:
+                    Log.logger.warning(f"无法获取 {symbol} 的行情数据")
                     
             # 执行撮合
             self.trade_center.try_match_orders_sync(market_data)
@@ -777,41 +1183,62 @@ class BacktestEngine:
                 
     def _handle_day_end_sync(self, event):
         """处理日终事件 - 同步版本"""
-        # 更新持仓市值
-        current_time = self.context['current_dt']
-        market = self.context['settings']['market']
-        freq = self.context['settings']['freq']
-        
-        # 获取所有持仓的最新价格
-        if self.trade_center.positions:
+        try:
+            current_time = self.context['current_dt']
+            Log.logger.info(f"处理日终事件: {current_time}")
+            
+            # 更新所有持仓的市值
+            market = self.context['settings']['market']
+            freq = self.context['settings']['freq']
+            
+            # 获取所有持仓的标的
             symbols = list(self.trade_center.positions.keys())
-            try:
-                for symbol in symbols:
-                    quote_df = self.data_center.get_quotes([symbol], freq, current_time)
+            if symbols:
+                try:
+                    # 获取最新价格
+                    quote_df = self.data_center.get_quotes(symbols, freq, current_time)
                     if not quote_df.empty:
-                        latest_price = quote_df.loc[symbol, 'close']
-                        position = self.trade_center.positions[symbol]
-                        position.last_price = latest_price
-                        position.market_value = position.volume * latest_price
-                        position.unrealized_pnl = (latest_price - position.cost_price) * position.volume
-                        
-            except Exception as e:
-                Log.logger.warning(f"更新持仓市值失败: {e}")
+                        for symbol in symbols:
+                            if symbol in quote_df.index:
+                                latest_price = quote_df.loc[symbol, 'close']
+                                position = self.trade_center.positions[symbol]
+                                position.last_price = latest_price
+                                # 更新持仓市值
+                                position.market_value = position.volume * latest_price
+                                position.unrealized_pnl = (latest_price - position.cost_price) * position.volume
+                                Log.logger.debug(f"更新持仓市值: {symbol} 数量:{position.volume} 价格:{latest_price} 市值:{position.market_value}")
+                except Exception as e:
+                    Log.logger.warning(f"更新持仓市值失败: {e}")
                 
-        # 更新账户总资产
-        self.trade_center._update_account_value()
-        
-        # 记录每日净值
-        daily_record = {
-            'date': current_time.strftime('%Y-%m-%d'),
-            'total_assets': self.trade_center.account.total_assets,
-            'cash': self.trade_center.account.cash_available,
-            'positions_value': self.trade_center.account.market_value,
-            'pnl_realized': self.trade_center.account.pnl_realized,
-            'pnl_unrealized': sum(pos.unrealized_pnl for pos in self.trade_center.positions.values())
-        }
-        self.context['logs']['daily_history'].append(daily_record)
-        
+            # 更新账户价值
+            self.trade_center._update_account_value()
+            
+            # 调试信息
+            Log.logger.info(f"调试 - 更新后账户总资产: {self.trade_center.account.total_assets:.2f}")
+            Log.logger.info(f"调试 - 更新后持仓市值: {self.trade_center.account.market_value:.2f}")
+            Log.logger.info(f"调试 - 更新后现金: {self.trade_center.account.cash_available:.2f}")
+            
+            # 记录每日净值
+            daily_record = {
+                'date': current_time.strftime('%Y-%m-%d'),
+                'total_assets': self.trade_center.account.total_assets,
+                'cash': self.trade_center.account.cash_available,
+                'positions_value': self.trade_center.account.market_value,
+                'pnl_realized': self.trade_center.account.pnl_realized,
+                'pnl_unrealized': sum(pos.unrealized_pnl for pos in self.trade_center.positions.values())
+            }
+            self.context['logs']['daily_history'].append(daily_record)
+            
+            Log.logger.info(f"记录每日净值: {daily_record['date']}, 总资产: {daily_record['total_assets']:.2f}")
+            
+            # 打印每日资产情况
+            Log.logger.info(f"日期: {daily_record['date']}, 总资产: {daily_record['total_assets']:.2f}, "
+                           f"现金: {daily_record['cash']:.2f}, 持仓市值: {daily_record['positions_value']:.2f}, "
+                           f"已实现盈亏: {daily_record['pnl_realized']:.2f}, 未实现盈亏: {daily_record['pnl_unrealized']:.2f}")
+            
+        except Exception as e:
+            Log.logger.error(f"处理日终事件失败: {e}")
+            
     def _handle_before_market_sync(self, event):
         """处理盘前事件 - 同步版本"""
         try:
@@ -820,10 +1247,27 @@ class BacktestEngine:
         except Exception as e:
             Log.logger.error(f"处理盘前事件失败: {e}")
             
+    def _handle_corporate_action_sync(self, event):
+        """处理公司行为事件 - 同步版本"""
+        try:
+            # 调用TradeCenter处理公司行为事件
+            self.trade_center.handle_corporate_action(event)
+            
+            # 记录事件
+            Log.logger.info(f"处理公司行为事件: {event.symbol} {event.action_type}")
+            
+        except Exception as e:
+            Log.logger.error(f"处理公司行为事件失败: {e}")
+            
     def _calculate_performance_sync(self):
         """计算绩效指标 - 同步版本"""
+        Log.logger.info("开始计算绩效指标")
+        
         daily_history = self.context['logs']['daily_history']
+        Log.logger.info(f"每日历史记录数量: {len(daily_history)}")
+        
         if len(daily_history) < 2:
+            Log.logger.warning("每日历史记录不足，无法计算绩效指标")
             return
             
         # 计算日收益率
@@ -843,8 +1287,14 @@ class BacktestEngine:
             
             # 年化收益率
             total_return = (daily_history[-1]['total_assets'] / daily_history[0]['total_assets']) - 1
+            # 确保是实数
+            if isinstance(total_return, complex):
+                total_return = total_return.real
             trading_days = len(returns)
             annual_return = (1 + total_return) ** (252 / trading_days) - 1
+            # 确保是实数
+            if isinstance(annual_return, complex):
+                annual_return = annual_return.real
             
             # 年化波动率
             annual_volatility = np.std(returns_array) * np.sqrt(252)
@@ -892,6 +1342,8 @@ class BacktestEngine:
                 asyncio.create_task(self._handle_day_end(event))
             elif event.event_type == EventTypeEnum.TRY_MATCH:
                 asyncio.create_task(self._handle_try_match(event))
+            elif event.event_type == EventTypeEnum.CORPORATE_ACTION:
+                asyncio.create_task(self._handle_corporate_action(event))
             else:
                 # 其他市场事件的默认处理（主要是记录日志）
                 Log.logger.debug(f"市场事件 {event.event_type.value} 已处理")

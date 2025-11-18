@@ -140,17 +140,97 @@ class TradeCenter:
     
     def _load_trading_rules(self):
         """加载交易规则"""
-        # A股交易规则
-        if self.market == "cn_stock":
+        # 根据市场类型加载不同的交易规则
+        market = self.market.lower()
+        
+        if market in ["cn_stock", "cn_fund"]:
+            # A股/基金交易规则
             self.trading_rules = {
                 "min_order_quantity": 100,  # 最小交易单位（股）
                 "tick_size": 0.01,          # 最小价格变动单位
                 "t1_rule": True,            # T+1交易规则
                 "limit_up_down": True,      # 涨跌停限制
+                "price_limit_ratio": 0.10,  # 涨跌停比例（10%）
+                "st_price_limit_ratio": 0.05, # ST股涨跌停比例（5%）
+                "star_price_limit_ratio": 0.20, # 科创板/创业板涨跌停比例（20%）
                 "trading_hours": [
                     ("09:30", "11:30"),
                     ("13:00", "15:00")
-                ]
+                ],
+                "commission_rate": {
+                    "open": 0.0003,  # 买入佣金率
+                    "close": 0.0003, # 卖出佣金率
+                    "min_commission": 5.0  # 最低佣金
+                },
+                "tax_rate": {
+                    "open": 0.0,    # 买入税率
+                    "close": 0.001  # 卖出税率（印花税）
+                }
+            }
+        elif market == "cn_future":
+            # 期货交易规则
+            self.trading_rules = {
+                "min_order_quantity": 1,    # 最小交易单位（手）
+                "tick_size": 0.01,           # 最小价格变动单位
+                "t0_rule": True,             # T+0交易规则
+                "margin_enabled": True,       # 保证金制度
+                "margin_ratio": 0.10,        # 保证金比例
+                "trading_hours": [
+                    ("09:00", "10:15"),
+                    ("10:30", "11:30"),
+                    ("13:30", "15:00"),
+                    ("21:00", "02:30")  # 夜盘
+                ],
+                "commission_rate": {
+                    "open": 0.0001,      # 买入佣金率
+                    "close": 0.0001,     # 卖出佣金率
+                    "close_today": 0.0001, # 平今佣金率
+                    "min_commission": 5.0   # 最低佣金
+                },
+                "tax_rate": {
+                    "open": 0.0,        # 买入税率
+                    "close": 0.0        # 卖出税率
+                }
+            }
+        elif market == "global_cryptospot":
+            # 加密货币现货交易规则
+            self.trading_rules = {
+                "min_order_quantity": 0.00000001,  # 最小交易单位
+                "tick_size": 0.00000001,           # 最小价格变动单位
+                "t0_rule": True,                  # T+0交易规则
+                "trading_24_7": True,             # 24小时交易
+                "trading_hours": [
+                    ("00:00", "23:59:59")
+                ],
+                "commission_rate": {
+                    "open": 0.001,       # 买入佣金率
+                    "close": 0.001,      # 卖出佣金率
+                    "min_commission": 0.0  # 无最低佣金
+                },
+                "tax_rate": {
+                    "open": 0.0,         # 买入税率
+                    "close": 0.0         # 卖出税率
+                }
+            }
+        else:
+            # 默认交易规则
+            self.trading_rules = {
+                "min_order_quantity": 1,
+                "tick_size": 0.01,
+                "t1_rule": False,
+                "limit_up_down": False,
+                "trading_hours": [
+                    ("09:30", "15:00")
+                ],
+                "commission_rate": {
+                    "open": 0.0003,
+                    "close": 0.0003,
+                    "min_commission": 5.0
+                },
+                "tax_rate": {
+                    "open": 0.0,
+                    "close": 0.0
+                }
             }
     
     def get_account(self, adapter_id: str = "default") -> Optional[Dict[str, Any]]:
@@ -251,7 +331,7 @@ class TradeCenter:
         return list(self.trades.values())
     
     def place_order(self, adapter_id: str = "default", symbol: str = "", 
-                   side: str = "buy", quantity: float = 0, 
+                   side: str = "buy", volume: float = 0, 
                    price: Optional[float] = None, 
                    order_type: str = "market", **kwargs) -> Optional[str]:
         """
@@ -261,7 +341,7 @@ class TradeCenter:
             adapter_id: 适配器ID
             symbol: 股票代码
             side: 买卖方向 (buy/sell)
-            quantity: 数量
+            volume: 数量
             price: 价格（None表示市价单）
             order_type: 订单类型 (market/limit)
             **kwargs: 其他UniTrader兼容参数
@@ -271,9 +351,9 @@ class TradeCenter:
         """
         try:
             # 参数验证
-            if not symbol or quantity <= 0:
+            if not symbol or volume <= 0:
                 if self._context:
-                    self._context.logger.error(f"下单参数错误: symbol={symbol}, quantity={quantity}")
+                    self._context.logger.error(f"下单参数错误: symbol={symbol}, volume={volume}")
                 return None
             
             # 转换订单方向
@@ -287,7 +367,7 @@ class TradeCenter:
                 order_id=order_id,
                 symbol=symbol,
                 side=order_side,
-                quantity=quantity,
+                quantity=volume,  # Order类使用quantity字段
                 price=price,
                 order_type=order_type
             )
@@ -295,7 +375,7 @@ class TradeCenter:
             # 验证订单
             if not self._validate_order(order):
                 if self._context:
-                    self._context.logger.error(f"订单验证失败: {symbol} {side} {quantity}")
+                    self._context.logger.error(f"订单验证失败: {symbol} {side} {volume}")
                 return None
             
             # 提交订单
@@ -308,22 +388,19 @@ class TradeCenter:
                     "order_id": order_id,
                     "symbol": symbol,
                     "side": side,
-                    "quantity": quantity,
+                    "volume": volume,
                     "price": price,
                     "order_type": order_type,
-                    "timestamp": datetime.now()
+                    "status": "submitted",
+                    "created_time": datetime.now().isoformat()
                 }
-                self._context.logs['order_list'].append(order_log)
-                self._context.logger.info(f"订单提交: {symbol} {side} {quantity}@{price or '市价'} ID:{order_id}")
-            
-            # 尝试立即成交（简化的撮合逻辑）
-            self._try_fill_order(order)
+                self._context.logger.info(f"订单提交成功: {order_log}")
             
             return order_id
             
         except Exception as e:
             if self._context:
-                self._context.logger.error(f"下单失败: {str(e)}")
+                self._context.logger.error(f"下单失败: {e}")
             return None
     
     def cancel_order(self, adapter_id: str = "default", order_id: str = "") -> bool:
@@ -394,16 +471,28 @@ class TradeCenter:
                     self._context.logger.error(f"订单数量低于最小交易单位: {order.quantity} < {min_quantity}")
                 return False
             
+            # 检查交易数量是否为最小单位的整数倍
+            if order.quantity % min_quantity != 0:
+                if self._context:
+                    self._context.logger.error(f"订单数量必须是{min_quantity}的整数倍: {order.quantity}")
+                return False
+            
             # 检查股票代码格式
             if not self._validate_symbol(order.symbol):
                 if self._context:
                     self._context.logger.error(f"无效的股票代码: {order.symbol}")
                 return False
             
+            # 检查限价单价格
+            if order.order_type == "limit" and (not order.price or order.price <= 0):
+                if self._context:
+                    self._context.logger.error("限价单必须指定有效价格")
+                return False
+            
             # 检查资金是否足够（买入时）
             if order.side == OrderSide.BUY:
                 estimated_cost = self._estimate_order_cost(order)
-                available_cash = self._context.account.available_cash
+                available_cash = self._context.account.available_cash if self._context else 0
                 if estimated_cost > available_cash:
                     if self._context:
                         self._context.logger.error(f"资金不足: 需要{estimated_cost:.2f}, 可用{available_cash:.2f}")
@@ -447,19 +536,23 @@ class TradeCenter:
             return 0.0
         
         # 获取费率配置
+        commission_rate = 0.0
+        tax_rate = 0.0
+        min_commission = 0.0
+        
         if side == OrderSide.BUY:
-            commission_rate = self._context.account.open_commission
-            tax_rate = self._context.account.open_tax
+            commission_rate = self.trading_rules["commission_rate"]["open"]
+            tax_rate = self.trading_rules["tax_rate"]["open"]
         else:
-            commission_rate = self._context.account.close_commission
-            tax_rate = self._context.account.close_tax
+            commission_rate = self.trading_rules["commission_rate"]["close"]
+            tax_rate = self.trading_rules["tax_rate"]["close"]
         
         # 计算手续费
         commission = trade_value * commission_rate
         tax = trade_value * tax_rate
         
-        # 最小手续费
-        min_commission = self._context.account.min_commission
+        # 最低手续费
+        min_commission = self.trading_rules["commission_rate"].get("min_commission", 0.0)
         if commission < min_commission:
             commission = min_commission
         
@@ -554,11 +647,28 @@ class TradeCenter:
         if not order_price:
             return True
         
-        # 简化的涨跌停检查（A股通常是±10%）
-        limit_ratio = 0.10
+        # 如果没有启用涨跌停限制，直接返回True
+        if not self.trading_rules.get("limit_up_down", False):
+            return True
+        
+        # 获取涨跌停比例
+        limit_ratio = self.trading_rules.get("price_limit_ratio", 0.10)
+        
+        # 根据股票代码判断是否为特殊股票
+        if symbol.startswith('688') or symbol.startswith('300'):  # 科创板或创业板
+            limit_ratio = self.trading_rules.get("star_price_limit_ratio", 0.20)
+        elif 'ST' in symbol or 'st' in symbol:  # ST股票
+            limit_ratio = self.trading_rules.get("st_price_limit_ratio", 0.05)
+        
+        # 计算涨跌停价格
         price_upper_limit = current_price * (1 + limit_ratio)
         price_lower_limit = current_price * (1 - limit_ratio)
         
+        # 价格精度处理（保留2位小数）
+        price_upper_limit = round(price_upper_limit, 2)
+        price_lower_limit = round(price_lower_limit, 2)
+        
+        # 检查订单价格是否在涨跌停范围内
         return price_lower_limit <= order_price <= price_upper_limit
     
     def _calculate_slippage(self, order: Order) -> float:
@@ -566,16 +676,47 @@ class TradeCenter:
         if not self._context:
             return 0.0
         
-        # 根据订单大小和市场流动性计算滑点
-        base_slippage = self._context.trade_config.get('slippage', 0.001)
+        # 获取基础滑点配置
+        base_slippage = self._context.trade_config.get('slippage', 0.001) if hasattr(self._context, 'trade_config') else 0.001
         
-        # 大额订单增加滑点
+        # 根据市场类型调整滑点
+        market = self.market.lower()
+        if market in ["cn_stock", "cn_fund"]:
+            # A股/基金滑点相对较小
+            market_adjustment = 1.0
+        elif market == "cn_future":
+            # 期货滑点中等
+            market_adjustment = 1.2
+        elif market == "global_cryptospot":
+            # 加密货币滑点较大
+            market_adjustment = 1.5
+        else:
+            market_adjustment = 1.0
+        
+        # 根据订单大小调整滑点
+        volume_adjustment = 1.0
         if order.quantity > 10000:
-            base_slippage *= 1.5
+            volume_adjustment = 1.2  # 大额订单增加20%滑点
         elif order.quantity > 50000:
-            base_slippage *= 2.0
+            volume_adjustment = 1.5  # 超大额订单增加50%滑点
+        elif order.quantity > 100000:
+            volume_adjustment = 2.0  # 巨额订单增加100%滑点
         
-        return base_slippage
+        # 根据订单类型调整滑点
+        type_adjustment = 1.0
+        if order.order_type == "market":
+            type_adjustment = 1.5  # 市价单滑点更大
+        
+        # 根据当前市场波动性调整滑点（简化处理）
+        volatility_adjustment = 1.0
+        
+        # 计算最终滑点
+        final_slippage = base_slippage * market_adjustment * volume_adjustment * type_adjustment * volatility_adjustment
+        
+        # 限制滑点范围（0.01%到5%）
+        final_slippage = max(0.0001, min(0.05, final_slippage))
+        
+        return final_slippage
     
     def _get_max_single_fill(self, order: Order, current_price: float) -> float:
         """获取单次最大成交量"""
@@ -619,14 +760,28 @@ class TradeCenter:
         if not symbol:
             return False
         
-        # 简单的A股代码验证
-        if self.market == "cn_stock":
+        market = self.market.lower()
+        
+        # A股/基金代码验证
+        if market in ["cn_stock", "cn_fund"]:
             if len(symbol) != 9 or '.' not in symbol:
                 return False
             code, exchange = symbol.split('.')
             if len(code) != 6 or not code.isdigit():
                 return False
             if exchange not in ['SH', 'SZ']:
+                return False
+        
+        # 期货代码验证
+        elif market == "cn_future":
+            # 期货代码格式较复杂，这里简化处理
+            if len(symbol) < 5:
+                return False
+        
+        # 加密货币代码验证
+        elif market == "global_cryptospot":
+            # 加密货币代码通常是字母组合，如BTC, ETH等
+            if not symbol.replace('_', '').replace('-', '').isalnum():
                 return False
         
         return True
@@ -711,12 +866,18 @@ class TradeCenter:
                 position.quantity = quantity
                 position.avg_cost = price + commission / quantity
             
-            # T+1规则：当日买入的股票不能卖出
+            # T+1规则处理
             if self.trading_rules.get("t1_rule", False):
-                # 更新可用数量（T+1规则）
+                # 当日买入的股票不能卖出
                 position.available_quantity = position.quantity - quantity
                 position.frozen_quantity = quantity
-                self._schedule_t1_unlock(symbol, quantity)
+                # 记录买入日期，用于T+1解锁
+                if not hasattr(position, 'buy_dates'):
+                    position.buy_dates = []
+                position.buy_dates.append({
+                    'date': self._context.current_dt.date() if self._context and self._context.current_dt else datetime.now().date(),
+                    'quantity': quantity
+                })
             else:
                 position.available_quantity = position.quantity
         
@@ -724,7 +885,37 @@ class TradeCenter:
             # 卖出：减少持仓
             if position.quantity >= quantity:
                 position.quantity -= quantity
-                position.available_quantity = max(0, position.available_quantity - quantity)
+                
+                # T+1规则处理：检查可用数量
+                if self.trading_rules.get("t1_rule", False):
+                    # 只有非冻结的股票可以卖出
+                    available_before = position.available_quantity
+                    position.available_quantity = max(0, position.available_quantity - quantity)
+                    
+                    # 更新冻结数量
+                    position.frozen_quantity = position.quantity - position.available_quantity
+                    
+                    # 如果卖出了今日买入的股票，需要更新buy_dates记录
+                    if hasattr(position, 'buy_dates'):
+                        remaining_sell = quantity
+                        updated_buy_dates = []
+                        for buy_record in position.buy_dates:
+                            if remaining_sell <= 0:
+                                updated_buy_dates.append(buy_record)
+                                continue
+                            
+                            if buy_record['quantity'] <= remaining_sell:
+                                remaining_sell -= buy_record['quantity']
+                                # 完全卖出了该批买入的股票，不保留记录
+                            else:
+                                # 部分卖出了该批买入的股票
+                                buy_record['quantity'] -= remaining_sell
+                                updated_buy_dates.append(buy_record)
+                                remaining_sell = 0
+                        
+                        position.buy_dates = updated_buy_dates
+                else:
+                    position.available_quantity = max(0, position.available_quantity - quantity)
                 
                 # 计算已实现盈亏
                 realized_pnl = (price - position.avg_cost) * quantity - commission
@@ -959,12 +1150,12 @@ class TradeCenter:
         context.logger.info("盘后清算完成")
 
     # 增加一些便捷方法
-    def submit_order(self, symbol: str, side: str, quantity: float, 
+    def submit_order(self, symbol: str, side: str, volume: float, 
                     price: Optional[float] = None, order_type: str = "market",
                     **kwargs) -> Optional[str]:
         """提交订单 - 兼容旧接口"""
         return self.place_order(
-            symbol=symbol, side=side, quantity=quantity, 
+            symbol=symbol, side=side, volume=volume, 
             price=price, order_type=order_type, **kwargs
         )
     
@@ -1007,12 +1198,39 @@ class TradeCenter:
 
     def _update_t1_available_quantity(self):
         """更新T+1规则的可用数量"""
+        if not self.trading_rules.get("t1_rule", False):
+            return
+        
+        current_date = self._context.current_dt.date() if self._context and self._context.current_dt else datetime.now().date()
+        
         for symbol, position in self.positions.items():
-            # 简化实现：假设隔夜后所有冻结的股票都变为可用
-            if position.frozen_quantity > 0:
-                position.available_quantity += position.frozen_quantity
-                position.frozen_quantity = 0
+            if not hasattr(position, 'buy_dates') or not position.buy_dates:
+                continue
+            
+            # 检查是否有需要解冻的股票
+            unlock_quantity = 0
+            updated_buy_dates = []
+            
+            for buy_record in position.buy_dates:
+                # 检查是否已经超过T+1限制（即买入日期早于当前日期）
+                if buy_record['date'] < current_date:
+                    # 可以解冻
+                    unlock_quantity += buy_record['quantity']
+                else:
+                    # 仍需冻结
+                    updated_buy_dates.append(buy_record)
+            
+            # 更新buy_dates记录
+            position.buy_dates = updated_buy_dates
+            
+            # 解冻股票
+            if unlock_quantity > 0:
+                position.available_quantity += unlock_quantity
+                position.frozen_quantity = max(0, position.frozen_quantity - unlock_quantity)
                 position.enable_amount = position.available_quantity
+                
+                if self._context:
+                    self._context.logger.debug(f"T+1解冻: {symbol} 解冻数量 {unlock_quantity}")
     
     def _process_pending_orders(self):
         """处理待处理的订单"""
@@ -1935,3 +2153,231 @@ class TradeCenter:
             if self._context:
                 self._context.logger.error(f"生成绩效汇总失败: {e}")
             return {} 
+
+    def handle_corporate_action(self, event):
+        """处理公司行为事件（分红、送股等）"""
+        try:
+            if not hasattr(event, 'action_type') or not hasattr(event, 'symbol'):
+                return
+            
+            action_type = event.action_type.lower()
+            symbol = event.symbol
+            
+            # 获取当前持仓
+            position = self.positions.get(symbol)
+            if not position or position.volume <= 0:
+                return
+            
+            # 处理不同类型的公司行为
+            if action_type == 'dividend':
+                self._handle_dividend(event, position)
+            elif action_type == 'bonus':
+                self._handle_bonus_shares(event, position)
+            elif action_type == 'split':
+                self._handle_stock_split(event, position)
+            elif action_type == 'rights':
+                self._handle_rights_issue(event, position)
+            
+            # 更新持仓信息
+            self._update_position_after_corporate_action(position, event)
+            
+            if self._context:
+                self._context.logger.info(f"处理公司行为事件: {symbol} {action_type}")
+        
+        except Exception as e:
+            if self._context:
+                self._context.logger.error(f"处理公司行为事件失败: {e}")
+    
+    def _handle_dividend(self, event, position):
+        """处理分红事件"""
+        try:
+            if not hasattr(event, 'dividend_per_share'):
+                return
+            
+            dividend_per_share = event.dividend_per_share
+            dividend_amount = position.volume * dividend_per_share
+            
+            # 计算分红税（A股分红需要缴税）
+            tax_rate = 0.10  # A股分红税率10%
+            if hasattr(event, 'tax_rate'):
+                tax_rate = event.tax_rate
+            
+            tax_amount = dividend_amount * tax_rate
+            net_dividend = dividend_amount - tax_amount
+            
+            # 更新账户现金
+            if self._context and hasattr(self._context, 'account'):
+                self._context.account.cash += net_dividend
+                self._context.account.cash_available += net_dividend
+                
+                # 记录已实现收益
+                self._context.account.realized_pnl += net_dividend
+            
+            if self._context:
+                self._context.logger.info(f"分红处理: {position.symbol} 每股{dividend_per_share:.4f}, "
+                                       f"税后{net_dividend:.2f}, 税率{tax_rate:.2%}")
+        
+        except Exception as e:
+            if self._context:
+                self._context.logger.error(f"处理分红事件失败: {e}")
+    
+    def _handle_bonus_shares(self, event, position):
+        """处理送股事件"""
+        try:
+            if not hasattr(event, 'bonus_ratio'):
+                return
+            
+            bonus_ratio = event.bonus_ratio  # 送股比例，如0.1表示每10股送1股
+            bonus_shares = position.volume * bonus_ratio
+            
+            # 更新持仓数量
+            position.volume += bonus_shares
+            position.available_quantity += bonus_shares
+            
+            # 调整成本价
+            if position.volume > 0:
+                position.avg_cost = position.avg_cost * (position.volume - bonus_shares) / position.volume
+            
+            if self._context:
+                self._context.logger.info(f"送股处理: {position.symbol} 送股比例{bonus_ratio:.2f}, "
+                                       f"送股数量{bonus_shares:.2f}, 新持仓{position.volume:.2f}")
+        
+        except Exception as e:
+            if self._context:
+                self._context.logger.error(f"处理送股事件失败: {e}")
+    
+    def _handle_stock_split(self, event, position):
+        """处理拆股事件"""
+        try:
+            if not hasattr(event, 'split_ratio'):
+                return
+            
+            split_ratio = event.split_ratio  # 拆股比例，如2表示1拆2
+            old_volume = position.volume
+            old_cost = position.avg_cost
+            
+            # 更新持仓数量和成本价
+            position.volume *= split_ratio
+            position.available_quantity *= split_ratio
+            position.avg_cost /= split_ratio
+            
+            if self._context:
+                self._context.logger.info(f"拆股处理: {position.symbol} 拆股比例{split_ratio:.2f}, "
+                                       f"原持仓{old_volume:.2f}@{old_cost:.2f}, "
+                                       f"新持仓{position.volume:.2f}@{position.avg_cost:.2f}")
+        
+        except Exception as e:
+            if self._context:
+                self._context.logger.error(f"处理拆股事件失败: {e}")
+    
+    def _handle_rights_issue(self, event, position):
+        """处理配股事件"""
+        try:
+            if not hasattr(event, 'rights_ratio') or not hasattr(event, 'rights_price'):
+                return
+            
+            rights_ratio = event.rights_ratio  # 配股比例
+            rights_price = event.rights_price  # 配股价格
+            
+            # 计算可配股数量
+            rights_shares = position.volume * rights_ratio
+            
+            # 检查是否有足够资金认购
+            total_cost = rights_shares * rights_price
+            if self._context and hasattr(self._context, 'account'):
+                if self._context.account.cash_available < total_cost:
+                    if self._context:
+                        self._context.logger.warning(f"资金不足，无法认购配股: {position.symbol}")
+                    return
+                
+                # 扣除资金
+                self._context.account.cash -= total_cost
+                self._context.account.cash_available -= total_cost
+                
+                # 更新持仓
+                old_volume = position.volume
+                old_cost_basis = position.avg_cost * position.volume
+                
+                position.volume += rights_shares
+                position.available_quantity += rights_shares
+                
+                # 重新计算平均成本
+                position.avg_cost = (old_cost_basis + total_cost) / position.volume
+                
+                if self._context:
+                    self._context.logger.info(f"配股处理: {position.symbol} 配股比例{rights_ratio:.2f}, "
+                                           f"配股价格{rights_price:.2f}, 配股数量{rights_shares:.2f}, "
+                                           f"原持仓{old_volume:.2f}, 新持仓{position.volume:.2f}@{position.avg_cost:.2f}")
+        
+        except Exception as e:
+            if self._context:
+                self._context.logger.error(f"处理配股事件失败: {e}")
+    
+    def _update_position_after_corporate_action(self, position, event):
+        """公司行为后更新持仓信息"""
+        try:
+            # 更新市值和未实现盈亏
+            current_price = self.get_price(symbol=position.symbol)
+            if current_price and position.volume > 0:
+                position.last_price = current_price
+                position.market_value = position.volume * current_price
+                position.unrealized_pnl = (current_price - position.avg_cost) * position.volume
+            
+            # 更新时间戳
+            position.updated_at = datetime.now()
+            
+            # 同步兼容字段
+            position.amount = position.volume
+            position.enable_amount = position.available_quantity
+            position.last_sale_price = position.last_price
+            position.cost_basis = position.avg_cost
+            position.total_value = position.market_value
+            position.total_cost = position.avg_cost * position.volume
+        
+        except Exception as e:
+            if self._context:
+                self._context.logger.error(f"更新持仓信息失败: {e}")
+    
+    def process_corporate_actions(self, current_date):
+        """处理指定日期的所有公司行为事件"""
+        try:
+            # 从数据接口获取公司行为数据
+            if not self._context or not hasattr(self._context, 'data_center'):
+                return
+            
+            data_center = self._context.data_center
+            
+            # 获取当前日期的所有公司行为事件
+            corporate_actions = data_center.get_corporate_actions(
+                date=current_date,
+                market=self.market
+            )
+            
+            if not corporate_actions:
+                return
+            
+            # 处理每个公司行为事件
+            for action in corporate_actions:
+                # 创建事件对象
+                event = type('CorporateActionEvent', (), {
+                    'event_type': type('EventType', (), {'value': 'CORPORATE_ACTION'})(),
+                    'event_time': datetime.combine(current_date, datetime.min.time()),
+                    'symbol': action.get('symbol', ''),
+                    'action_type': action.get('action_type', ''),
+                    'dividend_per_share': action.get('dividend_per_share', 0),
+                    'tax_rate': action.get('tax_rate', 0.10),
+                    'bonus_ratio': action.get('bonus_ratio', 0),
+                    'split_ratio': action.get('split_ratio', 1),
+                    'rights_ratio': action.get('rights_ratio', 0),
+                    'rights_price': action.get('rights_price', 0)
+                })()
+                
+                # 处理公司行为事件
+                self.handle_corporate_action(event)
+            
+            if self._context and corporate_actions:
+                self._context.logger.info(f"处理了{len(corporate_actions)}个公司行为事件")
+        
+        except Exception as e:
+            if self._context:
+                self._context.logger.error(f"处理公司行为事件失败: {e}")

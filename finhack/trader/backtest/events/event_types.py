@@ -32,6 +32,12 @@ class EventTypeEnum(Enum):
     DAILY_BAR_CLOSED = "DAILY_BAR_CLOSED"
     AFTER_MARKET = "AFTER_MARKET"
     
+    # K线事件
+    MARKET_BAR_1D = "MARKET_BAR_1D"
+    MARKET_BAR_1M = "MARKET_BAR_1M"
+    MARKET_BAR_30M = "MARKET_BAR_30M"
+    MARKET_BAR_120M = "MARKET_BAR_120M"
+    
     # 期货特有事件
     DAY_SESSION_START = "DAY_SESSION_START"
     DAY_SESSION_END = "DAY_SESSION_END"
@@ -49,6 +55,9 @@ class EventTypeEnum(Enum):
     ORDER_REJECT = "ORDER_REJECT"
     ORDER_FILL = "ORDER_FILL"
     TRY_MATCH = "TRY_MATCH"
+    
+    # 公司行为事件
+    CORPORATE_ACTION = "CORPORATE_ACTION"
 
 
 class EventPriorityEnum(Enum):

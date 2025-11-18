@@ -1,7 +1,7 @@
 """
-中国股票市场适配器
+全球加密货币现货市场适配器
 
-实现中国A股市场的交易规则和事件生成，支持多频次
+实现全球加密货币现货市场的交易规则和事件生成，支持多频次
 """
 
 from typing import List, Dict, Any, Tuple
@@ -14,81 +14,117 @@ from ...events.event_types import BaseEvent, MarketEvent, EventTypeEnum
 logger = logging.getLogger(__name__)
 
 
-class CnStockMarketAdapter(BaseMarket):
-    """中国股票市场适配器
-    
-    支持A股、基金、可转债等的交易规则
-    """
+class GlobalCryptoSpotAdapter(BaseMarket):
+    """全球加密货币现货市场适配器"""
     
     def __init__(self, config: Dict[str, Any] = None):
-        """初始化中国股票市场适配器
+        self.market_name = 'global_cryptospot'
         
-        Args:
-            config: 市场配置，如果为空则加载默认配置
-        """
-        # 如果没有提供配置，使用默认配置
-        if not config:
-            config = self._get_default_config()
-            
-        super().__init__('cn_stock', config)
-        
-        # 中国股票市场特有配置
-        self.t_plus_one = config.get('t_plus_one', True)  # T+1制度
-        self.price_limit_enabled = config.get('price_limit_enabled', True)  # 涨跌停限制
-        self.daily_price_limit = config.get('daily_price_limit', 0.10)  # 10%涨跌停
-        
-        logger.info(f"中国股票市场适配器初始化完成，支持频率: {self.supported_frequencies}")
-    
-    def _get_default_config(self) -> Dict[str, Any]:
-        """获取中国股票市场默认配置"""
-        return {
-            'market_name': 'cn_stock',
-            'supported_frequencies': ['1d', '1m', '30m', '120m'],
-            'timezone': 'Asia/Shanghai',
-            'currency': 'CNY',
-            'trading_schedule': {
+        # 加密货币市场配置 - 24/7交易
+        self.config = {
+            'market': 'global_cryptospot',
+            'trading_hours': {
                 '1d': {
-                    'morning_start': '09:30',
-                    'morning_end': '11:30',
-                    'afternoon_start': '13:00',
-                    'afternoon_end': '15:00'
+                    'morning_start': '00:00',
+                    'morning_end': '23:59',
+                    'afternoon_start': '00:00',
+                    'afternoon_end': '23:59'
                 },
                 '1m': {
-                    'morning_start': '09:30',
-                    'morning_end': '11:30',
-                    'afternoon_start': '13:00',
-                    'afternoon_end': '15:00'
+                    'morning_start': '00:00',
+                    'morning_end': '23:59',
+                    'afternoon_start': '00:00',
+                    'afternoon_end': '23:59'
                 },
                 '30m': {
-                    'morning_start': '09:30',
-                    'morning_end': '11:30',
-                    'afternoon_start': '13:00',
-                    'afternoon_end': '15:00'
+                    'morning_start': '00:00',
+                    'morning_end': '23:59',
+                    'afternoon_start': '00:00',
+                    'afternoon_end': '23:59'
                 },
                 '120m': {
-                    'morning_start': '09:30',
-                    'morning_end': '11:30',
-                    'afternoon_start': '13:00',
-                    'afternoon_end': '15:00'
+                    'morning_start': '00:00',
+                    'morning_end': '23:59',
+                    'afternoon_start': '00:00',
+                    'afternoon_end': '23:59'
                 }
             },
             'trading_rules': {
                 'commission': {
-                    'stock': {
-                        'open_commission': 0.0003,
-                        'close_commission': 0.0003,
+                    'crypto': {
+                        'open_commission': 0.001,  # 0.1% 开仓手续费
+                        'close_commission': 0.001,  # 0.1% 平仓手续费
                         'open_tax': 0.0,
-                        'close_tax': 0.001,  # 印花税
-                        'min_commission': 5.0
+                        'close_tax': 0.0,  # 加密货币无印花税
+                        'min_commission': 0.0
                     }
                 },
                 'slippage': {
                     'slip_type': 'pricerelated',
-                    'slip_value': 0.001
+                    'slip_value': 0.0005  # 0.05% 滑点
                 },
                 'limits': {
-                    'lot_size': 100,  # 最小交易单位
-                    'min_order_volume': 100,  # 最小下单数量
+                    'lot_size': 0.00000001,  # 最小交易单位
+                    'min_order_volume': 0.00000001,  # 最小下单数量
+                    'max_order_volume': 1000000  # 最大下单数量
+                }
+            }
+        }
+        
+        super().__init__(self.market_name, self.config)
+        
+        logger.info(f"全球加密货币现货市场适配器初始化完成，支持频率: {self.supported_frequencies}")
+    
+    def _get_default_config(self) -> Dict[str, Any]:
+        """获取全球加密货币现货市场默认配置"""
+        return {
+            'market_name': 'global_cryptospot',
+            'supported_frequencies': ['1d', '1m', '30m', '120m'],
+            'timezone': 'UTC',
+            'currency': 'USD',
+            'trading_schedule': {
+                '1d': {
+                    'morning_start': '00:00',
+                    'morning_end': '23:59',
+                    'afternoon_start': '00:00',
+                    'afternoon_end': '23:59'
+                },
+                '1m': {
+                    'morning_start': '00:00',
+                    'morning_end': '23:59',
+                    'afternoon_start': '00:00',
+                    'afternoon_end': '23:59'
+                },
+                '30m': {
+                    'morning_start': '00:00',
+                    'morning_end': '23:59',
+                    'afternoon_start': '00:00',
+                    'afternoon_end': '23:59'
+                },
+                '120m': {
+                    'morning_start': '00:00',
+                    'morning_end': '23:59',
+                    'afternoon_start': '00:00',
+                    'afternoon_end': '23:59'
+                }
+            },
+            'trading_rules': {
+                'commission': {
+                    'crypto': {
+                        'open_commission': 0.001,  # 0.1% 开仓手续费
+                        'close_commission': 0.001,  # 0.1% 平仓手续费
+                        'open_tax': 0.0,
+                        'close_tax': 0.0,  # 加密货币无印花税
+                        'min_commission': 0.0
+                    }
+                },
+                'slippage': {
+                    'slip_type': 'pricerelated',
+                    'slip_value': 0.0005  # 0.05% 滑点
+                },
+                'limits': {
+                    'lot_size': 0.00000001,  # 最小交易单位
+                    'min_order_volume': 0.00000001,  # 最小下单数量
                     'max_order_volume': 1000000  # 最大下单数量
                 }
             }
@@ -111,7 +147,7 @@ class CnStockMarketAdapter(BaseMarket):
             # 交易前事件
             events.append(MarketEvent(
                 event_type=EventTypeEnum.BEFORE_MARKET,
-                event_time=datetime.combine(trade_date, time(9, 0)),
+                event_time=datetime.combine(trade_date, time(0, 0)), # 假设UTC 00:00 对应本地 08:00
                 market=self.market_name,
                 frequency=frequency,
                 event_description="交易前准备"
@@ -120,7 +156,7 @@ class CnStockMarketAdapter(BaseMarket):
             # 开盘事件
             events.append(MarketEvent(
                 event_type=EventTypeEnum.MARKET_START,
-                event_time=datetime.combine(trade_date, time(9, 30)),
+                event_time=datetime.combine(trade_date, time(0, 0)), # 假设UTC 00:00 对应本地 08:00
                 market=self.market_name,
                 frequency=frequency,
                 event_description="开盘"
@@ -129,7 +165,7 @@ class CnStockMarketAdapter(BaseMarket):
             # 撮合事件
             events.append(MarketEvent(
                 event_type=EventTypeEnum.TRY_MATCH,
-                event_time=datetime.combine(trade_date, time(9, 30)),
+                event_time=datetime.combine(trade_date, time(0, 0)), # 假设UTC 00:00 对应本地 08:00
                 market=self.market_name,
                 frequency=frequency,
                 event_description="日级撮合"
@@ -138,7 +174,7 @@ class CnStockMarketAdapter(BaseMarket):
             # 收盘事件
             events.append(MarketEvent(
                 event_type=EventTypeEnum.MARKET_END,
-                event_time=datetime.combine(trade_date, time(15, 0)),
+                event_time=datetime.combine(trade_date, time(23, 59)), # 假设UTC 23:59 对应本地 07:59
                 market=self.market_name,
                 frequency=frequency,
                 event_description="收盘"
@@ -147,7 +183,7 @@ class CnStockMarketAdapter(BaseMarket):
             # 交易后事件
             events.append(MarketEvent(
                 event_type=EventTypeEnum.AFTER_MARKET,
-                event_time=datetime.combine(trade_date, time(15, 30)),
+                event_time=datetime.combine(trade_date, time(23, 59)), # 假设UTC 23:59 对应本地 07:59
                 market=self.market_name,
                 frequency=frequency,
                 event_description="交易后处理"
@@ -156,7 +192,7 @@ class CnStockMarketAdapter(BaseMarket):
             # 日K线事件
             events.append(MarketEvent(
                 event_type=EventTypeEnum.DAILY_BAR_CLOSED,
-                event_time=datetime.combine(trade_date, time(15, 0)),
+                event_time=datetime.combine(trade_date, time(23, 59)), # 假设UTC 23:59 对应本地 07:59
                 market=self.market_name,
                 frequency=frequency,
                 event_description="日K线生成"
@@ -167,7 +203,7 @@ class CnStockMarketAdapter(BaseMarket):
             # 日开始事件 - 在交易前触发，供策略初始化和调仓
             events.append(MarketEvent(
                 event_type=EventTypeEnum.DAY_START,
-                event_time=datetime.combine(trade_date, time(9, 0)),
+                event_time=datetime.combine(trade_date, time(0, 0)), # 假设UTC 00:00 对应本地 08:00
                 market=self.market_name,
                 frequency=frequency,
                 event_description="日开始"
@@ -176,7 +212,7 @@ class CnStockMarketAdapter(BaseMarket):
             # 交易前事件
             events.append(MarketEvent(
                 event_type=EventTypeEnum.BEFORE_MARKET,
-                event_time=datetime.combine(trade_date, time(9, 0)),
+                event_time=datetime.combine(trade_date, time(0, 0)), # 假设UTC 00:00 对应本地 08:00
                 market=self.market_name,
                 frequency=frequency,
                 event_description="交易前准备"
@@ -185,7 +221,7 @@ class CnStockMarketAdapter(BaseMarket):
             # 开盘事件
             events.append(MarketEvent(
                 event_type=EventTypeEnum.MARKET_START,
-                event_time=datetime.combine(trade_date, time(9, 30)),
+                event_time=datetime.combine(trade_date, time(0, 0)), # 假设UTC 00:00 对应本地 08:00
                 market=self.market_name,
                 frequency=frequency,
                 event_description="开盘"
@@ -195,8 +231,8 @@ class CnStockMarketAdapter(BaseMarket):
             interval_minutes = 1 if frequency == '1m' else (30 if frequency == '30m' else 120)
             
             # 上午交易时段
-            morning_start = datetime.combine(trade_date, time(9, 30))
-            morning_end = datetime.combine(trade_date, time(11, 30))
+            morning_start = datetime.combine(trade_date, time(0, 0)) # 假设UTC 00:00 对应本地 08:00
+            morning_end = datetime.combine(trade_date, time(23, 59)) # 假设UTC 23:59 对应本地 07:59
             current_time = morning_start
             
             while current_time <= morning_end:
@@ -237,8 +273,8 @@ class CnStockMarketAdapter(BaseMarket):
                 current_time += timedelta(minutes=interval_minutes)
             
             # 下午交易时段
-            afternoon_start = datetime.combine(trade_date, time(13, 0))
-            afternoon_end = datetime.combine(trade_date, time(15, 0))
+            afternoon_start = datetime.combine(trade_date, time(0, 0)) # 假设UTC 00:00 对应本地 08:00
+            afternoon_end = datetime.combine(trade_date, time(23, 59)) # 假设UTC 23:59 对应本地 07:59
             current_time = afternoon_start
             
             while current_time <= afternoon_end:
@@ -281,7 +317,7 @@ class CnStockMarketAdapter(BaseMarket):
             # 收盘事件
             events.append(MarketEvent(
                 event_type=EventTypeEnum.MARKET_END,
-                event_time=datetime.combine(trade_date, time(15, 0)),
+                event_time=datetime.combine(trade_date, time(23, 59)), # 假设UTC 23:59 对应本地 07:59
                 market=self.market_name,
                 frequency=frequency,
                 event_description="收盘"
@@ -290,7 +326,7 @@ class CnStockMarketAdapter(BaseMarket):
             # 交易后事件
             events.append(MarketEvent(
                 event_type=EventTypeEnum.AFTER_MARKET,
-                event_time=datetime.combine(trade_date, time(15, 30)),
+                event_time=datetime.combine(trade_date, time(23, 59)), # 假设UTC 23:59 对应本地 07:59
                 market=self.market_name,
                 frequency=frequency,
                 event_description="交易后处理"
@@ -299,7 +335,7 @@ class CnStockMarketAdapter(BaseMarket):
             # 日终事件
             events.append(MarketEvent(
                 event_type=EventTypeEnum.DAY_END,
-                event_time=datetime.combine(trade_date, time(23, 59)),
+                event_time=datetime.combine(trade_date, time(23, 59)), # 假设UTC 23:59 对应本地 07:59
                 market=self.market_name,
                 frequency=frequency,
                 event_description="日终处理"
@@ -308,7 +344,7 @@ class CnStockMarketAdapter(BaseMarket):
             # 日K线事件
             events.append(MarketEvent(
                 event_type=EventTypeEnum.DAILY_BAR_CLOSED,
-                event_time=datetime.combine(trade_date, time(15, 0)),
+                event_time=datetime.combine(trade_date, time(23, 59)), # 假设UTC 23:59 对应本地 07:59
                 market=self.market_name,
                 frequency=frequency,
                 event_description="日K线生成"
@@ -354,15 +390,12 @@ class CnStockMarketAdapter(BaseMarket):
         if trade_date.weekday() >= 5:  # 周六、周日
             return []
         
-        # 中国A股交易时段
-        morning_session = (time(9, 30), time(11, 30))
-        afternoon_session = (time(13, 0), time(15, 0))
-        
-        return [morning_session, afternoon_session]
+        # 加密货币市场交易时段 (24/7)
+        return [(time(0, 0), time(23, 59))]
 
 
 # 向后兼容的别名
-CnStockAdapter = CnStockMarketAdapter
+GlobalCryptoSpotAdapter = GlobalCryptoSpotAdapter
 
 
 class CnFundMarketAdapter(CnStockMarketAdapter):
