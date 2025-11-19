@@ -342,7 +342,7 @@ class DataInterface:
             
             # 应用复权
             if adj_type != 'none' and market in ['cn_stock', 'cn_fund']:
-                data = self._apply_adjustment(data, adj_type, market)
+                data = self._apply_adjustment(data, market, adj_type)
             
             # 缓存结果
             if use_cache and not data.empty:
@@ -525,20 +525,14 @@ class DataInterface:
                         
                         # 转换时间格式
                         year_data['time'] = pd.to_datetime(year_data['time'])
-                        
-                        # 确保时间是无时区的，便于比较
+
+                        # 过滤日期范围 - 对于日线数据，扩展到整天范围以确保包含性
+                        start_dt = pd.to_datetime(start_date).normalize()  # 设置为当天的开始
+                        end_dt = pd.to_datetime(end_date).normalize() + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)  # 设置为当天的结束
+
+                        # 确保时间比较的兼容性 - 移除时区信息
                         if hasattr(year_data['time'].dt, 'tz') and year_data['time'].dt.tz is not None:
                             year_data['time'] = year_data['time'].dt.tz_localize(None)
-                        
-                        # 过滤日期范围
-                        start_dt = pd.to_datetime(start_date)
-                        end_dt = pd.to_datetime(end_date)
-                        
-                        # 确保比较的时间也是无时区的
-                        if hasattr(start_dt, 'tz') and start_dt.tz is not None:
-                            start_dt = start_dt.tz_localize(None)
-                        if hasattr(end_dt, 'tz') and end_dt.tz is not None:
-                            end_dt = end_dt.tz_localize(None)
                         
                         logger.debug(f"时间范围检查: 开始={start_dt}, 结束={end_dt}, 数据时间范围={year_data['time'].min()}-{year_data['time'].max()}")
                         
@@ -616,18 +610,11 @@ class DataInterface:
         
         # 从数据源获取
         try:
-            # 获取指定时间点的K线数据
-            # 只传递日期部分，结束时间设为当天结束
-            start_time = (time - timedelta(days=1)).strftime('%Y-%m-%d')
-            end_time = time.strftime('%Y-%m-%d')
-            
-            # 如果查询的是同一天，结束时间设为当天最后一秒
-            if start_time == end_time:
-                end_time = time.strftime('%Y-%m-%d') + ' 23:59:59'
-            else:
-                end_time = time.strftime('%Y-%m-%d 23:59:59')
-            
-            # 使用优化后的get_klines方法
+            # 获取指定时间点的K线数据 - 精确时间匹配
+            start_time = time.strftime('%Y-%m-%d %H:%M:%S')
+            end_time = time.strftime('%Y-%m-%d %H:%M:%S')
+
+            # 使用get_klines方法获取精确时间的数据
             klines_df = self.get_klines(
                 codes=codes,
                 market=market,
@@ -638,27 +625,98 @@ class DataInterface:
                 adj_type=adj_type,
                 use_cache=use_cache
             )
-            
-            # 提取最后一条记录作为当前行情
+
+            # 提取指定时间点的数据
             if not klines_df.empty:
-                # 按时间排序，取每个股票的最后一条记录
-                quotes_df = klines_df.groupby(level=1).tail(1)
-                # 重置索引，将symbol作为列
-                quotes_df = quotes_df.reset_index(level=0, drop=True).reset_index()
-                quotes_df = quotes_df.rename(columns={'symbol': 'code'})
-                quotes_df.set_index('code', inplace=True)
-                
-                # 缓存结果
-                if use_cache:
-                    self.kline_cache.put(cache_key, quotes_df)
-                
-                logger.debug(f"获取行情数据: {len(codes)} 只股票")
-                return quotes_df
+                # 查找指定时间点的数据
+                target_time = time
+
+                # 根据频率调整匹配策略
+                if freq == '1d':
+                    # 对于日线数据，只匹配日期部分，忽略时间
+                    target_date = target_time.date()
+                    matching_data = klines_df[klines_df.index.get_level_values('time').date == target_date]
+                else:
+                    # 对于分钟数据，精确匹配时间
+                    matching_data = klines_df[klines_df.index.get_level_values('time') == target_time]
+
+                if not matching_data.empty:
+                    # 提取指定时间点的数据
+                    quotes_df = matching_data.copy()
+                    # 重置索引，将symbol作为列
+                    quotes_df = quotes_df.reset_index(level=0, drop=True).reset_index()
+                    quotes_df = quotes_df.rename(columns={'symbol': 'code'})
+                    quotes_df.set_index('code', inplace=True)
+
+                    # 缓存结果
+                    if use_cache:
+                        self.kline_cache.put(cache_key, quotes_df)
+
+                    logger.debug(f"获取行情数据: {len(codes)} 只股票, 时间点: {time}")
+                    return quotes_df
+                else:
+                    # 如果精确时间没有数据，尝试查找最近的有效数据
+                    logger.debug(f"精确时间点 {time} 无数据，尝试查找最近数据")
+
+                    # 扩大时间范围到前后5分钟
+                    start_time = (time - timedelta(minutes=5)).strftime('%Y-%m-%d %H:%M:%S')
+                    end_time = (time + timedelta(minutes=5)).strftime('%Y-%m-%d %H:%M:%S')
+
+                    klines_df = self.get_klines(
+                        codes=codes,
+                        market=market,
+                        freq=freq,
+                        start_date=start_time,
+                        end_date=end_time,
+                        fields=fields,
+                        adj_type=adj_type,
+                        use_cache=use_cache
+                    )
+
+                    if not klines_df.empty:
+                        # 查找最接近目标时间的数据
+                        target_timestamp = time.timestamp()
+                        closest_data = []
+
+                        for code in codes:
+                            code_data = klines_df[klines_df.index.get_level_values('symbol') == code]
+                            if not code_data.empty:
+                                # 计算时间差，找到最近的数据
+                                time_values = code_data.index.get_level_values('time')
+                                time_diffs = abs(time_values.astype('int64') // 10**9 - target_timestamp)
+                                # 找到最小时间差的索引
+                                closest_idx = time_diffs.argmin()
+                                closest_timestamp = time_values[closest_idx]
+                                closest_row = code_data.loc[(closest_timestamp, code)]
+                                closest_data.append(closest_row)
+
+                        if closest_data:
+                            # 从Series列表创建DataFrame
+                            quotes_df = pd.DataFrame(closest_data)
+
+                            # 从Series的索引中提取symbol和时间信息
+                            symbols = [row.name[1] if isinstance(row.name, tuple) else row.name for row in closest_data]
+
+                            # 添加code列
+                            quotes_df['code'] = symbols
+
+                            # 设置code为索引
+                            quotes_df.set_index('code', inplace=True)
+
+                            if use_cache:
+                                self.kline_cache.put(cache_key, quotes_df)
+
+                            logger.debug(f"使用最近数据获取行情: {len(codes)} 只股票")
+                            return quotes_df
+                    else:
+                        return pd.DataFrame()
             else:
                 return pd.DataFrame()
-                
+
         except Exception as e:
             logger.error(f"获取行情数据失败: {e}")
+            import traceback
+            traceback.print_exc()
             return pd.DataFrame()
     
     # ==================== 因子数据接口 ====================
