@@ -15,6 +15,7 @@ from typing import Dict, List, Any, Optional, Union
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
+import psutil
 
 from finhack.library.data import get_data_interface
 
@@ -128,8 +129,8 @@ class DataCenter:
             else:
                 end_date = datetime(year, month + 1, 1) - timedelta(days=1)
             
-            # 优化批次大小：减小到5只股票一批，增加并行度
-            batch_size = 5  # 每批5只股票，提高并行度
+            # 动态计算最优批次大小，基于系统资源自适应调整
+            batch_size = self._calculate_adaptive_batch_size(len(universe), frequency)
             batches = [universe[i:i + batch_size] for i in range(0, len(universe), batch_size)]
             logger.info(f"[预加载] 分为 {len(batches)} 个批次，每批 {batch_size} 只股票")
             print(f"[预加载] 分为{len(batches)}个批次进行并行加载", flush=True)
@@ -171,7 +172,102 @@ class DataCenter:
         except Exception as e:
             logger.error(f"预加载 {market} {month_key} 数据失败: {e}")
             raise
-    
+
+    def _calculate_adaptive_batch_size(self, total_stocks: int, frequency: str = '1m') -> int:
+        """
+        根据系统资源动态计算最优批次大小
+
+        Args:
+            total_stocks: 总股票数量
+            frequency: 数据频率 ('1m' 或 '1d')
+
+        Returns:
+            int: 最优批次大小
+        """
+        # 配置参数
+        memory_per_stock_1m = 200  # MB，每只股票分钟数据预估内存使用
+        memory_per_stock_1d = 50   # MB，每只股票日线数据预估内存使用
+        cpu_utilization_target = 0.75  # 目标CPU使用率
+        min_batch_size = 2       # 最小批次大小
+        max_batch_size = 50      # 最大批次大小
+
+        try:
+            # 获取系统资源
+            available_memory_gb = psutil.virtual_memory().available / (1024**3)
+            cpu_cores = psutil.cpu_count(logical=True)
+            current_cpu_usage = psutil.cpu_percent(interval=0.1) / 100.0
+
+            # 根据数据频率调整内存预估
+            if frequency == '1m':
+                memory_per_stock = memory_per_stock_1m
+            else:
+                memory_per_stock = memory_per_stock_1d
+
+            # 基于内存限制计算批次大小
+            # 保守估计：使用60%的可用内存，留出安全边际
+            memory_based_batch = int(
+                (available_memory_gb * 0.6 * 1024) / memory_per_stock
+            )
+
+            # 基于CPU核心数和当前负载计算批次大小
+            if current_cpu_usage < cpu_utilization_target:
+                cpu_multiplier = 2.0  # CPU空闲，可以增加批次
+            elif current_cpu_usage < 0.9:
+                cpu_multiplier = 1.5  # CPU适中
+            else:
+                cpu_multiplier = 1.0  # CPU繁忙，保持保守
+
+            cpu_based_batch = int(cpu_cores * cpu_multiplier)
+
+            # 基于总股票数调整，避免过多小批次
+            if total_stocks <= 10:
+                total_stock_adjusted = max(2, total_stocks // 2)
+            elif total_stocks <= 50:
+                total_stock_adjusted = 8
+            elif total_stocks <= 200:
+                total_stock_adjusted = 15
+            elif total_stocks <= 1000:
+                total_stock_adjusted = 25
+            else:
+                total_stock_adjusted = 40
+
+            # 取三个因素的加权平均，并确保在合理范围内
+            candidates = [
+                max(memory_based_batch, min_batch_size),
+                max(cpu_based_batch, min_batch_size),
+                max(total_stock_adjusted, min_batch_size)
+            ]
+
+            # 使用加权平均，但加强总股票数的权重，避免过度优化
+            optimal_batch = int(
+                candidates[0] * 0.3 +  # 内存权重30%
+                candidates[1] * 0.3 +  # CPU权重30%
+                candidates[2] * 0.4    # 总股票数权重40%（提高权重，避免无限制增大批次）
+            )
+
+            # 确保在合理范围内
+            optimal_batch = max(min(optimal_batch, max_batch_size), min_batch_size)
+
+            # 记录详细信息
+            logger.info(f"[批次计算] 可用内存: {available_memory_gb:.2f}GB, "
+                       f"CPU核心: {cpu_cores}, 当前CPU使用率: {current_cpu_usage:.1%}")
+            logger.info(f"[批次计算] 内存建议: {candidates[0]}, CPU建议: {candidates[1]}, "
+                       f"规模建议: {candidates[2]}, 最终采用: {optimal_batch}")
+
+            return optimal_batch
+
+        except Exception as e:
+            logger.warning(f"[批次计算] 动态计算失败，使用默认值: {e}")
+            # 降级到基于经验的默认值
+            if total_stocks <= 20:
+                return 3
+            elif total_stocks <= 100:
+                return 5
+            elif total_stocks <= 500:
+                return 10
+            else:
+                return 20
+
     def _preload_batch(self, market: str, batch: List[str], frequency: str,
                       start_date: datetime, end_date: datetime) -> Dict[str, int]:
         """预加载一批股票的数据

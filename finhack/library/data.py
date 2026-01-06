@@ -26,6 +26,14 @@ from runtime.constant import *
 
 logger = logging.getLogger(__name__)
 
+# Parquet支持检查
+PARQUET_AVAILABLE = True
+try:
+    import pyarrow.parquet as pq
+except ImportError:
+    PARQUET_AVAILABLE = False
+    logger.warning("pyarrow未安装，Parquet缓存功能不可用")
+
 
 class DataType(Enum):
     """数据类型枚举"""
@@ -457,8 +465,40 @@ class DataInterface:
     
     def _load_codebased_klines(self, codes: List[str], market: str, freq: str, 
                               start_date: str, end_date: str, fields: List[str]) -> pd.DataFrame:
-        """使用codebased方式加载K线数据"""
+        """使用codebased方式加载K线数据，优先使用Parquet缓存"""
         try:
+            # 解析日期范围，获取年份
+            start_dt = pd.to_datetime(start_date)
+            end_dt = pd.to_datetime(end_date)
+            years = set(range(start_dt.year, end_dt.year + 1))
+            
+            # 智能判断：决定使用Parquet还是CSV
+            # Parquet适合：代码数量多（>100）、单年份
+            # CSV适合：代码数量少（<=100）、任意年份
+            use_parquet = (
+                PARQUET_AVAILABLE and 
+                len(years) == 1 and  # 单年份
+                len(codes) > 100  # 代码数量较多
+            )
+            
+            # 尝试优先使用Parquet缓存（如果满足条件）
+            if use_parquet:
+                logger.debug(f"尝试使用Parquet缓存加载: codes={len(codes)}, years={years}")
+                parquet_result = self._try_load_parquet_cache(
+                    market, freq, start_dt, end_dt, codes, fields
+                )
+                if parquet_result is not None:
+                    logger.debug(f"使用Parquet缓存加载 {market}/{freq} 数据")
+                    return parquet_result
+                else:
+                    logger.debug(f"Parquet缓存不可用，回退到CSV加载")
+            
+            if use_parquet:
+                logger.debug(f"Parquet可用但加载失败，回退到CSV加载")
+            else:
+                logger.debug(f"使用CSV加载: codes={len(codes)}, years={years}")
+            
+            # 回退到CSV加载（多年份或Parquet不可用或代码数量少时）
             # 并行加载各股票数据
             futures = []
             for code in codes:
@@ -490,6 +530,98 @@ class DataInterface:
         except Exception as e:
             logger.error(f"加载codebased K线数据失败: {e}")
             return pd.DataFrame()
+    
+    def _try_load_parquet_cache(self, market: str, freq: str, start_dt: pd.Timestamp,
+                               end_dt: pd.Timestamp, codes: List[str], fields: List[str],
+                               max_workers: int = 4) -> Optional[pd.DataFrame]:
+        """
+        尝试从Parquet缓存加载K线数据（优化版）
+        
+        Args:
+            market: 市场名称
+            freq: 频率
+            start_dt: 开始时间
+            end_dt: 结束时间
+            codes: 股票代码列表
+            fields: 需要的字段列表
+            max_workers: 最大工作线程数
+            
+        Returns:
+            DataFrame: 加载的数据，如果失败则返回None
+        """
+        try:
+            # 构建Parquet文件路径
+            year = start_dt.year
+            parquet_file = os.path.join(
+                self.market_data_dir, 'kline', 'codebased', market, freq, f'{year}.parquet'
+            )
+            
+            # 检查Parquet文件是否存在
+            if not os.path.exists(parquet_file):
+                logger.debug(f"Parquet缓存文件不存在: {parquet_file}")
+                return None
+            
+            logger.debug(f"尝试从Parquet缓存加载: {parquet_file}")
+            
+            # 定义需要的列（列裁剪）
+            required_columns = ['time', 'code'] + [f for f in fields if f in ['open', 'high', 'low', 'close', 'volume', 'amount']]
+            
+            logger.debug(f"Parquet加载参数: codes={len(codes)}, columns={len(required_columns)}")
+            
+            # 使用pyarrow.parquet.read_table读取数据（使用列裁剪）
+            # 注意：由于时区兼容性问题，暂时不使用filters，在Python中过滤
+            table = pq.read_table(
+                parquet_file,
+                columns=required_columns,
+                use_threads=max_workers
+            )
+            
+            # 转换为DataFrame
+            df = table.to_pandas()
+            
+            if df.empty:
+                logger.debug(f"Parquet加载结果为空")
+                return None
+            
+            logger.debug(f"从Parquet加载了 {len(df)} 条原始数据")
+            
+            # 移除时区信息以进行过滤
+            if hasattr(df['time'].dt, 'tz') and df['time'].dt.tz is not None:
+                df['time'] = df['time'].dt.tz_localize(None)
+            
+            # 在Python中过滤数据
+            # 过滤代码
+            df = df[df['code'].isin(codes)]
+            
+            # 过滤时间范围
+            df = df[(df['time'] >= start_dt) & (df['time'] <= end_dt)]
+            
+            if df.empty:
+                logger.debug(f"过滤后结果为空")
+                return None
+            
+            logger.debug(f"过滤后剩余 {len(df)} 条数据")
+            
+            # 重命名code列为symbol
+            df = df.rename(columns={'code': 'symbol'})
+            
+            # 设置MultiIndex
+            df = df.set_index(['time', 'symbol'])
+            
+            # 确保只包含请求的字段
+            available_fields = [f for f in fields if f in df.columns]
+            if available_fields:
+                df = df[available_fields]
+            
+            # 排序索引
+            df = df.sort_index()
+            
+            logger.debug(f"Parquet加载成功: {len(df)} 条数据, {len(codes)} 个代码")
+            return df
+            
+        except Exception as e:
+            logger.warning(f"Parquet缓存加载失败: {e}, 将回退到CSV加载")
+            return None
     
     def _load_single_codebased_kline(self, market: str, symbol: str, freq: str,
                                     start_date: str, end_date: str, fields: List[str]) -> pd.DataFrame:
