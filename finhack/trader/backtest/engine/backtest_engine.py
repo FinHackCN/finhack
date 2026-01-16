@@ -344,32 +344,47 @@ class TradeCenter:
     def try_match_orders_sync(self, market_data: Dict[str, Dict]):
         """撮合订单 - 同步版本"""
         matched_orders = []
-        
+        current_time = self.context.get('current_dt')
+
         Log.logger.debug(f"开始撮合，共{len(self.orders)}个订单，市场数据: {list(market_data.keys())}")
-        
+
         for order_id, order in self.orders.items():
             if order.status != OrderStatus.NEW:
                 continue
-                
+
             symbol = order.symbol
             Log.logger.debug(f"检查订单 {order_id}: {symbol}, 类型: {order.order_type}, 方向: {order.side}, 价格: {order.price}")
-            
+
+            # 检查订单是否已过等待期（延迟撮合）
+            if hasattr(order, 'can_match'):
+                if not order.can_match(current_time):
+                    order_age = order.age_minutes(current_time) if hasattr(order, 'age_minutes') else 0
+                    Log.logger.debug(f"跳过订单 {order_id}: 订单尚未到达撮合时间，已等待 {order_age:.2f} 分钟")
+                    continue
+            elif hasattr(order, 'created_at') and order.created_at and current_time:
+                # 如果订单有created_at但没有can_match方法，手动检查
+                from datetime import timedelta
+                time_diff = (current_time - order.created_at).total_seconds() / 60
+                if time_diff < 1:  # 1分钟延迟
+                    Log.logger.debug(f"跳过订单 {order_id}: 订单尚未到达撮合时间，已等待 {time_diff:.2f} 分钟")
+                    continue
+
             if symbol not in market_data:
                 Log.logger.debug(f"跳过订单 {order_id}: {symbol} 不在市场数据中")
                 continue
-                
+
             quote = market_data[symbol]
             current_price = quote.get('close', 0)
             Log.logger.debug(f"订单 {order_id} 当前价格: {current_price}")
-            
+
             if current_price <= 0:
                 Log.logger.debug(f"跳过订单 {order_id}: 价格无效 {current_price}")
                 continue
-                
+
             # 判断是否可以成交
             can_fill = False
             fill_price = current_price
-            
+
             if order.order_type == OrderType.MARKET:
                 # 市价单直接成交
                 can_fill = True
@@ -387,7 +402,7 @@ class TradeCenter:
                     Log.logger.debug(f"订单 {order_id} 限价卖单可成交: 订单价格{order.price} <= 当前价格{current_price}, 成交价格: {fill_price}")
                 else:
                     Log.logger.debug(f"订单 {order_id} 限价单价格不匹配: 订单价格{order.price}, 当前价格{current_price}")
-                    
+
             if can_fill:
                 # 执行成交
                 Log.logger.info(f"订单 {order_id} 准备成交: {symbol} {order.side} {order.volume} @ {fill_price}")
@@ -395,7 +410,7 @@ class TradeCenter:
                 matched_orders.append(order_id)
             else:
                 Log.logger.debug(f"订单 {order_id} 不可成交")
-                
+
         Log.logger.info(f"撮合完成，成交订单数: {len(matched_orders)}，详细: {matched_orders}")
         
     def _execute_trade_sync(self, order: Order, fill_price: float):
@@ -596,23 +611,52 @@ class BacktestEngine:
                 
         if not symbols:
             return
-            
+
         # 获取行情数据
         try:
             market_data = {}
             for symbol in symbols:
                 Log.logger.debug(f"获取 {symbol} 的行情数据，频率: {freq}, 时间: {current_time}")
-                quote_df = self.data_center.get_quotes([symbol], freq=freq, time=current_time, fields=['close'])
-                Log.logger.debug(f"{symbol} 行情数据结果: DataFrame形状={quote_df.shape}, 是否为空={quote_df.empty}")
-                if not quote_df.empty:
-                    market_data[symbol] = quote_df.loc[symbol].to_dict()
-                    Log.logger.debug(f"{symbol} 行情数据内容: {market_data[symbol]}")
+
+                # 对于1分钟数据，使用get_klines获取最近的数据
+                # 因为get_quotes的精确时间匹配可能失败
+                if freq == '1m':
+                    # 获取过去5分钟的1分钟K线数据
+                    from datetime import timedelta
+                    start_time = current_time - timedelta(minutes=5)
+                    klines_df = self.data_center.get_klines(
+                        codes=[symbol],
+                        freq=freq,
+                        start_time=start_time.strftime('%Y-%m-%d %H:%M:%S'),
+                        end_time=(current_time + timedelta(minutes=1)).strftime('%Y-%m-%d %H:%M:%S'),
+                        fields=['close']
+                    )
+
+                    if not klines_df.empty:
+                        # 找到最接近当前时间的数据
+                        symbol_klines = klines_df[klines_df.index.get_level_values('symbol') == symbol]
+                        if not symbol_klines.empty:
+                            # 使用最新的数据
+                            latest_close = symbol_klines['close'].iloc[-1]
+                            market_data[symbol] = {'close': latest_close}
+                            Log.logger.debug(f"{symbol} 从K线获取行情: close={latest_close}")
+                        else:
+                            Log.logger.warning(f"无法获取 {symbol} 的K线数据")
+                    else:
+                        Log.logger.warning(f"无法获取 {symbol} 的行情数据")
                 else:
-                    Log.logger.warning(f"无法获取 {symbol} 的行情数据")
-                    
+                    # 对于日线数据，使用原来的get_quotes方法
+                    quote_df = self.data_center.get_quotes([symbol], freq=freq, time=current_time, fields=['close'])
+                    Log.logger.debug(f"{symbol} 行情数据结果: DataFrame形状={quote_df.shape}, 是否为空={quote_df.empty}")
+                    if not quote_df.empty:
+                        market_data[symbol] = quote_df.loc[symbol].to_dict()
+                        Log.logger.debug(f"{symbol} 行情数据内容: {market_data[symbol]}")
+                    else:
+                        Log.logger.warning(f"无法获取 {symbol} 的行情数据")
+
             # 执行撮合
             self.trade_center.try_match_orders_sync(market_data)
-            
+
         except Exception as e:
             Log.logger.error(f"撮合过程中发生错误: {e}")
             
@@ -768,74 +812,54 @@ class BacktestEngine:
             while i < len(daily_events):
                 event = daily_events[i]
                 self._process_event_sync(event, strategy)
-                
+
                 # 智能加速逻辑：仅在1分钟频率下生效
                 frequency = self.context.get('settings', {}).get('freq', '1d')
-                Log.logger.debug(f"智能加速检查：当前频率 {frequency}, 事件类型 {event.event_type}")
-                
-                if frequency == '1m' and event.event_type == EventTypeEnum.TRY_MATCH:
-                    # 检查是否有挂单（未成交的订单）
-                    has_pending_orders = self._has_pending_orders()
-                    Log.logger.debug(f"智能加速检查：当前时间 {event.event_time}, 有挂单: {has_pending_orders}")
-                    
-                    if not has_pending_orders:
-                        # 没有挂单，查找下一个非撮合事件
-                        next_event_idx = i + 1
-                        
-                        # 添加详细的事件序列日志
-                        Log.logger.debug(f"事件序列：当前事件索引 {i}, 当前事件 {event.event_time} ({event.event_type})")
-                        for j in range(max(0, i-2), min(len(daily_events), i+10)):
-                            ev = daily_events[j]
-                            marker = " -> " if j == i else "    "
-                            Log.logger.debug(f"{marker}[{j}] {ev.event_time} ({ev.event_type}) - {ev.event_description if hasattr(ev, 'event_description') else ''}")
-                        
-                        # 优化的跳跃逻辑：寻找重要事件进行更大跳跃
-                        target_event_idx = None
-                        target_event = None
-                        
-                        # 寻找下一个重要事件，允许更大的跳跃
-                        while next_event_idx < len(daily_events):
-                            next_event = daily_events[next_event_idx]
-                            Log.logger.debug(f"检查下一个事件：索引 {next_event_idx}, {next_event.event_time} ({next_event.event_type})")
-                            
-                            # 重要事件优先级列表
-                            important_events = [
-                                EventTypeEnum.ON_TIME,      # 策略事件
-                                EventTypeEnum.MORNING_END,  # 中午休市
-                                EventTypeEnum.AFTERNOON_START,  # 下午开盘
-                                EventTypeEnum.CLOSING_START, # 收盘开始
-                                EventTypeEnum.MARKET_END,   # 市场结束
-                                EventTypeEnum.DAY_START,    # 新一天开始
-                                EventTypeEnum.BEFORE_MARKET # 盘前准备
-                            ]
-                            
-                            if next_event.event_type in important_events:
-                                Log.logger.debug(f"找到重要事件：索引 {next_event_idx}, {next_event.event_time} ({next_event.event_type})")
-                                target_event_idx = next_event_idx
-                                target_event = next_event
-                                break
-                            elif next_event.event_type != EventTypeEnum.TRY_MATCH:
-                                # 如果不是撮合事件，也可以作为跳跃目标
-                                target_event_idx = next_event_idx
-                                target_event = next_event
-                                break
-                            
-                            next_event_idx += 1
-                        
-                        # 执行跳跃 - 降低跳跃阈值并增加更灵活的跳跃条件
-                        if target_event_idx is not None and target_event is not None:
-                            time_diff = (target_event.event_time - event.event_time).total_seconds() / 60
-                            
-                            # 大幅降低跳跃阈值到10秒，任何有意义的跳跃都执行
-                            # 如果跳跃超过30分钟，更是优先执行
-                            if time_diff > 0.17 or time_diff > 30:  # 10秒或者30分钟以上
-                                Log.logger.info(f"智能加速：无挂单，当前事件 {event.event_time} ({event.event_type})，跳转 {time_diff:.1f} 分钟到 {target_event.event_time} ({target_event.event_type})")
-                                # 直接跳到目标事件
-                                i = target_event_idx
+
+                # 检查策略是否注册了MARKET_BAR_1M事件处理器
+                strategy_has_bar_handler = (
+                    hasattr(strategy, 'event_handlers') and
+                    EventTypeEnum.MARKET_BAR_1M in strategy.event_handlers
+                )
+
+                # 如果没有注册1分钟K线处理器，在MARKET_BAR_1M事件时跳过
+                if frequency == '1m' and not strategy_has_bar_handler:
+                    if event.event_type == EventTypeEnum.MARKET_BAR_1M:
+                        # 直接跳过MARKET_BAR_1M事件，不做任何处理
+                        Log.logger.debug(f"智能加速：跳过MARKET_BAR_1M事件 {event.event_time}")
+                        i += 1
+                        continue
+                    elif event.event_type == EventTypeEnum.TRY_MATCH:
+                        # 检查是否有挂单
+                        has_pending_orders = self._has_pending_orders()
+                        if not has_pending_orders:
+                            # 无挂单时，跳过后续的MARKET_BAR_1M，直达下一个TRY_MATCH或重要事件
+                            next_event_idx = i + 1
+                            while next_event_idx < len(daily_events):
+                                next_event = daily_events[next_event_idx]
+                                # 停在TRY_MATCH或重要事件上
+                                if next_event.event_type == EventTypeEnum.TRY_MATCH:
+                                    break
+                                # 重要事件列表
+                                important_events = [
+                                    EventTypeEnum.ON_TIME,
+                                    EventTypeEnum.MARKET_START,
+                                    EventTypeEnum.MORNING_END,
+                                    EventTypeEnum.AFTERNOON_START,
+                                    EventTypeEnum.CLOSING_START,
+                                    EventTypeEnum.MARKET_END,
+                                ]
+                                if next_event.event_type in important_events:
+                                    break
+                                next_event_idx += 1
+
+                            if next_event_idx > i + 1:
+                                target_event = daily_events[next_event_idx]
+                                time_diff = (target_event.event_time - event.event_time).total_seconds() / 60
+                                Log.logger.info(f"智能加速：跳过 {time_diff:.1f} 分钟到 {target_event.event_time} ({target_event.event_type})")
+                                i = next_event_idx
                                 continue
-                        else:
-                            Log.logger.debug("未找到下一个非撮合事件，继续正常处理")
-                
+
                 i += 1
                 
             # 更新前一交易日
@@ -1153,23 +1177,52 @@ class BacktestEngine:
                 
         if not symbols:
             return
-            
+
         # 获取行情数据
         try:
             market_data = {}
             for symbol in symbols:
                 Log.logger.debug(f"获取 {symbol} 的行情数据，频率: {freq}, 时间: {current_time}")
-                quote_df = self.data_center.get_quotes([symbol], freq=freq, time=current_time, fields=['close'])
-                Log.logger.debug(f"{symbol} 行情数据结果: DataFrame形状={quote_df.shape}, 是否为空={quote_df.empty}")
-                if not quote_df.empty:
-                    market_data[symbol] = quote_df.loc[symbol].to_dict()
-                    Log.logger.debug(f"{symbol} 行情数据内容: {market_data[symbol]}")
+
+                # 对于1分钟数据，使用get_klines获取最近的数据
+                # 因为get_quotes的精确时间匹配可能失败
+                if freq == '1m':
+                    # 获取过去5分钟的1分钟K线数据
+                    from datetime import timedelta
+                    start_time = current_time - timedelta(minutes=5)
+                    klines_df = self.data_center.get_klines(
+                        codes=[symbol],
+                        freq=freq,
+                        start_time=start_time.strftime('%Y-%m-%d %H:%M:%S'),
+                        end_time=(current_time + timedelta(minutes=1)).strftime('%Y-%m-%d %H:%M:%S'),
+                        fields=['close']
+                    )
+
+                    if not klines_df.empty:
+                        # 找到最接近当前时间的数据
+                        symbol_klines = klines_df[klines_df.index.get_level_values('symbol') == symbol]
+                        if not symbol_klines.empty:
+                            # 使用最新的数据
+                            latest_close = symbol_klines['close'].iloc[-1]
+                            market_data[symbol] = {'close': latest_close}
+                            Log.logger.debug(f"{symbol} 从K线获取行情: close={latest_close}")
+                        else:
+                            Log.logger.warning(f"无法获取 {symbol} 的K线数据")
+                    else:
+                        Log.logger.warning(f"无法获取 {symbol} 的行情数据")
                 else:
-                    Log.logger.warning(f"无法获取 {symbol} 的行情数据")
-                    
+                    # 对于日线数据，使用原来的get_quotes方法
+                    quote_df = self.data_center.get_quotes([symbol], freq=freq, time=current_time, fields=['close'])
+                    Log.logger.debug(f"{symbol} 行情数据结果: DataFrame形状={quote_df.shape}, 是否为空={quote_df.empty}")
+                    if not quote_df.empty:
+                        market_data[symbol] = quote_df.loc[symbol].to_dict()
+                        Log.logger.debug(f"{symbol} 行情数据内容: {market_data[symbol]}")
+                    else:
+                        Log.logger.warning(f"无法获取 {symbol} 的行情数据")
+
             # 执行撮合
             self.trade_center.try_match_orders_sync(market_data)
-            
+
         except Exception as e:
             Log.logger.error(f"撮合过程中发生错误: {e}")
             

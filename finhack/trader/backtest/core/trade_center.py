@@ -42,12 +42,22 @@ class Order:
     commission: float = 0.0
     created_at: datetime = None
     updated_at: datetime = None
-    
+    # 延迟撮合配置：订单创建后需要等待多少分钟才能撮合
+    match_delay_minutes: int = 1
+
     def __post_init__(self):
+        # 不再自动设置时间，由调用方在创建时传入回测模拟时间
+        pass
+
+    def age_minutes(self, current_time: datetime) -> float:
+        """计算订单从创建到当前时间的分钟数"""
         if self.created_at is None:
-            self.created_at = datetime.now()
-        if self.updated_at is None:
-            self.updated_at = datetime.now()
+            return 999  # 如果没有创建时间，认为订单很老
+        return (current_time - self.created_at).total_seconds() / 60
+
+    def can_match(self, current_time: datetime) -> bool:
+        """判断订单是否可以撮合（已超过等待时间）"""
+        return self.age_minutes(current_time) >= self.match_delay_minutes
 
 
 @dataclass 
@@ -330,13 +340,13 @@ class TradeCenter:
         """
         return list(self.trades.values())
     
-    def place_order(self, adapter_id: str = "default", symbol: str = "", 
-                   side: str = "buy", volume: float = 0, 
-                   price: Optional[float] = None, 
+    def place_order(self, adapter_id: str = "default", symbol: str = "",
+                   side: str = "buy", volume: float = 0,
+                   price: Optional[float] = None,
                    order_type: str = "market", **kwargs) -> Optional[str]:
         """
         下单 - 兼容UniTrader接口
-        
+
         Args:
             adapter_id: 适配器ID
             symbol: 股票代码
@@ -345,7 +355,7 @@ class TradeCenter:
             price: 价格（None表示市价单）
             order_type: 订单类型 (market/limit)
             **kwargs: 其他UniTrader兼容参数
-            
+
         Returns:
             str: 订单ID，失败返回None
         """
@@ -355,33 +365,40 @@ class TradeCenter:
                 if self._context:
                     self._context.logger.error(f"下单参数错误: symbol={symbol}, volume={volume}")
                 return None
-            
+
             # 转换订单方向
             order_side = OrderSide.BUY if side.lower() == "buy" else OrderSide.SELL
-            
+
             # 生成订单ID
             order_id = str(uuid.uuid4())
-            
-            # 创建订单
+
+            # 获取当前模拟时间
+            current_time = None
+            if self._context and hasattr(self._context, 'current_dt'):
+                current_time = self._context.current_dt
+
+            # 创建订单 - 使用模拟时间
             order = Order(
                 order_id=order_id,
                 symbol=symbol,
                 side=order_side,
                 quantity=volume,  # Order类使用quantity字段
                 price=price,
-                order_type=order_type
+                order_type=order_type,
+                created_at=current_time,  # 使用模拟时间
+                updated_at=current_time   # 使用模拟时间
             )
-            
+
             # 验证订单
             if not self._validate_order(order):
                 if self._context:
                     self._context.logger.error(f"订单验证失败: {symbol} {side} {volume}")
                 return None
-            
+
             # 提交订单
             self.orders[order_id] = order
             order.status = OrderStatus.SUBMITTED
-            
+
             # 记录订单日志
             if self._context:
                 order_log = {
@@ -392,12 +409,12 @@ class TradeCenter:
                     "price": price,
                     "order_type": order_type,
                     "status": "submitted",
-                    "created_time": datetime.now().isoformat()
+                    "created_time": current_time.isoformat() if current_time else datetime.now().isoformat()
                 }
                 self._context.logger.info(f"订单提交成功: {order_log}")
-            
+
             return order_id
-            
+
         except Exception as e:
             if self._context:
                 self._context.logger.error(f"下单失败: {e}")

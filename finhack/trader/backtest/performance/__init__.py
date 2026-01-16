@@ -2,20 +2,14 @@
 绩效分析模块
 
 包含：
-- Calculator: 绩效计算器
-- Metrics: 指标计算
-- Benchmark: 基准比较
-- Reporter: 报告生成器
+- PerformanceAnalyzer: 绩效分析器
+- ReportGenerator: 报告生成器
 """
 
-from .calculator import Calculator
-from .metrics import Metrics
-from .benchmark import Benchmark
-from .reporter import Reporter
+from .performance_analyzer import PerformanceAnalyzer
+from .report_generator import ReportGenerator
 
 __all__ = [
-    "Calculator",
-    "Metrics",
-    "Benchmark",
-    "Reporter"
+    "PerformanceAnalyzer",
+    "ReportGenerator"
 ] 

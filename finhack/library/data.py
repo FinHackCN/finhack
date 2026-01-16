@@ -7,6 +7,7 @@
 """
 
 import os
+import sys
 import pickle
 import logging
 import threading
@@ -21,6 +22,22 @@ import time
 
 import pandas as pd
 import numpy as np
+
+# 添加项目路径到sys.path以支持runtime模块
+if 'BASE_DIR' not in os.environ:
+    # 尝试从当前目录或父目录查找runtime
+    possible_paths = [
+        os.path.join(os.getcwd(), 'data', 'cache', 'runtime'),
+        os.path.join(os.path.dirname(os.getcwd()), 'data', 'cache', 'runtime'),
+        os.path.join(os.path.dirname(os.path.dirname(__file__)), '..', 'demo_project', 'data', 'cache', 'runtime'),
+    ]
+    
+    for path in possible_paths:
+        if os.path.exists(path):
+            runtime_path = os.path.dirname(os.path.dirname(path))
+            if runtime_path not in sys.path:
+                sys.path.insert(0, runtime_path)
+            break
 
 from runtime.constant import *
 

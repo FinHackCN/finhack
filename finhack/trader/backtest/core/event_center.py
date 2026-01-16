@@ -359,21 +359,32 @@ class EventCenter:
         trading_sessions = market_adapter.get_trading_sessions(trade_date, self.current_frequency)
         
         for session in trading_sessions:
-            # 从字典中获取开始和结束时间
-            start_time = session['start']
-            end_time = session['end']
-            
+            # session是tuple (start_time, end_time)
+            start_time = session[0]
+            end_time = session[1]
+
+            # 如果是time对象，需要转换为datetime对象
+            if isinstance(start_time, time):
+                start_dt = datetime.combine(trade_date, start_time)
+            else:
+                start_dt = start_time
+
+            if isinstance(end_time, time):
+                end_dt = datetime.combine(trade_date, end_time)
+            else:
+                end_dt = end_time
+
             # 从参考时间开始，按间隔生成时间点
             current_time = datetime.combine(trade_date, reference_time)
-            
+
             # 调整到交易时间段内
-            if current_time < start_time:
-                current_time = start_time
-            
-            while current_time <= end_time:
-                if start_time <= current_time <= end_time:
+            if current_time < start_dt:
+                current_time = start_dt
+
+            while current_time <= end_dt:
+                if start_dt <= current_time <= end_dt:
                     times.append(current_time)
-                
+
                 # 计算下一个时间点
                 if unit == 'minute':
                     current_time += timedelta(minutes=interval)
