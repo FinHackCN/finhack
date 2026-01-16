@@ -261,21 +261,66 @@ class BacktestTrader:
         """加载策略文件"""
         strategy_name = self.context['settings']['strategy_name']
         market = self.context['settings']['market']
-        
+
         # 构建策略文件路径
         strategy_path = f"{BASE_DIR}/strategies/{market}/{strategy_name}.py"
-        
+
         if not os.path.exists(strategy_path):
             raise FileNotFoundError(f"策略文件不存在: {strategy_path}")
-        
-        # 加载策略模块
-        module_spec = importlib.util.spec_from_file_location('strategy', strategy_path)
-        strategy_module = importlib.util.module_from_spec(module_spec)
-        module_spec.loader.exec_module(strategy_module)
-        
+
         # 读取策略代码
         with open(strategy_path, 'r', encoding='utf-8') as f:
             strategy_code = f.read()
+
+        # 自动注入必要的imports到策略代码前面
+        auto_imports = '''
+# ==================== 自动注入的系统导入 ====================
+import sys
+import os
+from datetime import datetime, timedelta
+
+# 自动添加finhack路径
+_project_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _project_path not in sys.path:
+    sys.path.insert(0, _project_path)
+_finhack_path = os.path.join(os.path.dirname(_project_path), 'finhack')
+if _finhack_path not in sys.path:
+    sys.path.insert(0, _finhack_path)
+
+from finhack.trader.backtest.events.event_types import EventTypeEnum
+from finhack.core.classes.dictobj import DictObj
+
+# 创建全局变量对象g
+g = DictObj()
+
+# OrderCost类定义（简化版）
+class OrderCost:
+    def __init__(self, open_tax=0, close_tax=0, open_commission=0, close_commission=0, min_commission=0):
+        self.open_tax = open_tax
+        self.close_tax = close_tax
+        self.open_commission = open_commission
+        self.close_commission = close_commission
+        self.close_today_commission = 0
+        self.min_commission = min_commission
+
+# PriceRelatedSlippage类定义（简化版）
+class PriceRelatedSlippage:
+    def __init__(self, value):
+        self.value = value
+
+# ================================================================
+
+'''
+
+        # 将自动注入的代码添加到策略代码前面
+        modified_code = auto_imports + strategy_code
+
+        # 创建一个新的模块来执行修改后的代码
+        module_spec = importlib.util.spec_from_file_location('strategy', strategy_path)
+        strategy_module = importlib.util.module_from_spec(module_spec)
+
+        # 执行修改后的代码而不是原始文件
+        exec(modified_code, strategy_module.__dict__)
         
         # 实例化策略类 - 查找策略模块中的策略类并实例化
         strategy_instance = None

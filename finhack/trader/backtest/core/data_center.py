@@ -11,11 +11,12 @@ import os
 import pickle
 import pandas as pd
 from datetime import datetime, date, timedelta
-from typing import Dict, List, Any, Optional, Union
+from typing import Dict, List, Any, Optional, Union, Callable
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 import psutil
+import talib
 
 from finhack.library.data import get_data_interface
 
@@ -687,168 +688,106 @@ class DataCenter:
         """停止数据中心"""
         # 清理数据接口缓存
         self.data_interface.clear_cache()
-        
+
         logger.info("数据中心已停止")
 
+    def calculate_indicator(
+        self,
+        func: Callable,
+        codes: Union[str, List[str]],
+        freq: str = '1d',
+        start_time: Union[str, datetime] = None,
+        end_time: Union[str, datetime] = None,
+        price_field: str = 'close',
+        **kwargs
+    ) -> pd.DataFrame:
+        """通用talib技术指标计算函数
+
+        Args:
+            func: talib函数，如 talib.MACD, talib.RSI
+            codes: 股票代码或代码列表
+            freq: 数据频率
+            start_time: 开始时间
+            end_time: 结束时间
+            price_field: 价格字段，默认 'close'，某些指标需要 'high', 'low', 'open'
+            **kwargs: 传递给talib函数的参数
+
+        Returns:
+            pd.DataFrame: 指标数据，MultiIndex(time, symbol)
+
+        Examples:
+            # 计算MACD
+            df = data_center.calculate_indicator(talib.MACD, ['000001.SZ'],
+                                                 '1d', '2024-01-01', '2024-12-31',
+                                                 fastperiod=12, slowperiod=26, signalperiod=9)
+
+            # 计算RSI
+            df = data_center.calculate_indicator(talib.RSI, ['000001.SZ'],
+                                                 '1d', '2024-01-01', '2024-12-31',
+                                                 timeperiod=14)
+
+            # 计算ATR（需要high/low/close）
+            df = data_center.calculate_indicator(talib.ATR, ['000001.SZ'],
+                                                 '1d', '2024-01-01', '2024-12-31',
+                                                 price_field='ohlc', timeperiod=14)
+        """
+        func_name = getattr(func, '__name__', str(func))
+
+        # 获取数据
+        fields = ['open', 'high', 'low', 'close'] if price_field == 'ohlc' else ['close']
+        data_df = self.get_klines(codes, freq, start_time, end_time, fields)
+
+        if data_df.empty:
+            return pd.DataFrame()
+
+        # 计算指标
+        results = {}
+        for symbol in data_df.index.get_level_values(1).unique():
+            symbol_data = data_df.xs(symbol, level=1)
+
+            try:
+                if price_field == 'ohlc':
+                    result = func(
+                        symbol_data['high'].values,
+                        symbol_data['low'].values,
+                        symbol_data['open'].values,
+                        symbol_data['close'].values,
+                        **kwargs
+                    )
+                else:
+                    prices = symbol_data['close'].values
+                    result = func(prices, **kwargs)
+
+                # 处理结果
+                if isinstance(result, tuple):
+                    output_dict = {f'output_{i}': r for i, r in enumerate(result)}
+                else:
+                    output_dict = {'value': result}
+
+                results[symbol] = pd.DataFrame(output_dict, index=symbol_data.index)
+
+            except Exception as e:
+                logger.warning(f"计算{func_name}失败 {symbol}: {str(e)}")
+                continue
+
+        if results:
+            return pd.concat(results, names=['symbol'])
+        return pd.DataFrame()
+
+    # 保留旧方法以兼容
     def calculate_macd(self, codes: Union[str, List[str]], freq: str = '1d',
                       start_time: Union[str, datetime] = None, end_time: Union[str, datetime] = None,
                       fast_period: int = 12, slow_period: int = 26, signal_period: int = 9) -> pd.DataFrame:
-        """计算MACD指标
-        
-        Args:
-            codes: 股票代码或代码列表
-            freq: 数据频率
-            start_time: 开始时间
-            end_time: 结束时间
-            fast_period: 快线周期
-            slow_period: 慢线周期
-            signal_period: 信号线周期
-            
-        Returns:
-            pd.DataFrame: MACD指标数据，MultiIndex(time, symbol)
-        """
-        # 获取收盘价数据
-        close_df = self.get_klines(codes, freq, start_time, end_time, ['close'])
-        
-        if close_df.empty:
-            return close_df
-        
-        # 计算MACD指标
-        macd_results = {}
-        
-        for symbol in close_df.index.get_level_values(1).unique():
-            symbol_data = close_df.xs(symbol, level=1)
-            close_prices = symbol_data['close']
-            
-            # 计算EMA
-            ema_fast = close_prices.ewm(span=fast_period).mean()
-            ema_slow = close_prices.ewm(span=slow_period).mean()
-            
-            # 计算MACD线
-            macd_line = ema_fast - ema_slow
-            
-            # 计算信号线
-            signal_line = macd_line.ewm(span=signal_period).mean()
-            
-            # 计算MACD柱
-            macd_histogram = macd_line - signal_line
-            
-            # 组合结果
-            macd_results[symbol] = pd.DataFrame({
-                'macd': macd_line,
-                'signal': signal_line,
-                'histogram': macd_histogram
-            })
-        
-        # 合并所有股票的结果
-        if macd_results:
-            result_df = pd.concat(macd_results, names=['symbol'])
-            return result_df
-        else:
-            return pd.DataFrame()
-    
+        return self.calculate_indicator(talib.MACD, codes, freq, start_time, end_time,
+                                       fastperiod=fast_period, slowperiod=slow_period, signalperiod=signal_period)
+
     def calculate_rsi(self, codes: Union[str, List[str]], freq: str = '1d',
                      start_time: Union[str, datetime] = None, end_time: Union[str, datetime] = None,
                      period: int = 14) -> pd.DataFrame:
-        """计算RSI指标
-        
-        Args:
-            codes: 股票代码或代码列表
-            freq: 数据频率
-            start_time: 开始时间
-            end_time: 结束时间
-            period: 计算周期
-            
-        Returns:
-            pd.DataFrame: RSI指标数据，MultiIndex(time, symbol)
-        """
-        # 获取收盘价数据
-        close_df = self.get_klines(codes, freq, start_time, end_time, ['close'])
-        
-        if close_df.empty:
-            return close_df
-        
-        # 计算RSI指标
-        rsi_results = {}
-        
-        for symbol in close_df.index.get_level_values(1).unique():
-            symbol_data = close_df.xs(symbol, level=1)
-            close_prices = symbol_data['close']
-            
-            # 计算价格变化
-            delta = close_prices.diff()
-            
-            # 分离涨跌
-            gain = delta.where(delta > 0, 0)
-            loss = -delta.where(delta < 0, 0)
-            
-            # 计算平均涨跌幅
-            avg_gain = gain.rolling(window=period).mean()
-            avg_loss = loss.rolling(window=period).mean()
-            
-            # 计算RS和RSI
-            rs = avg_gain / avg_loss
-            rsi = 100 - (100 / (1 + rs))
-            
-            # 组合结果
-            rsi_results[symbol] = pd.DataFrame({'rsi': rsi})
-        
-        # 合并所有股票的结果
-        if rsi_results:
-            result_df = pd.concat(rsi_results, names=['symbol'])
-            return result_df
-        else:
-            return pd.DataFrame()
-    
+        return self.calculate_indicator(talib.RSI, codes, freq, start_time, end_time, timeperiod=period)
+
     def calculate_bollinger_bands(self, codes: Union[str, List[str]], freq: str = '1d',
                                 start_time: Union[str, datetime] = None, end_time: Union[str, datetime] = None,
                                 period: int = 20, std_dev: float = 2.0) -> pd.DataFrame:
-        """计算布林带指标
-        
-        Args:
-            codes: 股票代码或代码列表
-            freq: 数据频率
-            start_time: 开始时间
-            end_time: 结束时间
-            period: 计算周期
-            std_dev: 标准差倍数
-            
-        Returns:
-            pd.DataFrame: 布林带指标数据，MultiIndex(time, symbol)
-        """
-        # 获取收盘价数据
-        close_df = self.get_klines(codes, freq, start_time, end_time, ['close'])
-        
-        if close_df.empty:
-            return close_df
-        
-        # 计算布林带指标
-        bb_results = {}
-        
-        for symbol in close_df.index.get_level_values(1).unique():
-            symbol_data = close_df.xs(symbol, level=1)
-            close_prices = symbol_data['close']
-            
-            # 计算移动平均线
-            sma = close_prices.rolling(window=period).mean()
-            
-            # 计算标准差
-            rolling_std = close_prices.rolling(window=period).std()
-            
-            # 计算上下轨
-            upper_band = sma + (rolling_std * std_dev)
-            lower_band = sma - (rolling_std * std_dev)
-            
-            # 组合结果
-            bb_results[symbol] = pd.DataFrame({
-                'middle': sma,
-                'upper': upper_band,
-                'lower': lower_band
-            })
-        
-        # 合并所有股票的结果
-        if bb_results:
-            result_df = pd.concat(bb_results, names=['symbol'])
-            return result_df
-        else:
-            return pd.DataFrame()
+        return self.calculate_indicator(talib.BBANDS, codes, freq, start_time, end_time,
+                                       timeperiod=period, nbdevup=std_dev, nbdevdn=std_dev)
