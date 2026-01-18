@@ -360,10 +360,14 @@ class DataInterface:
             # 对于1分钟数据，优先使用timebased方式加载，减少文件数量
             if freq == '1m' and len(codes) > 10:
                 # 对于大量股票的1分钟数据，使用timebased方式更高效
+                logger.info(f"[DataInterface] 使用timebased加载: {len(codes)}只股票")
                 data = self._load_timebased_klines(codes, market, freq, start_date, end_date, fields)
+                logger.info(f"[DataInterface] timebased返回: {len(data)}条记录")
             else:
                 # 对于少量股票或日线数据，使用codebased方式
+                logger.info(f"[DataInterface] 使用codebased加载: {len(codes)}只股票")
                 data = self._load_codebased_klines(codes, market, freq, start_date, end_date, fields)
+                logger.info(f"[DataInterface] codebased返回: {len(data)}条记录")
             
             # 应用复权
             if adj_type != 'none' and market in ['cn_stock', 'cn_fund']:
@@ -373,20 +377,36 @@ class DataInterface:
             if use_cache and not data.empty:
                 self.kline_cache.put(cache_key, data)
             
-            logger.debug(f"加载K线数据: {len(codes)} 只股票, {len(data)} 条记录")
+            logger.info(f"[DataInterface] 最终返回: {len(codes)}只股票, {len(data)}条记录")
+            
+            if data.empty:
+                logger.warning(f"[DataInterface] ⚠️ 返回空DataFrame！检查数据文件是否存在")
+            
             return data
             
         except Exception as e:
             logger.error(f"获取K线数据失败: {e}")
+            import traceback
+            traceback.print_exc()
             return pd.DataFrame()
     
     def _load_timebased_klines(self, codes: List[str], market: str, freq: str, 
                               start_date: str, end_date: str, fields: List[str]) -> pd.DataFrame:
         """使用timebased方式加载K线数据 - 优化版"""
         try:
-            # 解析日期
-            start_dt = datetime.strptime(start_date, '%Y-%m-%d')
-            end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+            logger.info(f"[Timebased] 开始加载: market={market}, freq={freq}, "
+                       f"date_range={start_date}~{end_date}, codes={len(codes)}")
+            
+            # 解析日期（支持两种格式：'YYYY-MM-DD' 和 'YYYY-MM-DD HH:MM:SS'）
+            try:
+                start_dt = datetime.strptime(start_date, '%Y-%m-%d %H:%M:%S')
+            except ValueError:
+                start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+            
+            try:
+                end_dt = datetime.strptime(end_date, '%Y-%m-%d %H:%M:%S')
+            except ValueError:
+                end_dt = datetime.strptime(end_date, '%Y-%m-%d')
             
             # 生成日期列表
             date_list = []
@@ -395,6 +415,8 @@ class DataInterface:
                 date_list.append(current_dt)
                 current_dt += timedelta(days=1)
             
+            logger.info(f"[Timebased] 需要加载的日期数: {len(date_list)}")
+            
             # 按月分组，减少文件读取次数
             monthly_groups = {}
             for dt in date_list:
@@ -402,6 +424,8 @@ class DataInterface:
                 if month_key not in monthly_groups:
                     monthly_groups[month_key] = []
                 monthly_groups[month_key].append(dt)
+            
+            logger.info(f"[Timebased] 需要加载的月份数: {len(monthly_groups)}")
             
             # 并行加载各月数据
             futures = []
@@ -439,7 +463,10 @@ class DataInterface:
                              market: str, freq: str, fields: List[str]) -> pd.DataFrame:
         """加载指定月份的timebased数据"""
         try:
+            logger.info(f"[LoadMonth] 加载 {year}-{month:02d}，日期数: {len(dates)}")
             month_data = []
+            files_found = 0
+            files_missing = 0
             
             for dt in dates:
                 # 构建文件路径
@@ -450,16 +477,33 @@ class DataInterface:
                 )
                 
                 if os.path.exists(file_path):
+                    files_found += 1
                     # 读取文件
                     df = pd.read_csv(file_path, header=None, 
                                    names=['time', 'symbol', 'open', 'high', 'low', 'close', 'volume', 'amount'])
                     
-                    # 转换时间格式
-                    df['time'] = pd.to_datetime(df['time'])
+                    # 转换时间格式（修复：清理时间字符串，保持本地时间）
+                    # 清除可能的多余空格
+                    df['time'] = df['time'].str.strip()
                     
-                    # 确保时间是无时区的，便于比较
-                    if hasattr(df['time'].dt, 'tz') and df['time'].dt.tz is not None:
-                        df['time'] = df['time'].dt.tz_localize(None)
+                    # 解析时间并保持本地时间（不转换时区）
+                    try:
+                        # 先解析为带时区的时间
+                        df['time'] = pd.to_datetime(df['time'], format='mixed')
+                        # 如果有时区信息，转换到该时区的本地时间后移除时区
+                        if hasattr(df['time'].dt, 'tz') and df['time'].dt.tz is not None:
+                            # 保持原时区的时间值，只移除时区标记
+                            df['time'] = df['time'].dt.tz_localize(None)
+                    except Exception as e:
+                        # 如果format='mixed'失败，尝试去除时区信息后解析
+                        logger.debug(f"时间解析失败，尝试移除时区: {e}")
+                        try:
+                            # 手动移除时区部分（如 +08:00）
+                            df['time'] = df['time'].str.replace(r'[+-]\d{2}:\d{2}$', '', regex=True)
+                            df['time'] = pd.to_datetime(df['time'], errors='coerce')
+                        except Exception as e2:
+                            logger.error(f"时间解析完全失败: {e2}")
+                            df['time'] = pd.to_datetime(df['time'], errors='coerce')
                     
                     # 设置多级索引
                     df.set_index(['time', 'symbol'], inplace=True)
@@ -470,14 +514,24 @@ class DataInterface:
                         df = df[available_fields]
                     
                     month_data.append(df)
+                else:
+                    files_missing += 1
+                    logger.debug(f"[LoadMonth] 文件不存在: {file_path}")
+            
+            logger.info(f"[LoadMonth] {year}-{month:02d} 加载完成: 找到{files_found}个文件, 缺失{files_missing}个文件, 数据块{len(month_data)}个")
             
             if month_data:
-                return pd.concat(month_data, ignore_index=False)
+                result = pd.concat(month_data, ignore_index=False)
+                logger.info(f"[LoadMonth] 合并后: {len(result)}条记录")
+                return result
             else:
+                logger.warning(f"[LoadMonth] ⚠️ {year}-{month:02d} 没有加载到任何数据")
                 return pd.DataFrame()
                 
         except Exception as e:
             logger.error(f"加载月份 {year}-{month:02d} 数据失败: {e}")
+            import traceback
+            traceback.print_exc()
             return pd.DataFrame()
     
     def _load_codebased_klines(self, codes: List[str], market: str, freq: str, 
@@ -672,16 +726,15 @@ class DataInterface:
                         
                         logger.debug(f"读取{year}年{symbol}数据: 原始行数={len(year_data)}")
                         
-                        # 转换时间格式
-                        year_data['time'] = pd.to_datetime(year_data['time'])
+                        # 转换时间格式（修复：处理带时区的格式）
+                        year_data['time'] = year_data['time'].str.strip()
+                        # 移除时区信息后解析
+                        year_data['time'] = year_data['time'].str.replace(r'[+-]\d{2}:\d{2}$', '', regex=True)
+                        year_data['time'] = pd.to_datetime(year_data['time'], errors='coerce')
 
                         # 过滤日期范围 - 对于日线数据，扩展到整天范围以确保包含性
                         start_dt = pd.to_datetime(start_date).normalize()  # 设置为当天的开始
                         end_dt = pd.to_datetime(end_date).normalize() + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)  # 设置为当天的结束
-
-                        # 确保时间比较的兼容性 - 移除时区信息
-                        if hasattr(year_data['time'].dt, 'tz') and year_data['time'].dt.tz is not None:
-                            year_data['time'] = year_data['time'].dt.tz_localize(None)
                         
                         logger.debug(f"时间范围检查: 开始={start_dt}, 结束={end_dt}, 数据时间范围={year_data['time'].min()}-{year_data['time'].max()}")
                         

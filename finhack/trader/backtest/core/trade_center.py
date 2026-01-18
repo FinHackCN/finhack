@@ -132,6 +132,10 @@ class TradeCenter:
         # 交易规则
         self.trading_rules = {}
         self._load_trading_rules()
+        
+        # 性能优化：价格缓存
+        self._price_cache = {}  # {symbol: price} 当前bar的价格缓存
+        self._current_bar_time = None  # 当前bar时间戳
     
     def initialize(self, context):
         """
@@ -465,12 +469,8 @@ class TradeCenter:
         Returns:
             float: 价格
         """
-        if not self._context or not self._context.data_center:
-            return None
-        
-        # DataCenter.get_price只接受symbol和date参数
-        date_str = self._context.current_dt.strftime('%Y-%m-%d') if self._context.current_dt else None
-        return self._context.data_center.get_price(symbol, date_str)
+        # 直接调用_get_price_from_datacenter，使用统一的逻辑
+        return self._get_price_from_datacenter(symbol)
     
     def _validate_order(self, order: Order) -> bool:
         """验证订单"""
@@ -1889,30 +1889,90 @@ class TradeCenter:
                 self._context.logger.info(f"取消订单释放资金: {order.order_id}, 金额: {order_cost:.2f}")
     
     def _get_price_from_datacenter(self, symbol: str) -> Optional[float]:
-        """从DataCenter获取股票价格"""
+        """从DataCenter获取股票价格（带缓存优化）"""
         try:
             if not self._context or not self._context.data_center:
                 return None
             
-            # 获取当前交易日期
-            current_date = self._context.current_dt.strftime('%Y-%m-%d') if self._context.current_dt else None
+            # 获取当前回测时间
+            current_time = self._context.current_dt
+            if not current_time:
+                return None
             
-            # 尝试从DataCenter获取价格
-            price = self._context.data_center.get_price(symbol, current_date)
+            # 获取当前频率
+            freq = '1d'
+            if hasattr(self._context, 'trade_config'):
+                freq = self._context.trade_config.get('frequency', '1d')
+            elif hasattr(self._context, 'settings'):
+                freq = self._context.settings.get('freq', '1d')
             
-            if price and price > 0:
-                return price
+            # === 性能优化：价格缓存 ===
+            # 生成缓存键（精确到bar级别）
+            if freq == '1m':
+                # 1分钟数据：缓存键精确到分钟
+                cache_key = current_time.replace(second=0, microsecond=0)
+            else:
+                # 日线数据：缓存键精确到日期
+                cache_key = current_time.date()
             
-            # 如果无法获取价格，尝试从K线数据获取
-            if current_date:
-                kline_data = self._context.data_center.get_kline(symbol, current_date, current_date)
-                if not kline_data.empty:
-                    return float(kline_data.iloc[-1]['close'])
+            # 如果bar时间变化，清空缓存
+            if cache_key != self._current_bar_time:
+                self._price_cache = {}
+                self._current_bar_time = cache_key
             
-            return None
+            # 检查缓存
+            if symbol in self._price_cache:
+                return self._price_cache[symbol]
+            
+            # === 缓存未命中，从DataCenter获取 ===
+            
+            # 获取复权类型
+            adj_type = 'none'
+            if hasattr(self._context, 'trade_config'):
+                adj_type = self._context.trade_config.get('adj_type', 'none')
+            
+            # 使用get_quotes方法获取价格
+            quotes_df = self._context.data_center.get_quotes(
+                codes=[symbol],
+                freq=freq,
+                time=current_time,
+                fields=['close'],
+                adj_type=adj_type
+            )
+            
+            price = None
+            if not quotes_df.empty and symbol in quotes_df.index:
+                price = float(quotes_df.loc[symbol, 'close'])
+            
+            # 如果get_quotes失败，尝试使用get_klines获取最近的价格
+            if price is None:
+                from datetime import timedelta
+                start_time = (current_time - timedelta(days=5)).strftime('%Y-%m-%d %H:%M:%S')
+                end_time = current_time.strftime('%Y-%m-%d %H:%M:%S')
+                
+                klines_df = self._context.data_center.get_klines(
+                    codes=[symbol],
+                    freq=freq,
+                    start_time=start_time,
+                    end_time=end_time,
+                    fields=['close'],
+                    adj_type=adj_type
+                )
+                
+                if not klines_df.empty:
+                    # 获取最接近当前时间的数据
+                    symbol_klines = klines_df[klines_df.index.get_level_values('symbol') == symbol]
+                    if not symbol_klines.empty:
+                        price = float(symbol_klines['close'].iloc[-1])
+            
+            # 缓存价格（无论成功与否都缓存，避免重复查询）
+            if price is not None:
+                self._price_cache[symbol] = price
+            
+            return price
             
         except Exception as e:
-            if self._context:
+            if self._context and hasattr(self._context, 'logger'):
                 self._context.logger.error(f"从DataCenter获取价格失败: {symbol} - {str(e)}")
             return None
     
