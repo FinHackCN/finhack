@@ -398,23 +398,34 @@ class PriceRelatedSlippage:
             
     def bind_strategy_api(self):
         """绑定策略所需的API函数"""
-        # 绑定定时任务注册函数
+        # ========== 核心组件绑定 ==========
+        # 绑定 data_center（重要！很多策略需要直接访问）
+        self.strategy.data_center = self.data_center
+        
+        # ========== 定时任务注册函数 ==========
         self.strategy.run_daily = self.run_daily
         self.strategy.run_weekly = self.run_weekly
         self.strategy.run_interval = self.run_interval
         
-        # 绑定数据获取方法
+        # ========== 数据获取方法 ==========
+        # K线和行情数据
         self.strategy.get_quotes = self.data_center.get_quotes
         self.strategy.get_klines = self.data_center.get_klines
         self.strategy.get_factors = self.data_center.get_factors
+        
+        # 参考数据获取方法（新增）
+        self.strategy.get_stock_list = self.get_stock_list_sync
+        self.strategy.get_trading_calendar = self.data_center.get_trading_calendar
         
         # 为了兼容性，提供别名
         self.strategy.get_price = self.get_price_sync
         self.strategy.get_kline = self.data_center.get_klines
         
-        # 绑定交易方法（同步版本）
+        # ========== 交易方法（同步版本） ==========
         self.strategy.place_order = self.place_order_sync
         self.strategy.cancel_order = self.cancel_order_sync
+        
+        # ========== 查询方法 ==========
         self.strategy.get_account = self.get_account_sync
         self.strategy.get_positions = self.get_positions_sync
         self.strategy.get_orders = self.get_orders_sync
@@ -422,12 +433,12 @@ class PriceRelatedSlippage:
         self.strategy.get_cash = self.get_cash_sync
         self.strategy.get_current_price = self.get_current_price_sync
         
-        # 绑定便利方法
+        # ========== 便利方法 ==========
         self.strategy.order_buy = self.order_buy_sync
         self.strategy.order_sell = self.order_sell_sync
         self.strategy.sell_all_stocks = self.sell_all_stocks_sync
         
-        # 绑定回测配置方法（这些在回测中通常是空操作）
+        # ========== 回测配置方法 ==========
         self.strategy.set_benchmark = self.set_benchmark
         self.strategy.set_option = self.set_option
         self.strategy.set_order_cost = self.set_order_cost
@@ -461,6 +472,39 @@ class PriceRelatedSlippage:
         except Exception as e:
             logger.error(f"获取股票价格失败: {code} - {str(e)}")
             return None
+    
+    def get_stock_list_sync(self, market=None, use_cache=True):
+        """获取股票列表的同步方法
+        
+        Args:
+            market: 市场名称，如果为None则使用当前回测市场
+            use_cache: 是否使用缓存
+            
+        Returns:
+            list: 股票代码列表
+        """
+        try:
+            # 如果没有指定市场，使用当前回测市场
+            if market is None:
+                market = self.context.get('settings', {}).get('market', 'cn_stock')
+            
+            # 调用DataCenter的数据接口
+            stock_list_df = self.data_center.data_interface.get_stock_list(market, use_cache=use_cache)
+            
+            if stock_list_df is not None and not stock_list_df.empty:
+                # 返回股票代码列表
+                stock_codes = stock_list_df['code'].tolist()
+                logger.info(f"成功获取 {market} 股票列表: {len(stock_codes)} 只")
+                return stock_codes
+            else:
+                logger.warning(f"无法获取 {market} 的股票列表")
+                return []
+                
+        except Exception as e:
+            logger.error(f"获取股票列表失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
     
     def place_order_sync(self, adapter_id, symbol, side, order_type, volume, price=None, **kwargs):
         """同步下单方法"""
@@ -497,6 +541,7 @@ class PriceRelatedSlippage:
                 
                 # 添加到订单列表
                 self.engine.trade_center.orders[order_id] = order
+                self.engine.trade_center.active_orders[order_id] = order  # 同时添加到活跃订单
                 order.status = OrderStatus.NEW
                 
                 logger.info(f"下单成功: {symbol} {side.value} {order_type.value} 数量:{volume} 价格:{price}")
@@ -515,6 +560,9 @@ class PriceRelatedSlippage:
                 order = self.engine.trade_center.orders[order_id]
                 order.status = OrderStatus.CANCELLED
                 order.rejected_reason = "用户撤单"
+                # 从活跃订单中移除
+                if order_id in self.engine.trade_center.active_orders:
+                    del self.engine.trade_center.active_orders[order_id]
                 logger.info(f"撤单成功: {order_id}")
                 return True
             else:

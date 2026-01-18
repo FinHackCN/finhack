@@ -29,7 +29,8 @@ class TradeCenter:
         # 初始化账户
         self.account = Account.from_dict(context['account'])
         self.positions = {}  # symbol -> Position
-        self.orders = {}     # order_id -> Order
+        self.orders = {}     # order_id -> Order (所有订单历史)
+        self.active_orders = {}  # order_id -> Order (仅活跃订单，用于撮合)
         self.trades = []     # List[Trade]
         
         # 订单ID计数器
@@ -97,6 +98,7 @@ class TradeCenter:
             
         # 添加到订单列表
         self.orders[order_id] = order
+        self.active_orders[order_id] = order  # 同时添加到活跃订单
         order.status = OrderStatus.NEW
         
         Log.logger.info(f"订单提交成功: {order_id} {symbol} {side} {volume}@{price}")
@@ -115,6 +117,10 @@ class TradeCenter:
             
         order.status = OrderStatus.CANCELLED
         order.updated_time = self.context.get('current_dt', datetime.now())
+        
+        # 从活跃订单中移除
+        if order_id in self.active_orders:
+            del self.active_orders[order_id]
         
         Log.logger.info(f"订单撤销成功: {order_id}")
         return True
@@ -346,11 +352,11 @@ class TradeCenter:
         matched_orders = []
         current_time = self.context.get('current_dt')
 
-        Log.logger.debug(f"开始撮合，共{len(self.orders)}个订单，市场数据: {list(market_data.keys())}")
+        Log.logger.debug(f"开始撮合，共{len(self.active_orders)}个活跃订单（总订单{len(self.orders)}），市场数据: {list(market_data.keys())}")
 
-        for order_id, order in self.orders.items():
-            if order.status != OrderStatus.NEW:
-                continue
+        # 使用 active_orders 替代 orders，避免遍历所有历史订单
+        for order_id, order in list(self.active_orders.items()):
+            # active_orders 中只包含 NEW 状态的订单，无需再检查状态
 
             symbol = order.symbol
             Log.logger.debug(f"检查订单 {order_id}: {symbol}, 类型: {order.order_type}, 方向: {order.side}, 价格: {order.price}")
@@ -450,6 +456,10 @@ class TradeCenter:
             order.avg_fill_price = fill_price
             order.updated_time = trade.trade_time
             
+            # 从活跃订单中移除
+            if order.order_id in self.active_orders:
+                del self.active_orders[order.order_id]
+            
             # 添加成交记录
             self.trades.append(trade)
             
@@ -464,6 +474,9 @@ class TradeCenter:
             Log.logger.error(f"执行成交失败: {e}")
             order.status = OrderStatus.REJECTED
             order.rejected_reason = f"成交执行失败: {str(e)}"
+            # 从活跃订单中移除失败的订单
+            if order.order_id in self.active_orders:
+                del self.active_orders[order.order_id]
             
     def _update_position_sync(self, trade: Trade):
         """更新持仓 - 同步版本"""
@@ -581,10 +594,8 @@ class BacktestEngine:
         Returns:
             bool: True表示有挂单，False表示没有挂单
         """
-        for order in self.trade_center.orders.values():
-            if order.status == OrderStatus.NEW:
-                return True
-        return False
+        # 使用 active_orders，性能更好
+        return len(self.trade_center.active_orders) > 0
         
     def _handle_order_submission(self, event: Dict):
         """处理订单提交事件"""
@@ -603,56 +614,49 @@ class BacktestEngine:
         market = self.context['settings']['market']
         freq = self.context['settings']['freq']
         
-        # 获取所有需要行情的标的
+        # 获取所有需要行情的标的（使用 active_orders）
         symbols = set()
-        for order in self.trade_center.orders.values():
-            if order.status == OrderStatus.NEW:
-                symbols.add(order.symbol)
+        for order in self.trade_center.active_orders.values():
+            symbols.add(order.symbol)
                 
         if not symbols:
             return
 
-        # 获取行情数据
+        # 获取行情数据 - 批量获取以提高性能
         try:
             market_data = {}
-            for symbol in symbols:
-                Log.logger.debug(f"获取 {symbol} 的行情数据，频率: {freq}, 时间: {current_time}")
-
+            symbols_list = list(symbols)
+            
+            # 批量获取行情数据而不是逐个获取
+            if freq == '1m':
                 # 对于1分钟数据，使用get_klines获取最近的数据
-                # 因为get_quotes的精确时间匹配可能失败
-                if freq == '1m':
-                    # 获取过去5分钟的1分钟K线数据
-                    from datetime import timedelta
-                    start_time = current_time - timedelta(minutes=5)
-                    klines_df = self.data_center.get_klines(
-                        codes=[symbol],
-                        freq=freq,
-                        start_time=start_time.strftime('%Y-%m-%d %H:%M:%S'),
-                        end_time=(current_time + timedelta(minutes=1)).strftime('%Y-%m-%d %H:%M:%S'),
-                        fields=['close']
-                    )
+                from datetime import timedelta
+                start_time = current_time - timedelta(minutes=5)
+                klines_df = self.data_center.get_klines(
+                    codes=symbols_list,  # 批量获取
+                    freq=freq,
+                    start_time=start_time.strftime('%Y-%m-%d %H:%M:%S'),
+                    end_time=(current_time + timedelta(minutes=1)).strftime('%Y-%m-%d %H:%M:%S'),
+                    fields=['close']
+                )
 
-                    if not klines_df.empty:
-                        # 找到最接近当前时间的数据
-                        symbol_klines = klines_df[klines_df.index.get_level_values('symbol') == symbol]
-                        if not symbol_klines.empty:
-                            # 使用最新的数据
-                            latest_close = symbol_klines['close'].iloc[-1]
-                            market_data[symbol] = {'close': latest_close}
-                            Log.logger.debug(f"{symbol} 从K线获取行情: close={latest_close}")
-                        else:
-                            Log.logger.warning(f"无法获取 {symbol} 的K线数据")
-                    else:
-                        Log.logger.warning(f"无法获取 {symbol} 的行情数据")
-                else:
-                    # 对于日线数据，使用原来的get_quotes方法
-                    quote_df = self.data_center.get_quotes([symbol], freq=freq, time=current_time, fields=['close'])
-                    Log.logger.debug(f"{symbol} 行情数据结果: DataFrame形状={quote_df.shape}, 是否为空={quote_df.empty}")
-                    if not quote_df.empty:
-                        market_data[symbol] = quote_df.loc[symbol].to_dict()
-                        Log.logger.debug(f"{symbol} 行情数据内容: {market_data[symbol]}")
-                    else:
-                        Log.logger.warning(f"无法获取 {symbol} 的行情数据")
+                if not klines_df.empty:
+                    # 为每个symbol提取最新数据
+                    for symbol in symbols_list:
+                        try:
+                            symbol_klines = klines_df[klines_df.index.get_level_values('symbol') == symbol]
+                            if not symbol_klines.empty:
+                                latest_close = symbol_klines['close'].iloc[-1]
+                                market_data[symbol] = {'close': latest_close}
+                        except Exception as e:
+                            Log.logger.warning(f"提取 {symbol} 行情数据失败: {e}")
+            else:
+                # 对于日线数据，批量获取
+                quote_df = self.data_center.get_quotes(symbols_list, freq=freq, time=current_time, fields=['close'])
+                if not quote_df.empty:
+                    for symbol in symbols_list:
+                        if symbol in quote_df.index:
+                            market_data[symbol] = quote_df.loc[symbol].to_dict()
 
             # 执行撮合
             self.trade_center.try_match_orders_sync(market_data)
@@ -1169,70 +1173,84 @@ class BacktestEngine:
         market = self.context['settings']['market']
         freq = self.context['settings']['freq']
         
-        # 获取所有需要行情的标的
+        # 获取所有需要行情的标的（使用 active_orders）
         symbols = set()
-        for order_id, order in self.trade_center.orders.items():
-            if hasattr(order, 'status') and order.status == OrderStatus.NEW:
-                symbols.add(order.symbol)
+        for order_id, order in self.trade_center.active_orders.items():
+            symbols.add(order.symbol)
                 
         if not symbols:
             return
 
-        # 获取行情数据
+        # 获取行情数据 - 批量获取以提高性能
         try:
             market_data = {}
-            for symbol in symbols:
-                Log.logger.debug(f"获取 {symbol} 的行情数据，频率: {freq}, 时间: {current_time}")
-
+            symbols_list = list(symbols)
+            
+            Log.logger.info(f"[撮合] 准备获取行情: 时间={current_time}, 标的数={len(symbols_list)}, 频率={freq}")
+            
+            # 批量获取行情数据而不是逐个获取
+            if freq == '1m':
                 # 对于1分钟数据，使用get_klines获取最近的数据
-                # 因为get_quotes的精确时间匹配可能失败
-                if freq == '1m':
-                    # 获取过去5分钟的1分钟K线数据
-                    from datetime import timedelta
-                    start_time = current_time - timedelta(minutes=5)
-                    klines_df = self.data_center.get_klines(
-                        codes=[symbol],
-                        freq=freq,
-                        start_time=start_time.strftime('%Y-%m-%d %H:%M:%S'),
-                        end_time=(current_time + timedelta(minutes=1)).strftime('%Y-%m-%d %H:%M:%S'),
-                        fields=['close']
-                    )
-
-                    if not klines_df.empty:
-                        # 找到最接近当前时间的数据
-                        symbol_klines = klines_df[klines_df.index.get_level_values('symbol') == symbol]
-                        if not symbol_klines.empty:
-                            # 使用最新的数据
-                            latest_close = symbol_klines['close'].iloc[-1]
-                            market_data[symbol] = {'close': latest_close}
-                            Log.logger.debug(f"{symbol} 从K线获取行情: close={latest_close}")
-                        else:
-                            Log.logger.warning(f"无法获取 {symbol} 的K线数据")
-                    else:
-                        Log.logger.warning(f"无法获取 {symbol} 的行情数据")
+                from datetime import timedelta
+                start_time = current_time - timedelta(minutes=5)
+                end_time = current_time + timedelta(minutes=1)
+                
+                Log.logger.info(f"[撮合] 调用get_klines: codes={symbols_list}, start={start_time}, end={end_time}")
+                
+                klines_df = self.data_center.get_klines(
+                    codes=symbols_list,  # 批量获取
+                    freq=freq,
+                    start_time=start_time.strftime('%Y-%m-%d %H:%M:%S'),
+                    end_time=end_time.strftime('%Y-%m-%d %H:%M:%S'),
+                    fields=['close']
+                )
+                
+                Log.logger.info(f"[撮合] get_klines返回: shape={klines_df.shape if not klines_df.empty else 'empty'}, "
+                              f"empty={klines_df.empty}")
+                
+                if not klines_df.empty:
+                    Log.logger.info(f"[撮合] K线数据不为空，开始提取各标的数据...")
+                    # 为每个symbol提取最新数据
+                    for symbol in symbols_list:
+                        try:
+                            symbol_klines = klines_df[klines_df.index.get_level_values('symbol') == symbol]
+                            if not symbol_klines.empty:
+                                latest_close = symbol_klines['close'].iloc[-1]
+                                market_data[symbol] = {'close': latest_close}
+                                Log.logger.info(f"[撮合] {symbol}: close={latest_close}")
+                            else:
+                                Log.logger.warning(f"[撮合] {symbol} 在DataFrame中无数据")
+                        except Exception as e:
+                            Log.logger.warning(f"提取 {symbol} 行情数据失败: {e}")
                 else:
-                    # 对于日线数据，使用原来的get_quotes方法
-                    quote_df = self.data_center.get_quotes([symbol], freq=freq, time=current_time, fields=['close'])
-                    Log.logger.debug(f"{symbol} 行情数据结果: DataFrame形状={quote_df.shape}, 是否为空={quote_df.empty}")
-                    if not quote_df.empty:
-                        market_data[symbol] = quote_df.loc[symbol].to_dict()
-                        Log.logger.debug(f"{symbol} 行情数据内容: {market_data[symbol]}")
-                    else:
-                        Log.logger.warning(f"无法获取 {symbol} 的行情数据")
-
+                    Log.logger.warning(f"[撮合] K线数据为空！检查数据加载")
+            else:
+                # 对于日线数据，批量获取
+                quote_df = self.data_center.get_quotes(symbols_list, freq=freq, time=current_time, fields=['close'])
+                if not quote_df.empty:
+                    for symbol in symbols_list:
+                        if symbol in quote_df.index:
+                            market_data[symbol] = quote_df.loc[symbol].to_dict()
+            
+            Log.logger.info(f"[撮合] 最终market_data: {list(market_data.keys())}")
+            
             # 执行撮合
             self.trade_center.try_match_orders_sync(market_data)
 
         except Exception as e:
             Log.logger.error(f"撮合过程中发生错误: {e}")
+            import traceback
+            traceback.print_exc()
             
     def _handle_market_end_sync(self, event):
         """处理收盘事件 - 同步版本"""
-        # 取消未成交的市价单
-        for order in list(self.trade_center.orders.values()):
-            if order.status == OrderStatus.NEW and order.order_type == OrderType.MARKET:
+        # 取消未成交的市价单（使用 active_orders）
+        for order_id, order in list(self.trade_center.active_orders.items()):
+            if order.order_type == OrderType.MARKET:
                 order.status = OrderStatus.CANCELLED
                 order.rejected_reason = "收盘时未成交自动撤销"
+                # 从活跃订单中移除
+                del self.trade_center.active_orders[order_id]
                 
     def _handle_day_end_sync(self, event):
         """处理日终事件 - 同步版本"""

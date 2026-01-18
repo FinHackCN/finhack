@@ -523,6 +523,10 @@ class DataCenter:
         
         market = self._get_market_from_context()
         
+        logger.info(f"[DataCenter] get_klines调用: market={market}, freq={freq}, "
+                   f"codes_count={len(codes) if isinstance(codes, list) else 1}, "
+                   f"start={start_time}, end={end_time}")
+        
         # 检查频率是否支持
         if freq not in self.supported_frequencies:
             logger.warning(f"不支持的频率: {freq}, 将使用1m数据进行聚合")
@@ -531,7 +535,7 @@ class DataCenter:
                 return self._aggregate_klines(codes, '1m', freq, start_time, end_time, fields, adj_type)
         
         # 使用统一数据接口获取K线数据
-        return self.data_interface.get_klines(
+        result = self.data_interface.get_klines(
             codes=codes,
             market=market,
             freq=freq,
@@ -541,6 +545,16 @@ class DataCenter:
             adj_type=adj_type,
             use_cache=True
         )
+        
+        logger.info(f"[DataCenter] get_klines返回: shape={result.shape if not result.empty else 'empty'}, "
+                   f"empty={result.empty}, "
+                   f"index_names={result.index.names if not result.empty else 'N/A'}")
+        
+        if result.empty:
+            logger.warning(f"[DataCenter] ⚠️ 返回空DataFrame！参数: codes={codes[:3] if isinstance(codes, list) else codes}, "
+                         f"start={start_time}, end={end_time}")
+        
+        return result
     
     def _aggregate_klines(self, codes: Union[str, List[str]], source_freq: str, target_freq: str,
                          start_time: Union[str, datetime] = None, end_time: Union[str, datetime] = None,
