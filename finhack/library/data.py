@@ -330,14 +330,22 @@ class DataInterface:
             codes = [codes]
         
         if isinstance(start_date, datetime):
-            start_date = start_date.strftime('%Y-%m-%d')
+            # 如果是datetime对象，保留完整时间信息
+            start_date = start_date.strftime('%Y-%m-%d %H:%M:%S')
         elif start_date is None:
-            start_date = '20240101'
+            start_date = '2024-01-01 00:00:00'
+        elif ' ' not in start_date:
+            # 如果只有日期没有时间，添加时间
+            start_date = start_date + ' 00:00:00'
             
         if isinstance(end_date, datetime):
-            end_date = end_date.strftime('%Y-%m-%d')
+            # 如果是datetime对象，保留完整时间信息
+            end_date = end_date.strftime('%Y-%m-%d %H:%M:%S')
         elif end_date is None:
-            end_date = datetime.now().strftime('%Y-%m-%d')
+            end_date = datetime.now().strftime('%Y-%m-%d 23:59:59')
+        elif ' ' not in end_date:
+            # 如果只有日期没有时间，添加时间
+            end_date = end_date + ' 23:59:59'
         
         if fields is None:
             fields = ['open', 'high', 'low', 'close', 'volume', 'amount']
@@ -357,17 +365,38 @@ class DataInterface:
         
         # 从数据源获取
         try:
-            # 对于1分钟数据，优先使用timebased方式加载，减少文件数量
-            if freq == '1m' and len(codes) > 10:
-                # 对于大量股票的1分钟数据，使用timebased方式更高效
-                logger.info(f"[DataInterface] 使用timebased加载: {len(codes)}只股票")
-                data = self._load_timebased_klines(codes, market, freq, start_date, end_date, fields)
-                logger.info(f"[DataInterface] timebased返回: {len(data)}条记录")
-            else:
-                # 对于少量股票或日线数据，使用codebased方式
-                logger.info(f"[DataInterface] 使用codebased加载: {len(codes)}只股票")
+            # 智能选择加载方式
+            # 解析日期范围，判断是否跨年份
+            start_dt = pd.to_datetime(start_date)
+            end_dt = pd.to_datetime(end_date)
+            is_cross_year = (start_dt.year != end_dt.year)
+
+            # Parquet适合：单年份、代码数量多（>100）
+            use_parquet = (
+                not is_cross_year and  # 单年份
+                len(codes) > 100 and  # 代码数量较多
+                PARQUET_AVAILABLE and  # Parquet支持可用
+                freq in ['1d', '1m']  # 支持的频率
+            )
+
+            # 根据条件选择加载方式
+            if use_parquet:
+                # 单年份+大量代码：优先使用parquet
+                logger.info(f"[DataInterface] 优先使用Parquet加载: {len(codes)}只股票, 单年份{start_dt.year}")
+                # 强制使用codebased加载，它会内部尝试parquet
+                # 不再分批，直接传入全部codes
                 data = self._load_codebased_klines(codes, market, freq, start_date, end_date, fields)
-                logger.info(f"[DataInterface] codebased返回: {len(data)}条记录")
+                logger.info(f"[DataInterface] Parquet/Codebased返回: {len(data)}条记录")
+            elif freq == '1m' and len(codes) > 50:
+                # 1分钟+中大量代码：使用timebased（CSV，减少文件数量）
+                logger.info(f"[DataInterface] 使用Timebased加载: {len(codes)}只股票")
+                data = self._load_timebased_klines(codes, market, freq, start_date, end_date, fields)
+                logger.info(f"[DataInterface] Timebased返回: {len(data)}条记录")
+            else:
+                # 其他情况：使用codebased（少量代码或日线数据）
+                logger.info(f"[DataInterface] 使用Codebased加载: {len(codes)}只股票")
+                data = self._load_codebased_klines(codes, market, freq, start_date, end_date, fields)
+                logger.info(f"[DataInterface] Codebased返回: {len(data)}条记录")
             
             # 应用复权
             if adj_type != 'none' and market in ['cn_stock', 'cn_fund']:
@@ -554,20 +583,20 @@ class DataInterface:
             
             # 尝试优先使用Parquet缓存（如果满足条件）
             if use_parquet:
-                logger.debug(f"尝试使用Parquet缓存加载: codes={len(codes)}, years={years}")
+                logger.info(f"[CodeBased] 满足Parquet条件: {len(codes)}只股票, 单年份{years}, 尝试Parquet加载")
                 parquet_result = self._try_load_parquet_cache(
                     market, freq, start_dt, end_dt, codes, fields
                 )
                 if parquet_result is not None:
-                    logger.debug(f"使用Parquet缓存加载 {market}/{freq} 数据")
+                    logger.info(f"[CodeBased] ✓ 成功使用Parquet缓存加载 {market}/{freq} 数据: {len(parquet_result)}条")
                     return parquet_result
                 else:
-                    logger.debug(f"Parquet缓存不可用，回退到CSV加载")
+                    logger.info(f"[CodeBased] ✗ Parquet缓存不可用，回退到CSV加载")
             
             if use_parquet:
-                logger.debug(f"Parquet可用但加载失败，回退到CSV加载")
+                logger.info(f"[CodeBased] Parquet可用但加载失败，回退到CSV加载")
             else:
-                logger.debug(f"使用CSV加载: codes={len(codes)}, years={years}")
+                logger.info(f"[CodeBased] 不满足Parquet条件，使用CSV加载: {len(codes)}只股票, 年份={years}")
             
             # 回退到CSV加载（多年份或Parquet不可用或代码数量少时）
             # 并行加载各股票数据
@@ -629,15 +658,15 @@ class DataInterface:
             
             # 检查Parquet文件是否存在
             if not os.path.exists(parquet_file):
-                logger.debug(f"Parquet缓存文件不存在: {parquet_file}")
+                logger.info(f"[Parquet] 文件不存在: {parquet_file}")
                 return None
             
-            logger.debug(f"尝试从Parquet缓存加载: {parquet_file}")
+            logger.info(f"[Parquet] 开始加载: {parquet_file}, 大小={os.path.getsize(parquet_file)/1024/1024/1024:.2f}GB")
             
             # 定义需要的列（列裁剪）
             required_columns = ['time', 'code'] + [f for f in fields if f in ['open', 'high', 'low', 'close', 'volume', 'amount']]
             
-            logger.debug(f"Parquet加载参数: codes={len(codes)}, columns={len(required_columns)}")
+            logger.info(f"[Parquet] 加载参数: codes={len(codes)}, columns={len(required_columns)}, 时间范围={start_dt}~{end_dt}")
             
             # 使用pyarrow.parquet.read_table读取数据（使用列裁剪）
             # 注意：由于时区兼容性问题，暂时不使用filters，在Python中过滤
@@ -651,10 +680,10 @@ class DataInterface:
             df = table.to_pandas()
             
             if df.empty:
-                logger.debug(f"Parquet加载结果为空")
+                logger.warning(f"[Parquet] 加载结果为空")
                 return None
             
-            logger.debug(f"从Parquet加载了 {len(df)} 条原始数据")
+            logger.info(f"[Parquet] 从文件加载了 {len(df)} 条原始数据")
             
             # 移除时区信息以进行过滤
             if hasattr(df['time'].dt, 'tz') and df['time'].dt.tz is not None:
@@ -662,16 +691,20 @@ class DataInterface:
             
             # 在Python中过滤数据
             # 过滤代码
+            before_filter = len(df)
             df = df[df['code'].isin(codes)]
+            logger.info(f"[Parquet] 代码过滤: {before_filter} -> {len(df)}")
             
             # 过滤时间范围
+            before_time_filter = len(df)
             df = df[(df['time'] >= start_dt) & (df['time'] <= end_dt)]
+            logger.info(f"[Parquet] 时间过滤: {before_time_filter} -> {len(df)}")
             
             if df.empty:
-                logger.debug(f"过滤后结果为空")
+                logger.warning(f"[Parquet] 过滤后结果为空，时间范围可能不匹配")
                 return None
             
-            logger.debug(f"过滤后剩余 {len(df)} 条数据")
+            logger.info(f"[Parquet] 过滤后剩余 {len(df)} 条数据")
             
             # 重命名code列为symbol
             df = df.rename(columns={'code': 'symbol'})
