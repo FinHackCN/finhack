@@ -112,29 +112,56 @@ class DataCenter:
                     # 单市场情况
                     universe = context_universe
         
-        # 如果仍然没有universe，则不进行预加载，避免加载全市场数据
+        # 如果仍然没有universe，则加载全市场数据
         if not universe:
-            logger.warning(f"没有提供股票池，跳过 {market} {month_key} 的预加载")
-            return
-        
+            logger.info(f"没有提供股票池，将加载 {market} 全市场数据进行预加载")
+            try:
+                universe = self.data_interface.get_stock_list(market, use_cache=True)
+                logger.info(f"成功获取 {market} 全市场股票列表，共 {len(universe)} 只")
+            except Exception as e:
+                logger.error(f"获取 {market} 股票列表失败: {e}")
+                return
+
         import time
         start_time = time.time()
         logger.info(f"[预加载] 开始预加载 {market} {month_key} 的1分钟数据，股票数量: {len(universe)}")
         print(f"[预加载] 开始加载 {market} {month_key}，共{len(universe)}只股票", flush=True)
         
         try:
-            # 计算月份的开始和结束日期
-            start_date = datetime(year, month, 1)
+            # 计算月份的开始和结束日期（包含全天数据）
+            start_date = datetime(year, month, 1, 0, 0, 0)
             if month == 12:
+                # 12月的最后一天，设置为23:59:59
                 end_date = datetime(year + 1, 1, 1) - timedelta(days=1)
+                end_date = end_date.replace(hour=23, minute=59, second=59)
             else:
+                # 其他月份的最后一天，设置为23:59:59
                 end_date = datetime(year, month + 1, 1) - timedelta(days=1)
+                end_date = end_date.replace(hour=23, minute=59, second=59)
             
-            # 动态计算最优批次大小，基于系统资源自适应调整
-            batch_size = self._calculate_adaptive_batch_size(len(universe), frequency)
-            batches = [universe[i:i + batch_size] for i in range(0, len(universe), batch_size)]
-            logger.info(f"[预加载] 分为 {len(batches)} 个批次，每批 {batch_size} 只股票")
-            print(f"[预加载] 分为{len(batches)}个批次进行并行加载", flush=True)
+            # 判断是否适合使用Parquet优化
+            # 条件：单年份 + 代码数量>=100
+            is_single_year = (start_date.year == end_date.year)
+            use_parquet_optimization = (
+                is_single_year and
+                len(universe) >= 100 and
+                frequency == '1m'
+            )
+
+            if use_parquet_optimization:
+                # 单年份数据，直接不分批，让DataInterface内部处理Parquet优化
+                batches = [universe]  # 单批次，包含所有股票
+                batch_size = len(universe)
+                logger.info(f"[预加载] 单年份+大批量: 使用Parquet优化，不分批（{batch_size}只股票）")
+                print(f"[预加载] 使用Parquet优化，加载{batch_size}只股票", flush=True)
+            else:
+                # 其他情况（跨年份、少量代码），使用分批加载
+                calculated_batch = self._calculate_adaptive_batch_size(len(universe), frequency)
+                batch_size = calculated_batch
+                batches = [universe[i:i + batch_size] for i in range(0, len(universe), batch_size)]
+                logger.info(f"[预加载] 分批加载: {len(batches)}个批次，每批{batch_size}只")
+                logger.info(f"[预加载] 分为 {len(batches)} 个批次，每批 {batch_size} 只股票")
+                print(f"[预加载] 分为{len(batches)}个批次进行并行加载", flush=True)
             
             # 使用线程池并行加载
             futures = {}
@@ -190,7 +217,7 @@ class DataCenter:
         memory_per_stock_1d = 50   # MB，每只股票日线数据预估内存使用
         cpu_utilization_target = 0.75  # 目标CPU使用率
         min_batch_size = 2       # 最小批次大小
-        max_batch_size = 50      # 最大批次大小
+        max_batch_size = 500     # 最大批次大小（支持大批量Parquet加载）
 
         try:
             # 获取系统资源
@@ -290,13 +317,13 @@ class DataCenter:
         try:
             logger.debug(f"[预加载批次] 开始加载 {batch}")
             
-            # 使用数据接口批量获取K线数据
+            # 使用数据接口批量获取K线数据（保留完整时间信息）
             klines_df = self.data_interface.get_klines(
                 codes=batch,
                 market=market,
                 freq=frequency,
-                start_date=start_date.strftime('%Y-%m-%d'),
-                end_date=end_date.strftime('%Y-%m-%d'),
+                start_date=start_date.strftime('%Y-%m-%d %H:%M:%S'),
+                end_date=end_date.strftime('%Y-%m-%d %H:%M:%S'),
                 use_cache=True
             )
             
