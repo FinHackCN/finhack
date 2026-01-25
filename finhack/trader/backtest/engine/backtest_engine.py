@@ -348,92 +348,145 @@ class TradeCenter:
         return amount * tax_rate
 
     def try_match_orders_sync(self, market_data: Dict[str, Dict]):
-        """撮合订单 - 同步版本"""
+        """撮合订单 - 同步版本，支持部分成交"""
         matched_orders = []
+        partial_orders = []
         current_time = self.context.get('current_dt')
+        time_str = current_time.strftime('%H:%M:%S') if current_time else '--:--:--'
 
-        Log.logger.debug(f"开始撮合，共{len(self.active_orders)}个活跃订单（总订单{len(self.orders)}），市场数据: {list(market_data.keys())}")
+        Log.logger.debug(f"[{time_str}] 开始撮合，共{len(self.active_orders)}个活跃订单（总订单{len(self.orders)}），市场数据: {list(market_data.keys())}")
 
         # 使用 active_orders 替代 orders，避免遍历所有历史订单
         for order_id, order in list(self.active_orders.items()):
-            # active_orders 中只包含 NEW 状态的订单，无需再检查状态
+            # 检查订单状态
+            if order.status not in [OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED]:
+                continue
 
             symbol = order.symbol
-            Log.logger.debug(f"检查订单 {order_id}: {symbol}, 类型: {order.order_type}, 方向: {order.side}, 价格: {order.price}")
+            Log.logger.debug(f"[{time_str}] 检查订单 {order_id}: {symbol}, 类型: {order.order_type}, 状态: {order.status}, 剩余: {order.remaining_volume}")
 
             # 检查订单是否已过等待期（延迟撮合）
             if hasattr(order, 'can_match'):
                 if not order.can_match(current_time):
                     order_age = order.age_minutes(current_time) if hasattr(order, 'age_minutes') else 0
-                    Log.logger.debug(f"跳过订单 {order_id}: 订单尚未到达撮合时间，已等待 {order_age:.2f} 分钟")
+                    Log.logger.debug(f"[{time_str}] 跳过订单 {order_id}: 订单尚未到达撮合时间，已等待 {order_age:.2f} 分钟")
                     continue
             elif hasattr(order, 'created_at') and order.created_at and current_time:
-                # 如果订单有created_at但没有can_match方法，手动检查
                 from datetime import timedelta
                 time_diff = (current_time - order.created_at).total_seconds() / 60
                 if time_diff < 1:  # 1分钟延迟
-                    Log.logger.debug(f"跳过订单 {order_id}: 订单尚未到达撮合时间，已等待 {time_diff:.2f} 分钟")
+                    Log.logger.debug(f"[{time_str}] 跳过订单 {order_id}: 订单尚未到达撮合时间，已等待 {time_diff:.2f} 分钟")
                     continue
 
             if symbol not in market_data:
-                Log.logger.debug(f"跳过订单 {order_id}: {symbol} 不在市场数据中")
+                Log.logger.debug(f"[{time_str}] 跳过订单 {order_id}: {symbol} 不在市场数据中")
                 continue
 
             quote = market_data[symbol]
             current_price = quote.get('close', 0)
-            Log.logger.debug(f"订单 {order_id} 当前价格: {current_price}")
+            Log.logger.debug(f"[{time_str}] 订单 {order_id} 当前价格: {current_price}")
 
             if current_price <= 0:
-                Log.logger.debug(f"跳过订单 {order_id}: 价格无效 {current_price}")
+                Log.logger.debug(f"[{time_str}] 跳过订单 {order_id}: 价格无效 {current_price}")
                 continue
 
             # 判断是否可以成交
             can_fill = False
             fill_price = current_price
+            fill_volume = order.remaining_volume  # 默认全部成交
 
             if order.order_type == OrderType.MARKET:
-                # 市价单直接成交
+                # 市价单部分成交：每次撮合只成交剩余量的30%-50%，模拟真实成交
+                import random
+                fill_ratio = random.uniform(0.3, 0.5)
+                fill_volume = max(100, int(order.remaining_volume * fill_ratio))
+                # 确保是100的整数倍（A股规则）
+                fill_volume = (fill_volume // 100) * 100
+                # 不超过剩余量
+                fill_volume = min(fill_volume, order.remaining_volume)
+
                 can_fill = True
                 fill_price = self._apply_slippage(current_price, order.side)
-                Log.logger.debug(f"订单 {order_id} 市价单直接成交，价格: {fill_price}")
+                Log.logger.info(f"[{time_str}] [撮合] {order_id} {symbol} 市价单部分成交: {order.remaining_volume}->{fill_volume}股 @{fill_price:.4f}")
             elif order.order_type == OrderType.LIMIT:
                 # 限价单需要判断价格
                 if order.side == Side.BUY and order.price >= current_price:
                     can_fill = True
                     fill_price = min(order.price, current_price)
-                    Log.logger.debug(f"订单 {order_id} 限价买单可成交: 订单价格{order.price} >= 当前价格{current_price}, 成交价格: {fill_price}")
+                    # 限价单也可能部分成交
+                    fill_volume = min(order.remaining_volume, int(current_price * 1000))  # 模拟流动性
+                    fill_volume = (fill_volume // 100) * 100
+                    fill_volume = max(100, fill_volume)
+                    Log.logger.info(f"[{time_str}] [撮合] {order_id} {symbol} 限价买单可成交: {order.price}>={current_price}, 成交{fill_volume}股")
                 elif order.side == Side.SELL and order.price <= current_price:
                     can_fill = True
                     fill_price = max(order.price, current_price)
-                    Log.logger.debug(f"订单 {order_id} 限价卖单可成交: 订单价格{order.price} <= 当前价格{current_price}, 成交价格: {fill_price}")
+                    fill_volume = min(order.remaining_volume, int(current_price * 1000))
+                    fill_volume = (fill_volume // 100) * 100
+                    fill_volume = max(100, fill_volume)
+                    Log.logger.info(f"[{time_str}] [撮合] {order_id} {symbol} 限价卖单可成交: {order.price}<={current_price}, 成交{fill_volume}股")
                 else:
-                    Log.logger.debug(f"订单 {order_id} 限价单价格不匹配: 订单价格{order.price}, 当前价格{current_price}")
+                    Log.logger.debug(f"[{time_str}] 订单 {order_id} 限价单价格不匹配: {order.price} vs {current_price}")
 
-            if can_fill:
+            if can_fill and fill_volume > 0:
                 # 执行成交
-                Log.logger.info(f"订单 {order_id} 准备成交: {symbol} {order.side} {order.volume} @ {fill_price}")
-                self._execute_trade_sync(order, fill_price)
-                matched_orders.append(order_id)
-            else:
-                Log.logger.debug(f"订单 {order_id} 不可成交")
+                Log.logger.info(f"[{time_str}] [撮合] {order_id} {symbol} {order.side} 成交{fill_volume}/{order.volume}股 @{fill_price:.4f}")
+                self._execute_trade_sync(order, fill_price, fill_volume)
 
-        Log.logger.info(f"撮合完成，成交订单数: {len(matched_orders)}，详细: {matched_orders}")
+                # 检查订单状态
+                if order.status == OrderStatus.FILLED:
+                    matched_orders.append(order_id)
+                    Log.logger.info(f"[{time_str}] [撮合] {order_id} 全部成交 ✓")
+                elif order.status == OrderStatus.PARTIALLY_FILLED:
+                    partial_orders.append(order_id)
+                    Log.logger.info(f"[{time_str}] [撮合] {order_id} 部分成交 {order.filled_volume}/{order.volume}")
+            else:
+                Log.logger.debug(f"[{time_str}] 订单 {order_id} 不可成交")
+
+        # 从活跃订单中移除已完全成交的订单
+        for order_id in matched_orders:
+            if order_id in self.active_orders:
+                del self.active_orders[order_id]
+
+        Log.logger.info(f"[{time_str}] [撮合] 完成: 全部成交{len(matched_orders)}单, 部分成交{len(partial_orders)}单, 剩余活跃{len(self.active_orders)}单")
+
+        if matched_orders:
+            Log.logger.info(f"[{time_str}] [撮合] 全部成交: {matched_orders}")
+        if partial_orders:
+            Log.logger.info(f"[{time_str}] [撮合] 部分成交: {partial_orders}")
         
-    def _execute_trade_sync(self, order: Order, fill_price: float):
-        """执行成交 - 同步版本"""
+    def _execute_trade_sync(self, order: Order, fill_price: float, fill_volume: float = None):
+        """执行成交 - 同步版本，支持部分成交
+
+        Args:
+            order: 订单对象
+            fill_price: 成交价格
+            fill_volume: 成交数量，如果为None则使用order.remaining_volume
+        """
         try:
+            # 确定成交数量
+            if fill_volume is None:
+                fill_volume = order.remaining_volume
+
+            # 确保不超过剩余量
+            fill_volume = min(fill_volume, order.remaining_volume)
+
+            # 获取事件时间
+            current_time = self.context.get('current_dt', datetime.now())
+            time_str = current_time.strftime('%H:%M:%S')
+
             # 生成成交ID
             trade_id = f"trade_{self.trade_id_counter:06d}"
             self.trade_id_counter += 1
-            
+
             # 计算成交金额
-            fill_amount = order.volume * fill_price
-            
+            fill_amount = fill_volume * fill_price
+
             # 计算费用
             commission = self._calculate_commission(fill_amount, order.side)
             tax = self._calculate_tax(fill_amount, order.side)
             total_cost = commission + tax
-            
+
             # 创建成交记录
             trade = Trade(
                 account_id=order.account_id,
@@ -441,37 +494,52 @@ class TradeCenter:
                 order_id=order.order_id,
                 trade_id=trade_id,
                 side=order.side,
-                volume=order.volume,
+                volume=fill_volume,
                 price=fill_price,
                 amount=fill_amount,
                 commission=commission,
                 tax=tax,
-                trade_time=self.context.get('current_dt', datetime.now())
+                trade_time=current_time
             )
-            
-            # 更新订单状态
-            order.status = OrderStatus.FILLED
-            order.filled_volume = order.volume
-            order.filled_amount = fill_amount
-            order.avg_fill_price = fill_price
+
+            # 更新订单状态（支持部分成交）
+            # 更新累计成交数据
+            total_amount = order.filled_amount + fill_amount
+            total_volume = order.filled_volume + fill_volume
+
+            # 计算新的平均成交价
+            order.avg_fill_price = total_amount / total_volume if total_volume > 0 else 0.0
+            order.filled_volume = total_volume
+            order.filled_amount = total_amount
             order.updated_time = trade.trade_time
-            
-            # 从活跃订单中移除
-            if order.order_id in self.active_orders:
+
+            # 更新订单状态
+            if order.filled_volume >= order.volume:
+                order.status = OrderStatus.FILLED
+                Log.logger.info(f"[{time_str}] [订单] {order.order_id} 全部成交 ✓ ({order.filled_volume}/{order.volume}股)")
+            else:
+                order.status = OrderStatus.PARTIALLY_FILLED
+                Log.logger.info(f"[{time_str}] [订单] {order.order_id} 部分成交 ({order.filled_volume}/{order.volume}股)")
+
+            # 从活跃订单中移除已完全成交的订单
+            if order.status == OrderStatus.FILLED and order.order_id in self.active_orders:
                 del self.active_orders[order.order_id]
-            
+
             # 添加成交记录
             self.trades.append(trade)
-            
+
             # 更新持仓和账户
             self._update_position_sync(trade)
             self._update_account_sync(trade, total_cost)
-            
-            Log.logger.info(f"成交执行完成: {trade_id} {order.symbol} {order.side} "
-                          f"{order.volume}@{fill_price} 费用:{total_cost:.2f}")
-            
+
+            Log.logger.info(f"[{time_str}] [成交] {trade_id} {order.symbol} {order.side.value} "
+                          f"{fill_volume}股@{fill_price:.4f} 费用:{total_cost:.2f} "
+                          f"(累计:{order.filled_volume}/{order.volume}股)")
+
         except Exception as e:
-            Log.logger.error(f"执行成交失败: {e}")
+            current_time = self.context.get('current_dt', datetime.now())
+            time_str = current_time.strftime('%H:%M:%S')
+            Log.logger.error(f"[{time_str}] 执行成交失败: {e}")
             order.status = OrderStatus.REJECTED
             order.rejected_reason = f"成交执行失败: {str(e)}"
             # 从活跃订单中移除失败的订单
@@ -542,15 +610,23 @@ class TradeCenter:
 
 class BacktestEngine:
     """回测引擎主类"""
-    
+
     def __init__(self, context: Dict, data_center, event_center, event_bus):
         self.context = context
         self.data_center = data_center
         self.event_center = event_center
         self.event_bus = event_bus
-        
+
         # 初始化交易中心
         self.trade_center = TradeCenter(context)
+
+        # 智能加速跳过追踪（用于合并日志）
+        self._skip_total_minutes = 0.0
+        self._skip_start_time = None
+
+        # 撮合跳过追踪（用于合并无活跃订单的日志）
+        self._match_skip_count = 0
+        self._match_skip_start_time = None
         
         # 注册所有市场事件的默认处理器
         market_events = [
@@ -757,23 +833,23 @@ class BacktestEngine:
         
         # 如果是1分钟频率，预加载前两个月的数据
         if frequency == '1m':
-            Log.logger.info("检测到1分钟频率回测，启动按月预加载策略")
-            
-            # 获取股票池
-            universe = self.context.get('universe', None)
-            
-            # 预加载第一个交易日所在月份和上个月的数据（已优化）
-            if calendar:
-                first_trade_date = calendar[0]
-                Log.logger.info(f"开始预加载初始数据: {first_trade_date}")
-                print(f"[回测] 开始预加载 {market} 数据...", flush=True)
-                self.data_center.ensure_monthly_data_loaded(
-                    market=market,
-                    current_date=first_trade_date,
-                    universe=universe,
-                    frequency=frequency
-                )
-                print(f"[回测] 初始数据预加载完成", flush=True)
+            Log.logger.info("检测到1分钟频率回测，使用按需加载策略（禁用预加载）")
+
+            # 禁用预加载，改为按需加载以提高启动速度
+            # 数据会在策略实际需要时才加载
+            # 预加载导致启动时间过长，已禁用
+            # if calendar:
+            #     first_trade_date = calendar[0]
+            #     Log.logger.info(f"开始预加载初始数据: {first_trade_date}")
+            #     print(f"[回测] 开始预加载 {market} 数据...", flush=True)
+            #     self.data_center.ensure_monthly_data_loaded(
+            #         market=market,
+            #         current_date=first_trade_date,
+            #         universe=universe,
+            #         frequency=frequency
+            #     )
+            #     print(f"[回测] 初始数据预加载完成", flush=True)
+            print(f"[回测] 使用按需加载策略，数据将在策略需要时加载", flush=True)
         
         # 记录上一次处理的月份，用于检测月份变化
         last_processed_month = None
@@ -783,23 +859,22 @@ class BacktestEngine:
             self.context['current_dt'] = trade_date
             Log.logger.info(f"交易日: {trade_date.strftime('%Y-%m-%d')}")
             
-            # 检查是否进入新的月份，如果是则预加载下个月数据（已优化）
+            # 检查是否进入新的月份（已禁用预加载，使用按需加载）
             if frequency == '1m':
                 current_month = f"{trade_date.year}-{trade_date.month:02d}"
                 if current_month != last_processed_month:
                     Log.logger.info(f"检测到进入新月份: {current_month}")
-                    print(f"[回测] 进入新月份 {current_month}，预加载数据...", flush=True)
-                    
-                    # 确保当前月份和下个月份数据已预加载
-                    self.data_center.ensure_monthly_data_loaded(
-                        market=market,
-                        current_date=trade_date,
-                        universe=self.context.get('universe', None),
-                        frequency=frequency
-                    )
-                    
+                    print(f"[回测] 进入新月份 {current_month}，使用按需加载", flush=True)
+
+                    # 禁用预加载，数据会在需要时自动加载
+                    # self.data_center.ensure_monthly_data_loaded(
+                    #     market=market,
+                    #     current_date=trade_date,
+                    #     universe=self.context.get('universe', None),
+                    #     frequency=frequency
+                    # )
+
                     last_processed_month = current_month
-                    print(f"[回测] 新月份数据预加载完成", flush=True)
             
             # 生成当日事件列表
             daily_events = self.event_center.generate_daily_events(trade_date.date())
@@ -836,6 +911,9 @@ class BacktestEngine:
                     elif event.event_type == EventTypeEnum.TRY_MATCH:
                         # 检查是否有挂单
                         has_pending_orders = self._has_pending_orders()
+                        active_count = len(self.trade_center.active_orders) if hasattr(self.trade_center, 'active_orders') else 0
+                        Log.logger.debug(f"[智能加速] TRY_MATCH {event.event_time}: 有挂单={has_pending_orders}, 活跃订单数={active_count}")
+
                         if not has_pending_orders:
                             # 无挂单时，跳过后续的MARKET_BAR_1M，直达下一个TRY_MATCH或重要事件
                             next_event_idx = i + 1
@@ -860,12 +938,29 @@ class BacktestEngine:
                             if next_event_idx > i + 1:
                                 target_event = daily_events[next_event_idx]
                                 time_diff = (target_event.event_time - event.event_time).total_seconds() / 60
-                                Log.logger.info(f"智能加速：跳过 {time_diff:.1f} 分钟到 {target_event.event_time} ({target_event.event_type})")
+
+                                # 累积跳过时间，不立即输出日志
+                                if self._skip_start_time is None:
+                                    self._skip_start_time = event.event_time
+                                self._skip_total_minutes += time_diff
+
                                 i = next_event_idx
                                 continue
 
                 i += 1
-                
+
+            # 每日结束时，输出剩余的累积跳过日志
+            if self._skip_total_minutes > 0:
+                Log.logger.info(f"智能加速：累计跳过 {self._skip_total_minutes:.0f} 分钟 (从 {self._skip_start_time} 到交易日结束)")
+                self._skip_total_minutes = 0
+                self._skip_start_time = None
+
+            # 每日结束时，输出剩余的撮合跳过日志
+            if self._match_skip_count > 0:
+                Log.logger.info(f"[TRY_MATCH] 累计跳过撮合 {self._match_skip_count} 次 (从 {self._match_skip_start_time} 到交易日结束)")
+                self._match_skip_count = 0
+                self._match_skip_start_time = None
+
             # 更新前一交易日
             self.context['previous_date'] = trade_date.date()
             
@@ -1170,33 +1265,44 @@ class BacktestEngine:
         """处理撮合事件 - 同步版本"""
         # 获取当前市场数据
         current_time = self.context['current_dt']
+        time_str = current_time.strftime('%H:%M:%S') if current_time else '--:--:--'
         market = self.context['settings']['market']
         freq = self.context['settings']['freq']
-        
+
         # 获取所有需要行情的标的（使用 active_orders）
         symbols = set()
         for order_id, order in self.trade_center.active_orders.items():
             symbols.add(order.symbol)
-                
+
+        # 如果没有活跃订单，合并日志输出
         if not symbols:
+            self._match_skip_count += 1
+            if self._match_skip_start_time is None:
+                self._match_skip_start_time = current_time
+            # 不立即输出日志，等待有订单或结束时再输出
             return
+
+        # 如果之前有累积的跳过记录，先输出合并后的日志
+        if self._match_skip_count > 0:
+            start_str = self._match_skip_start_time.strftime('%H:%M:%S') if self._match_skip_start_time else '--:--:--'
+            Log.logger.info(f"[{time_str}] [TRY_MATCH] 累计跳过撮合 {self._match_skip_count} 次 ({start_str} -> {time_str})")
+            self._match_skip_count = 0
+            self._match_skip_start_time = None
+
+        Log.logger.info(f"[{time_str}] [TRY_MATCH] 活跃订单={len(self.trade_center.active_orders)}, 标的={list(symbols)}")
 
         # 获取行情数据 - 批量获取以提高性能
         try:
             market_data = {}
             symbols_list = list(symbols)
-            
-            Log.logger.info(f"[撮合] 准备获取行情: 时间={current_time}, 标的数={len(symbols_list)}, 频率={freq}")
-            
+
             # 批量获取行情数据而不是逐个获取
             if freq == '1m':
                 # 对于1分钟数据，使用get_klines获取最近的数据
                 from datetime import timedelta
                 start_time = current_time - timedelta(minutes=5)
                 end_time = current_time + timedelta(minutes=1)
-                
-                Log.logger.info(f"[撮合] 调用get_klines: codes={symbols_list}, start={start_time}, end={end_time}")
-                
+
                 klines_df = self.data_center.get_klines(
                     codes=symbols_list,  # 批量获取
                     freq=freq,
@@ -1204,12 +1310,8 @@ class BacktestEngine:
                     end_time=end_time.strftime('%Y-%m-%d %H:%M:%S'),
                     fields=['close']
                 )
-                
-                Log.logger.info(f"[撮合] get_klines返回: shape={klines_df.shape if not klines_df.empty else 'empty'}, "
-                              f"empty={klines_df.empty}")
-                
+
                 if not klines_df.empty:
-                    Log.logger.info(f"[撮合] K线数据不为空，开始提取各标的数据...")
                     # 为每个symbol提取最新数据
                     for symbol in symbols_list:
                         try:
@@ -1217,13 +1319,8 @@ class BacktestEngine:
                             if not symbol_klines.empty:
                                 latest_close = symbol_klines['close'].iloc[-1]
                                 market_data[symbol] = {'close': latest_close}
-                                Log.logger.info(f"[撮合] {symbol}: close={latest_close}")
-                            else:
-                                Log.logger.warning(f"[撮合] {symbol} 在DataFrame中无数据")
                         except Exception as e:
-                            Log.logger.warning(f"提取 {symbol} 行情数据失败: {e}")
-                else:
-                    Log.logger.warning(f"[撮合] K线数据为空！检查数据加载")
+                            pass
             else:
                 # 对于日线数据，批量获取
                 quote_df = self.data_center.get_quotes(symbols_list, freq=freq, time=current_time, fields=['close'])
@@ -1231,14 +1328,12 @@ class BacktestEngine:
                     for symbol in symbols_list:
                         if symbol in quote_df.index:
                             market_data[symbol] = quote_df.loc[symbol].to_dict()
-            
-            Log.logger.info(f"[撮合] 最终market_data: {list(market_data.keys())}")
-            
+
             # 执行撮合
             self.trade_center.try_match_orders_sync(market_data)
 
         except Exception as e:
-            Log.logger.error(f"撮合过程中发生错误: {e}")
+            Log.logger.error(f"[{time_str}] 撮合过程中发生错误: {e}")
             import traceback
             traceback.print_exc()
             
@@ -1311,12 +1406,85 @@ class BacktestEngine:
             Log.logger.error(f"处理日终事件失败: {e}")
             
     def _handle_before_market_sync(self, event):
-        """处理盘前事件 - 同步版本"""
+        """处理盘前事件 - 同步版本，处理分红送股"""
         try:
-            # 处理除权除息等盘前事件
-            Log.logger.debug(f"处理盘前事件: {event.event_time}")
+            current_time = self.context['current_dt']
+            current_date = current_time.date()
+
+            # 获取当前市场所有持仓的股票代码
+            symbols = list(self.trade_center.positions.keys())
+            if not symbols:
+                return
+
+            # 获取分红送股数据
+            market = self.context['settings']['market']
+            corporate_actions = self.data_center.get_corporate_actions(current_date, market)
+
+            if not corporate_actions:
+                Log.logger.debug(f"[分红送股] {current_date} 无分红送股事件")
+                return
+
+            # 处理分红送股事件
+            for action in corporate_actions:
+                symbol = action.get('symbol', '')
+                if symbol not in symbols:
+                    continue
+
+                position = self.trade_center.positions.get(symbol)
+                if not position:
+                    continue
+
+                # 处理送股
+                split_ratio = action.get('split_ratio', 0)  # 每10股送X股
+                if split_ratio > 0:
+                    bonus_shares = int(position.volume * split_ratio / 10)
+                    if bonus_shares > 0:
+                        position.volume += bonus_shares
+                        position.available_volume += bonus_shares
+                        Log.logger.info(f"[送股] {symbol} 每10股送{split_ratio}股, "
+                                       f"原持仓{position.volume-bonus_shares}股, 获得{bonus_shares}股, "
+                                       f"新持仓{position.volume}股")
+
+                # 处理分红
+                dividend_ratio = action.get('dividend_ratio', 0)  # 每10股派X元
+                if dividend_ratio > 0:
+                    dividend_amount = position.volume * dividend_ratio / 10
+                    # 分红直接增加现金
+                    self.trade_center.account.cash_available += dividend_amount
+                    Log.logger.info(f"[分红] {symbol} 每10股派{dividend_ratio}元, "
+                                   f"持仓{position.volume}股, 获得{dividend_amount:.2f}元")
+
+                # 处理转增（类似送股）
+                transfer_ratio = action.get('transfer_ratio', 0)
+                if transfer_ratio > 0:
+                    transfer_shares = int(position.volume * transfer_ratio / 10)
+                    if transfer_shares > 0:
+                        position.volume += transfer_shares
+                        position.available_volume += transfer_shares
+                        Log.logger.info(f"[转增] {symbol} 每10股转增{transfer_ratio}股, "
+                                       f"原持仓{position.volume-transfer_shares}股, 获得{transfer_shares}股, "
+                                       f"新持仓{position.volume}股")
+
+                # 更新持仓市值
+                if symbol in self.trade_center.positions:
+                    updated_position = self.trade_center.positions[symbol]
+                    # 获取当前价格
+                    try:
+                        quote = self.data_center.get_quotes([symbol], '1d', current_time)
+                        if not quote.empty and symbol in quote.index:
+                            current_price = quote.loc[symbol, 'close']
+                            updated_position.market_value = updated_position.volume * current_price
+                            updated_position.unrealized_pnl = (current_price - updated_position.cost_price) * updated_position.volume
+                    except Exception as e:
+                        Log.logger.warning(f"更新{symbol}持仓市值失败: {e}")
+
+            # 更新账户总资产
+            self.trade_center._update_account_value()
+
         except Exception as e:
             Log.logger.error(f"处理盘前事件失败: {e}")
+            import traceback
+            traceback.print_exc()
             
     def _handle_corporate_action_sync(self, event):
         """处理公司行为事件 - 同步版本"""

@@ -56,7 +56,9 @@ class Core:
         from runtime.constant import LOGS_DIR
         vendor="default" if self.args.vendor is None else self.args.vendor
         action="run" if self.args.action is None else self.args.action
-        Log.logger=Log.Log(module=self.args.module,vendor=vendor,action=action,logs_dir=LOGS_DIR,background=self.args.background).logger
+        # 从参数中获取日志级别，默认为INFO
+        log_level = getattr(self.args, 'log_level', 'INFO') if hasattr(self.args, 'log_level') else 'INFO'
+        Log.logger=Log.Log(module=self.args.module,vendor=vendor,action=action,logs_dir=LOGS_DIR,background=self.args.background,level=log_level).logger
         
     #追加配置文件中的参数
     def append_args(self):
