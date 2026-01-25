@@ -3,12 +3,11 @@ import importlib.util
 import os
 import json
 import hashlib
-import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 import pandas as pd
 
-logger = logging.getLogger(__name__)
+# 不使用logger变量,直接使用Log.logger
 
 # 修复导入问题 - runtime模块应该从项目目录导入
 import sys
@@ -64,7 +63,7 @@ from .models.instrument import Instrument
 
 class BacktestTrader:
     """回测交易器主入口类"""
-    
+
     def __init__(self, args):
         self.args = args
         self.context = None
@@ -73,7 +72,7 @@ class BacktestTrader:
         self.event_bus = EventBus()
         self.data_center = None
         self.event_center = None
-        
+
         # 存储策略注册的定时任务
         self.scheduled_tasks = []
         
@@ -443,8 +442,8 @@ class PriceRelatedSlippage:
         self.strategy.set_option = self.set_option
         self.strategy.set_order_cost = self.set_order_cost
         self.strategy.set_slippage = self.set_slippage
-        
-        logger.info("策略API绑定完成")
+
+        Log.logger.info("策略API绑定完成")
     
     def get_price_sync(self, code, time=None):
         """获取单个股票价格的同步方法（get_quotes的简化版本）"""
@@ -457,20 +456,20 @@ class PriceRelatedSlippage:
             if time is None:
                 time = current_time
             
-            logger.debug(f"获取价格数据: {code}, 频率: {freq}, 时间: {time}")
+                Log.logger.debug(f"获取价格数据: {code}, 频率: {freq}, 时间: {time}")
             
             # 直接使用DataCenter的get_quotes方法
             quotes = self.data_center.get_quotes([code], freq=freq, time=time, fields=['close'])
             if not quotes.empty:
                 price = quotes.iloc[0]['close']
-                logger.debug(f"成功获取 {code} 价格: {price}")
+                Log.logger.debug(f"成功获取 {code} 价格: {price}")
                 return price
             else:
-                logger.warning(f"无法获取股票 {code} 的价格数据 (时间: {time})")
+                Log.logger.warning(f"无法获取股票 {code} 的价格数据 (时间: {time})")
                 return None
                 
         except Exception as e:
-            logger.error(f"获取股票价格失败: {code} - {str(e)}")
+            Log.logger.error(f"获取股票价格失败: {code} - {str(e)}")
             return None
     
     def get_stock_list_sync(self, market=None, use_cache=True):
@@ -494,14 +493,14 @@ class PriceRelatedSlippage:
             if stock_list_df is not None and not stock_list_df.empty:
                 # 返回股票代码列表
                 stock_codes = stock_list_df['code'].tolist()
-                logger.info(f"成功获取 {market} 股票列表: {len(stock_codes)} 只")
+                Log.logger.info(f"成功获取 {market} 股票列表: {len(stock_codes)} 只")
                 return stock_codes
             else:
-                logger.warning(f"无法获取 {market} 的股票列表")
+                Log.logger.warning(f"无法获取 {market} 的股票列表")
                 return []
                 
         except Exception as e:
-            logger.error(f"获取股票列表失败: {e}")
+            Log.logger.error(f"获取股票列表失败: {e}")
             import traceback
             traceback.print_exc()
             return []
@@ -543,14 +542,14 @@ class PriceRelatedSlippage:
                 self.engine.trade_center.orders[order_id] = order
                 self.engine.trade_center.active_orders[order_id] = order  # 同时添加到活跃订单
                 order.status = OrderStatus.NEW
-                
-                logger.info(f"下单成功: {symbol} {side.value} {order_type.value} 数量:{volume} 价格:{price}")
+
+                Log.logger.info(f"下单成功: {symbol} {side.value} {order_type.value} 数量:{volume} 价格:{price} | 活跃订单数: {len(self.engine.trade_center.active_orders)}")
                 return order_id
             else:
-                logger.info(f"模拟下单: {symbol} {side} {order_type} 数量:{volume} 价格:{price}")
+                Log.logger.info(f"模拟下单: {symbol} {side} {order_type} 数量:{volume} 价格:{price}")
                 return f"order_{symbol}_{int(datetime.now().timestamp())}"
         except Exception as e:
-            logger.error(f"下单失败: {e}")
+            Log.logger.error(f"下单失败: {e}")
             return None
     
     def cancel_order_sync(self, adapter_id, order_id, **kwargs):
@@ -563,13 +562,13 @@ class PriceRelatedSlippage:
                 # 从活跃订单中移除
                 if order_id in self.engine.trade_center.active_orders:
                     del self.engine.trade_center.active_orders[order_id]
-                logger.info(f"撤单成功: {order_id}")
+                Log.logger.info(f"撤单成功: {order_id}")
                 return True
             else:
-                logger.info(f"模拟撤单: {order_id}")
+                Log.logger.info(f"模拟撤单: {order_id}")
                 return True
         except Exception as e:
-            logger.error(f"撤单失败: {e}")
+            Log.logger.error(f"撤单失败: {e}")
             return False
     
     def get_account_sync(self, adapter_id='backtest', refresh=False):
@@ -577,7 +576,7 @@ class PriceRelatedSlippage:
         try:
             if hasattr(self.engine, 'trade_center'):
                 account = self.engine.trade_center.account
-                logger.debug(f"返回账户信息: 现金={account.cash_available}, 总资产={account.total_assets}")
+                Log.logger.debug(f"返回账户信息: 现金={account.cash_available}, 总资产={account.total_assets}")
                 return account
             else:
                 # 创建模拟账户信息
@@ -586,10 +585,10 @@ class PriceRelatedSlippage:
                 account.cash_available = 1000000.0  # 初始资金
                 account.total_assets = 1000000.0
                 account.market_value = 0.0
-                logger.debug("返回模拟账户信息")
+                Log.logger.debug("返回模拟账户信息")
                 return account
         except Exception as e:
-            logger.error(f"获取账户信息失败: {e}")
+            Log.logger.error(f"获取账户信息失败: {e}")
             return None
     
     def get_positions_sync(self, adapter_id='backtest', symbol=None, refresh=False):
@@ -599,14 +598,14 @@ class PriceRelatedSlippage:
                 positions = list(self.engine.trade_center.positions.values())
                 if symbol:
                     positions = [pos for pos in positions if pos.symbol == symbol]
-                logger.debug(f"返回持仓信息: {len(positions)} 个持仓")
+                Log.logger.debug(f"返回持仓信息: {len(positions)} 个持仓")
                 return positions
             else:
                 # 返回空的持仓列表（暂时）
-                logger.debug("返回空持仓列表")
+                Log.logger.debug("返回空持仓列表")
                 return []
         except Exception as e:
-            logger.error(f"获取持仓信息失败: {e}")
+            Log.logger.error(f"获取持仓信息失败: {e}")
             return []
     
     def get_orders_sync(self, adapter_id='backtest', symbol=None, status=None, **kwargs):
@@ -618,13 +617,13 @@ class PriceRelatedSlippage:
                     orders = [order for order in orders if order.symbol == symbol]
                 if status:
                     orders = [order for order in orders if order.status == status]
-                logger.debug(f"返回订单信息: {len(orders)} 个订单")
+                Log.logger.debug(f"返回订单信息: {len(orders)} 个订单")
                 return orders
             else:
-                logger.debug("返回空订单列表")
+                Log.logger.debug("返回空订单列表")
                 return []
         except Exception as e:
-            logger.error(f"获取订单信息失败: {e}")
+            Log.logger.error(f"获取订单信息失败: {e}")
             return []
     
     def get_trades_sync(self, adapter_id='backtest', symbol=None, **kwargs):
@@ -634,13 +633,13 @@ class PriceRelatedSlippage:
                 trades = self.engine.trade_center.trades.copy()
                 if symbol:
                     trades = [trade for trade in trades if trade.symbol == symbol]
-                logger.debug(f"返回成交信息: {len(trades)} 个成交")
+                Log.logger.debug(f"返回成交信息: {len(trades)} 个成交")
                 return trades
             else:
-                logger.debug("返回空成交列表")
+                Log.logger.debug("返回空成交列表")
                 return []
         except Exception as e:
-            logger.error(f"获取成交信息失败: {e}")
+            Log.logger.error(f"获取成交信息失败: {e}")
             return []
     
     def order_buy_sync(self, context, symbol, volume, price=None):
@@ -680,34 +679,34 @@ class PriceRelatedSlippage:
                     order_id = self.order_sell_sync(position.symbol, position.volume)
                     if order_id:
                         sell_orders.append(order_id)
-                        logger.info(f"卖出持仓: {position.symbol} 数量: {position.volume}")
+                        Log.logger.info(f"卖出持仓: {position.symbol} 数量: {position.volume}")
                     
             return sell_orders
         except Exception as e:
-            logger.error(f"卖出所有股票失败: {e}")
+            Log.logger.error(f"卖出所有股票失败: {e}")
             return []
     
     def set_benchmark(self, benchmark):
         """设置基准"""
         if self.context and 'settings' in self.context:
             self.context['settings']['benchmark'] = benchmark
-            logger.info(f"设置基准: {benchmark}")
+            Log.logger.info(f"设置基准: {benchmark}")
     
     def set_option(self, key, value):
         """设置选项"""
         if self.context and 'settings' in self.context:
             self.context['settings'][key] = value
-            logger.debug(f"设置选项: {key} = {value}")
+            Log.logger.debug(f"设置选项: {key} = {value}")
     
     def set_order_cost(self, order_cost, type='stock'):
         """设置手续费"""
-        logger.debug(f"设置手续费: {type}")
+        Log.logger.debug(f"设置手续费: {type}")
         # 在回测中，手续费通过TradeCenter配置
     
     def set_slippage(self, slippage, type='stock'):
         """设置滑点"""
-        logger.debug(f"设置滑点: {type}")
-        # 在回测中，滑点通过TradeCenter配置 
+        Log.logger.debug(f"设置滑点: {type}")
+        # 在回测中，滑点通过TradeCenter配置
     
     # ==================== 定时任务注册函数 ====================
     
@@ -724,7 +723,7 @@ class PriceRelatedSlippage:
             'next_run_time': None
         }
         self.context['scheduled_tasks'].append(task)
-        logger.info(f"注册每日任务: {func.__name__} at {time}")
+        Log.logger.info(f"注册每日任务: {func.__name__} at {time}")
         
     def run_weekly(self, func, weekday, time="14:50:00"):
         """注册每周定时任务"""
@@ -740,7 +739,7 @@ class PriceRelatedSlippage:
             'next_run_time': None
         }
         self.context['scheduled_tasks'].append(task)
-        logger.info(f"注册每周任务: {func.__name__} weekday={weekday} at {time}")
+        Log.logger.info(f"注册每周任务: {func.__name__} weekday={weekday} at {time}")
         
     def run_interval(self, func, frequency, reference_time="09:30:00"):
         """注册间隔定时任务"""
@@ -756,11 +755,11 @@ class PriceRelatedSlippage:
             'next_run_time': None
         }
         self.context['scheduled_tasks'].append(task)
-        logger.info(f"注册间隔任务: {func.__name__} every {frequency} from {reference_time}")
+        Log.logger.info(f"注册间隔任务: {func.__name__} every {frequency} from {reference_time}")
     
     def run_backtest_sync(self):
         """运行回测主循环 - 同步版本"""
-        logger.info("开始运行回测...")
+        Log.logger.info("开始运行回测...")
         
         # 启动回测引擎
         self.engine.run_sync(
@@ -777,7 +776,7 @@ class PriceRelatedSlippage:
                 return self.context['account']['cash_available']
             return 0.0
         except Exception as e:
-            logger.error(f"获取现金失败: {e}")
+            Log.logger.error(f"获取现金失败: {e}")
             return 0.0
     
     def get_current_price_sync(self, context, code):
@@ -794,5 +793,5 @@ class PriceRelatedSlippage:
             
             return None
         except Exception as e:
-            logger.error(f"获取{code}价格失败: {e}")
+            Log.logger.error(f"获取{code}价格失败: {e}")
             return None 

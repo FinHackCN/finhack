@@ -116,7 +116,13 @@ class DataCenter:
         if not universe:
             logger.info(f"没有提供股票池，将加载 {market} 全市场数据进行预加载")
             try:
-                universe = self.data_interface.get_stock_list(market, use_cache=True)
+                stock_list_df = self.data_interface.get_stock_list(market, use_cache=True)
+                # 从DataFrame中提取代码列表
+                if 'code' in stock_list_df.columns:
+                    universe = stock_list_df['code'].tolist()
+                else:
+                    # 如果没有code列，使用索引
+                    universe = stock_list_df.index.tolist()
                 logger.info(f"成功获取 {market} 全市场股票列表，共 {len(universe)} 只")
             except Exception as e:
                 logger.error(f"获取 {market} 股票列表失败: {e}")
@@ -142,26 +148,21 @@ class DataCenter:
             # 判断是否适合使用Parquet优化
             # 条件：单年份 + 代码数量>=100
             is_single_year = (start_date.year == end_date.year)
-            use_parquet_optimization = (
-                is_single_year and
-                len(universe) >= 100 and
-                frequency == '1m'
-            )
 
-            if use_parquet_optimization:
-                # 单年份数据，直接不分批，让DataInterface内部处理Parquet优化
-                batches = [universe]  # 单批次，包含所有股票
-                batch_size = len(universe)
-                logger.info(f"[预加载] 单年份+大批量: 使用Parquet优化，不分批（{batch_size}只股票）")
-                print(f"[预加载] 使用Parquet优化，加载{batch_size}只股票", flush=True)
+            # 无论是否使用Parquet，都使用分批加载以控制内存
+            # 由于使用了Parquet filter，内存压力大幅减小，可以使用较大批次
+            calculated_batch = self._calculate_adaptive_batch_size(len(universe), frequency)
+
+            # 对于大批量数据，使用较大的批次（因为Parquet filter减少了内存使用）
+            if len(universe) > 1000:
+                batch_size = max(1000, calculated_batch)  # 至少1000只股票一批
             else:
-                # 其他情况（跨年份、少量代码），使用分批加载
-                calculated_batch = self._calculate_adaptive_batch_size(len(universe), frequency)
                 batch_size = calculated_batch
-                batches = [universe[i:i + batch_size] for i in range(0, len(universe), batch_size)]
-                logger.info(f"[预加载] 分批加载: {len(batches)}个批次，每批{batch_size}只")
-                logger.info(f"[预加载] 分为 {len(batches)} 个批次，每批 {batch_size} 只股票")
-                print(f"[预加载] 分为{len(batches)}个批次进行并行加载", flush=True)
+
+            batches = [universe[i:i + batch_size] for i in range(0, len(universe), batch_size)]
+
+            logger.info(f"[预加载] 分批加载: {len(batches)}个批次，每批{batch_size}只")
+            print(f"[预加载] 分为{len(batches)}个批次进行并行加载", flush=True)
             
             # 使用线程池并行加载
             futures = {}
@@ -348,10 +349,10 @@ class DataCenter:
             traceback.print_exc()
             return {symbol: 0 for symbol in batch}
     
-    def ensure_monthly_data_loaded(self, market: str, current_date: datetime, 
+    def ensure_monthly_data_loaded(self, market: str, current_date: datetime,
                                  universe: List[str] = None, frequency: str = '1m'):
-        """确保当前月份和上个月的数据已预加载 - 优化版
-        
+        """确保当前月份的数据已预加载 - 优化版（只预加载当前月）
+
         Args:
             market: 市场名称
             current_date: 当前日期
@@ -361,19 +362,10 @@ class DataCenter:
         # 当前月份
         current_year = current_date.year
         current_month = current_date.month
-        
-        # 上个月
-        if current_month == 1:
-            prev_year = current_year - 1
-            prev_month = 12
-        else:
-            prev_year = current_year
-            prev_month = current_month - 1
-        
-        # 检查并预加载当前月份和上个月的数据
+
+        # 只预加载当前月份的数据（不再预加载上个月）
         months_to_load = [
             (current_year, current_month),
-            (prev_year, prev_month)
         ]
         
         # 如果没有提供universe，尝试从context中获取
@@ -709,7 +701,7 @@ class DataCenter:
             # 使用统一数据接口获取公司行为数据
             corporate_actions = self.data_interface.get_corporate_actions(
                 market=market,
-                date=date,
+                query_date=date,
                 use_cache=True
             )
             

@@ -360,8 +360,10 @@ class DataInterface:
         if use_cache:
             cached_data = self.kline_cache.get(cache_key)
             if cached_data is not None:
-                logger.debug(f"从缓存获取K线数据: {len(codes)} 只股票, {len(cached_data)} 条记录")
+                logger.info(f"[Cache] 从缓存获取K线数据: {len(codes)} 只股票, {len(cached_data)} 条记录")
                 return cached_data
+            else:
+                logger.info(f"[Cache] 缓存未命中: {len(codes)} 只股票, cache_key长度={len(cache_key)}")
         
         # 从数据源获取
         try:
@@ -371,6 +373,10 @@ class DataInterface:
             end_dt = pd.to_datetime(end_date)
             is_cross_year = (start_dt.year != end_dt.year)
 
+            logger.info(f"[DataInterface] get_klines参数: codes数量={len(codes)}, market={market}, freq={freq}")
+            logger.info(f"[DataInterface] get_klines时间: start_date={start_date}, end_date={end_date}")
+            logger.info(f"[DataInterface] get_klines解析后: start_dt={start_dt}, end_dt={end_dt}, is_cross_year={is_cross_year}")
+
             # Parquet适合：单年份、代码数量多（>100）
             use_parquet = (
                 not is_cross_year and  # 单年份
@@ -378,6 +384,9 @@ class DataInterface:
                 PARQUET_AVAILABLE and  # Parquet支持可用
                 freq in ['1d', '1m']  # 支持的频率
             )
+
+            logger.info(f"[DataInterface] 判断use_parquet: not_cross_year={not is_cross_year}, codes>100={len(codes) > 100}, PARQUET_AVAILABLE={PARQUET_AVAILABLE}, freq_ok={freq in ['1d', '1m']}")
+            logger.info(f"[DataInterface] 最终use_parquet={use_parquet}")
 
             # 根据条件选择加载方式
             if use_parquet:
@@ -400,16 +409,22 @@ class DataInterface:
             
             # 应用复权
             if adj_type != 'none' and market in ['cn_stock', 'cn_fund']:
+                logger.info(f"[DataInterface] 应用复权: adj_type={adj_type}")
                 data = self._apply_adjustment(data, market, adj_type)
-            
+                logger.info(f"[DataInterface] 复权后: {len(data)}条记录")
+
             # 缓存结果
-            if use_cache and not data.empty:
-                self.kline_cache.put(cache_key, data)
-            
+            if use_cache:
+                if not data.empty:
+                    self.kline_cache.put(cache_key, data)
+                    logger.info(f"[Cache] 已缓存数据: {len(data)}条记录")
+                else:
+                    logger.warning(f"[Cache] 数据为空，不缓存")
+
             logger.info(f"[DataInterface] 最终返回: {len(codes)}只股票, {len(data)}条记录")
-            
+
             if data.empty:
-                logger.warning(f"[DataInterface] ⚠️ 返回空DataFrame！检查数据文件是否存在")
+                logger.warning(f"[DataInterface] ⚠️ 返回空DataFrame！codes数量={len(codes)}, market={market}, freq={freq}, start={start_date}, end={end_date}")
             
             return data
             
@@ -563,7 +578,7 @@ class DataInterface:
             traceback.print_exc()
             return pd.DataFrame()
     
-    def _load_codebased_klines(self, codes: List[str], market: str, freq: str, 
+    def _load_codebased_klines(self, codes: List[str], market: str, freq: str,
                               start_date: str, end_date: str, fields: List[str]) -> pd.DataFrame:
         """使用codebased方式加载K线数据，优先使用Parquet缓存"""
         try:
@@ -571,27 +586,33 @@ class DataInterface:
             start_dt = pd.to_datetime(start_date)
             end_dt = pd.to_datetime(end_date)
             years = set(range(start_dt.year, end_dt.year + 1))
-            
+
+            logger.info(f"[CodeBased] 开始加载: {len(codes)}只股票, 时间范围={start_date}~{end_date}")
+
             # 智能判断：决定使用Parquet还是CSV
             # Parquet适合：代码数量多（>100）、单年份
             # CSV适合：代码数量少（<=100）、任意年份
             use_parquet = (
-                PARQUET_AVAILABLE and 
+                PARQUET_AVAILABLE and
                 len(years) == 1 and  # 单年份
                 len(codes) > 100  # 代码数量较多
             )
-            
+
+            logger.info(f"[CodeBased] 判断条件: PARQUET_AVAILABLE={PARQUET_AVAILABLE}, 年份={years}, 代码数={len(codes)}, use_parquet={use_parquet}")
+
             # 尝试优先使用Parquet缓存（如果满足条件）
             if use_parquet:
                 logger.info(f"[CodeBased] 满足Parquet条件: {len(codes)}只股票, 单年份{years}, 尝试Parquet加载")
+                logger.info(f"[CodeBased] 调用 _try_load_parquet_cache: start_dt={start_dt}, end_dt={end_dt}, codes前5个={codes[:5]}")
                 parquet_result = self._try_load_parquet_cache(
                     market, freq, start_dt, end_dt, codes, fields
                 )
+                logger.info(f"[CodeBased] _try_load_parquet_cache 返回: type={type(parquet_result)}, is_none={parquet_result is None}")
                 if parquet_result is not None:
                     logger.info(f"[CodeBased] ✓ 成功使用Parquet缓存加载 {market}/{freq} 数据: {len(parquet_result)}条")
                     return parquet_result
                 else:
-                    logger.info(f"[CodeBased] ✗ Parquet缓存不可用，回退到CSV加载")
+                    logger.warning(f"[CodeBased] ✗ Parquet缓存不可用，回退到CSV加载")
             
             if use_parquet:
                 logger.info(f"[CodeBased] Parquet可用但加载失败，回退到CSV加载")
@@ -635,8 +656,8 @@ class DataInterface:
                                end_dt: pd.Timestamp, codes: List[str], fields: List[str],
                                max_workers: int = 4) -> Optional[pd.DataFrame]:
         """
-        尝试从Parquet缓存加载K线数据（优化版）
-        
+        尝试从Parquet缓存加载K线数据（优化版，支持跨年查询）
+
         Args:
             market: 市场名称
             freq: 频率
@@ -645,86 +666,122 @@ class DataInterface:
             codes: 股票代码列表
             fields: 需要的字段列表
             max_workers: 最大工作线程数
-            
+
         Returns:
             DataFrame: 加载的数据，如果失败则返回None
         """
         try:
-            # 构建Parquet文件路径
-            year = start_dt.year
-            parquet_file = os.path.join(
-                self.market_data_dir, 'kline', 'codebased', market, freq, f'{year}.parquet'
-            )
-            
-            # 检查Parquet文件是否存在
-            if not os.path.exists(parquet_file):
-                logger.info(f"[Parquet] 文件不存在: {parquet_file}")
-                return None
-            
-            logger.info(f"[Parquet] 开始加载: {parquet_file}, 大小={os.path.getsize(parquet_file)/1024/1024/1024:.2f}GB")
-            
+            # 获取所有涉及的年份
+            start_year = start_dt.year
+            end_year = end_dt.year
+            years = list(range(start_year, end_year + 1))
+
+            logger.info(f"[Parquet] 查询跨越{len(years)}个年份: {years}, 时间范围={start_dt}~{end_dt}")
+
             # 定义需要的列（列裁剪）
             required_columns = ['time', 'code'] + [f for f in fields if f in ['open', 'high', 'low', 'close', 'volume', 'amount']]
-            
-            logger.info(f"[Parquet] 加载参数: codes={len(codes)}, columns={len(required_columns)}, 时间范围={start_dt}~{end_dt}")
-            
-            # 使用pyarrow.parquet.read_table读取数据（使用列裁剪）
-            # 注意：由于时区兼容性问题，暂时不使用filters，在Python中过滤
-            table = pq.read_table(
-                parquet_file,
-                columns=required_columns,
-                use_threads=max_workers
-            )
-            
-            # 转换为DataFrame
-            df = table.to_pandas()
-            
-            if df.empty:
-                logger.warning(f"[Parquet] 加载结果为空")
+
+            logger.info(f"[Parquet] 开始循环处理年份: {years}, codes数量={len(codes)}")
+            logger.info(f"[Parquet] codes前5个: {codes[:5]}, codes后5个: {codes[-5:]}")
+
+            all_data = []
+            for year in years:
+                parquet_file = os.path.join(
+                    self.market_data_dir, 'kline', 'codebased', market, freq, f'{year}.parquet'
+                )
+
+                logger.info(f"[Parquet] [{year}] 检查文件: {parquet_file}")
+
+                # 检查Parquet文件是否存在
+                if not os.path.exists(parquet_file):
+                    logger.warning(f"[Parquet] [{year}] 文件不存在: {parquet_file}")
+                    continue
+
+                file_size = os.path.getsize(parquet_file) / 1024 / 1024 / 1024
+                logger.info(f"[Parquet] [{year}] 开始加载: {parquet_file}, 大小={file_size:.2f}GB")
+
+                try:
+                    # 计算该年的过滤时间范围
+                    year_start = pd.Timestamp(f'{year}-01-01 00:00:00')
+                    year_end = pd.Timestamp(f'{year}-12-31 23:59:59')
+                    filter_start = max(start_dt, year_start)
+                    filter_end = min(end_dt, year_end)
+
+                    logger.info(f"[Parquet] [{year}] 使用时间过滤: {filter_start}~{filter_end}")
+
+                    # 使用pyarrow.read_table读取数据
+                    # 注意：parquet文件中的时间列带有时区信息，不能直接用数值filter
+                    # 先加载全部数据，然后过滤
+                    table = pq.read_table(
+                        parquet_file,
+                        columns=required_columns,
+                        use_threads=max_workers
+                    )
+
+                    df = table.to_pandas()
+
+                    # 移除时区信息
+                    if hasattr(df['time'].dt, 'tz') and df['time'].dt.tz is not None:
+                        df['time'] = df['time'].dt.tz_localize(None)
+
+                    # 过滤时间范围
+                    before_time_filter = len(df)
+                    df = df[(df['time'] >= filter_start) & (df['time'] <= filter_end)]
+                    logger.info(f"[Parquet] [{year}] 时间过滤: {before_time_filter:,} -> {len(df):,}")
+
+                    if df.empty:
+                        logger.warning(f"[Parquet] [{year}] 时间过滤后结果为空")
+                        continue
+
+                    # 移除时区信息（如果有）
+                    if hasattr(df['time'].dt, 'tz') and df['time'].dt.tz is not None:
+                        df['time'] = df['time'].dt.tz_localize(None)
+
+                    # 过滤代码
+                    before_filter = len(df)
+                    df = df[df['code'].isin(codes)]
+                    logger.info(f"[Parquet] [{year}] 代码过滤: {before_filter:,} -> {len(df):,}")
+
+                    if len(df) == 0:
+                        logger.warning(f"[Parquet] [{year}] 代码过滤后结果为空，跳过此年")
+                        continue
+
+                    # 数据已通过filter过滤，直接添加
+                    all_data.append(df)
+
+                except Exception as e:
+                    logger.warning(f"加载 {year}.parquet 失败: {e}")
+                    continue
+
+            if not all_data:
+                logger.warning(f"[Parquet] 所有年份的数据加载后结果为空")
                 return None
-            
-            logger.info(f"[Parquet] 从文件加载了 {len(df)} 条原始数据")
-            
-            # 移除时区信息以进行过滤
-            if hasattr(df['time'].dt, 'tz') and df['time'].dt.tz is not None:
-                df['time'] = df['time'].dt.tz_localize(None)
-            
-            # 在Python中过滤数据
-            # 过滤代码
-            before_filter = len(df)
-            df = df[df['code'].isin(codes)]
-            logger.info(f"[Parquet] 代码过滤: {before_filter} -> {len(df)}")
-            
-            # 过滤时间范围
-            before_time_filter = len(df)
-            df = df[(df['time'] >= start_dt) & (df['time'] <= end_dt)]
-            logger.info(f"[Parquet] 时间过滤: {before_time_filter} -> {len(df)}")
-            
-            if df.empty:
-                logger.warning(f"[Parquet] 过滤后结果为空，时间范围可能不匹配")
-                return None
-            
-            logger.info(f"[Parquet] 过滤后剩余 {len(df)} 条数据")
-            
+
+            # 合并所有年份的数据
+            df = pd.concat(all_data, ignore_index=True)
+            logger.info(f"[Parquet] 合并后共 {len(df)} 条数据")
+
             # 重命名code列为symbol
             df = df.rename(columns={'code': 'symbol'})
-            
+
             # 设置MultiIndex
             df = df.set_index(['time', 'symbol'])
-            
+
             # 确保只包含请求的字段
             available_fields = [f for f in fields if f in df.columns]
             if available_fields:
                 df = df[available_fields]
-            
+
             # 排序索引
             df = df.sort_index()
-            
-            logger.debug(f"Parquet加载成功: {len(df)} 条数据, {len(codes)} 个代码")
+
+            logger.info(f"[Parquet] 加载成功: {len(df)} 条数据, {len(codes)} 个代码")
             return df
-            
+
         except Exception as e:
             logger.warning(f"Parquet缓存加载失败: {e}, 将回退到CSV加载")
+            import traceback
+            traceback.print_exc()
             return None
     
     def _load_single_codebased_kline(self, market: str, symbol: str, freq: str,
@@ -1271,20 +1328,20 @@ class DataInterface:
         
         return adj_factors
     
-    def get_trading_calendar(self, market: str = 'cn_stock', 
+    def get_trading_calendar(self, market: str = 'cn_stock',
                            start_date: Union[str, date] = None,
                            end_date: Union[str, date] = None,
                            use_cache: bool = True) -> List[date]:
         """获取交易日历"""
         cache_key = self._generate_cache_key('calendar', market, str(start_date), str(end_date))
-        
+
         if use_cache:
             cached_result = self.calendar_cache.get(cache_key)
             if cached_result is not None:
                 return cached_result
-        
+
         calendar_file = os.path.join(self.reference_data_dir, market, f"{market}_calendar.csv")
-        
+
         if not os.path.exists(calendar_file):
             logger.warning(f"交易日历文件不存在: {calendar_file}")
             # 生成默认交易日历
@@ -1294,12 +1351,12 @@ class DataInterface:
                     start_dt = pd.to_datetime(start_date)
                 else:
                     start_dt = pd.Timestamp(start_date)
-                    
+
                 if isinstance(end_date, str):
                     end_dt = pd.to_datetime(end_date)
                 else:
                     end_dt = pd.Timestamp(end_date)
-                
+
                 date_range = pd.date_range(start_dt, end_dt, freq='D')
                 result_dates = [d.date() for d in date_range]
             else:
@@ -1308,34 +1365,34 @@ class DataInterface:
                     start_dt = pd.to_datetime(start_date)
                 else:
                     start_dt = pd.Timestamp(start_date)
-                    
+
                 if isinstance(end_date, str):
                     end_dt = pd.to_datetime(end_date)
                 else:
                     end_dt = pd.Timestamp(end_date)
-                
+
                 date_range = pd.date_range(start_dt, end_dt, freq='D')
                 trading_days = date_range[date_range.weekday < 5]
                 result_dates = [d.date() for d in trading_days]
         else:
             calendar_df = pd.read_csv(calendar_file)
-            
+
             # 过滤条件
             if start_date or end_date:
                 if isinstance(start_date, (str, date)):
                     start_date_int = int(str(start_date).replace('-', ''))
                 if isinstance(end_date, (str, date)):
                     end_date_int = int(str(end_date).replace('-', ''))
-                
+
                 calendar_df['cal_date'] = calendar_df['cal_date'].astype(str)
-                
+
                 if start_date:
                     calendar_df = calendar_df[calendar_df['cal_date'].astype(int) >= start_date_int]
                 if end_date:
                     calendar_df = calendar_df[calendar_df['cal_date'].astype(int) <= end_date_int]
-                
+
                 calendar_df = calendar_df[calendar_df['is_open'] == 1]
-            
+
             # 转换为date对象
             result_dates = []
             for date_str in calendar_df['cal_date'].tolist():
@@ -1344,13 +1401,86 @@ class DataInterface:
                 else:  # YYYY-MM-DD
                     trade_date = datetime.strptime(str(date_str), '%Y-%m-%d').date()
                 result_dates.append(trade_date)
-        
+
         result_dates = sorted(result_dates)
-        
+
         if use_cache:
             self.calendar_cache.put(cache_key, result_dates)
-        
+
         return result_dates
+
+    def get_corporate_actions(self, market: str = 'cn_stock', query_date: Union[str, datetime.date] = None,
+                              use_cache: bool = True) -> List[Dict[str, Any]]:
+        """获取指定日期的公司行为数据（分红送股等）
+
+        Args:
+            market: 市场名称
+            query_date: 查询日期
+            use_cache: 是否使用缓存
+
+        Returns:
+            List[Dict]: 公司行为事件列表，每个事件包含:
+                - symbol: 股票代码
+                - action_date: 除权除息日
+                - split_ratio: 送股比例（每10股送X股）
+                - dividend_ratio: 分红比例（每10股派X元）
+                - transfer_ratio: 转增比例（每10股转增X股）
+        """
+        try:
+            # 转换日期格式
+            if isinstance(query_date, date):
+                date_str = query_date.strftime('%Y-%m-%d')
+            elif isinstance(query_date, str):
+                date_str = query_date
+            else:
+                date_str = datetime.now().strftime('%Y-%m-%d')
+
+            # 尝试从reference目录读取分红送股数据
+            # 文件格式: market_corporate_actions.csv
+            action_file = os.path.join(self.reference_data_dir, market, f"{market}_corporate_actions.csv")
+
+            if not os.path.exists(action_file):
+                logger.debug(f"公司行为文件不存在: {action_file}")
+                return []
+
+            # 读取CSV文件
+            df = pd.read_csv(action_file)
+
+            # 过滤指定日期的数据
+            if 'action_date' in df.columns:
+                df['action_date'] = pd.to_datetime(df['action_date']).dt.strftime('%Y-%m-%d')
+                df = df[df['action_date'] == date_str]
+            elif 'date' in df.columns:
+                df['date'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d')
+                df = df[df['date'] == date_str]
+
+            if df.empty:
+                return []
+
+            # 转换为字典列表
+            result = []
+            for _, row in df.iterrows():
+                action = {
+                    'symbol': row.get('symbol', row.get('code', '')),
+                    'action_date': row.get('action_date', row.get('date', date_str)),
+                    'split_ratio': row.get('split_ratio', row.get('bonus_ratio', 0)),
+                    'dividend_ratio': row.get('dividend_ratio', row.get('cash_dividend', 0)),
+                    'transfer_ratio': row.get('transfer_ratio', 0),
+                    'record_date': row.get('record_date', ''),
+                }
+                result.append(action)
+
+            if result:
+                logger.info(f"[公司行为] {date_str} 找到{len(result)}条事件")
+                for action in result:
+                    logger.debug(f"  {action['symbol']}: 送股={action['split_ratio']}, "
+                                f"分红={action['dividend_ratio']}, 转增={action['transfer_ratio']}")
+
+            return result
+
+        except Exception as e:
+            logger.warning(f"获取公司行为数据失败: {e}")
+            return []
     
     # ==================== 工具方法 ====================
     
