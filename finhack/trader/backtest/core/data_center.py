@@ -689,24 +689,26 @@ class DataCenter:
     
     def get_corporate_actions(self, date, market):
         """获取指定日期的公司行为数据
-        
+
         Args:
             date: 日期
             market: 市场名称
-            
+
         Returns:
             List[Dict]: 公司行为事件列表
         """
         try:
+            logger.info(f"[DataCenter] get_corporate_actions调用: date={date}, market={market}")
             # 使用统一数据接口获取公司行为数据
             corporate_actions = self.data_interface.get_corporate_actions(
                 market=market,
                 query_date=date,
                 use_cache=True
             )
-            
+
+            logger.info(f"[DataCenter] get_corporate_actions返回: {len(corporate_actions)}条记录")
             return corporate_actions
-            
+
         except Exception as e:
             logger.error(f"获取公司行为数据失败: {e}")
             return []
