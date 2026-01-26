@@ -1436,39 +1436,122 @@ class DataInterface:
                 date_str = datetime.now().strftime('%Y-%m-%d')
 
             # 尝试从reference目录读取分红送股数据
-            # 文件格式: market_corporate_actions.csv
+            # 优先使用 astock_finance_dividend.csv（Tushare格式）
+            # 备选使用 market_corporate_actions.csv（通用格式）
+            dividend_file = os.path.join(self.reference_data_dir, market, "astock_finance_dividend.csv")
             action_file = os.path.join(self.reference_data_dir, market, f"{market}_corporate_actions.csv")
 
-            if not os.path.exists(action_file):
-                logger.debug(f"公司行为文件不存在: {action_file}")
+            # 确定要使用的文件
+            data_file = None
+            use_tushare_format = False
+
+            if os.path.exists(dividend_file):
+                data_file = dividend_file
+                use_tushare_format = True
+            elif os.path.exists(action_file):
+                data_file = action_file
+                use_tushare_format = False
+            else:
+                logger.debug(f"公司行为文件不存在: {dividend_file} 或 {action_file}")
                 return []
 
             # 读取CSV文件
-            df = pd.read_csv(action_file)
+            df = pd.read_csv(data_file)
 
-            # 过滤指定日期的数据
-            if 'action_date' in df.columns:
-                df['action_date'] = pd.to_datetime(df['action_date']).dt.strftime('%Y-%m-%d')
-                df = df[df['action_date'] == date_str]
-            elif 'date' in df.columns:
-                df['date'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d')
-                df = df[df['date'] == date_str]
+            if use_tushare_format:
+                # Tushare格式: astock_finance_dividend.csv
+                # 列: code,end_date,ann_date,div_proc,stk_div,stk_bo_rate,stk_co_rate,cash_div,cash_div_tax,record_date,ex_date,pay_date,...
+                # 只处理 "实施" 状态的记录
+                if 'div_proc' in df.columns:
+                    df = df[df['div_proc'] == '实施']
 
-            if df.empty:
-                return []
+                # 按 ex_date（除权除息日）过滤
+                # ex_date 格式可能是浮点数 20240607.0 或整数 20240607 或字符串 2024-06-07
+                if 'ex_date' in df.columns:
+                    df = df[df['ex_date'].notna()]
 
-            # 转换为字典列表
-            result = []
-            for _, row in df.iterrows():
-                action = {
-                    'symbol': row.get('symbol', row.get('code', '')),
-                    'action_date': row.get('action_date', row.get('date', date_str)),
-                    'split_ratio': row.get('split_ratio', row.get('bonus_ratio', 0)),
-                    'dividend_ratio': row.get('dividend_ratio', row.get('cash_dividend', 0)),
-                    'transfer_ratio': row.get('transfer_ratio', 0),
-                    'record_date': row.get('record_date', ''),
-                }
-                result.append(action)
+                    # 将查询日期转换为整数进行比较 (2024-06-07 -> 20240607)
+                    query_date_int = int(date_str.replace('-', ''))
+
+                    # 处理不同格式的 ex_date
+                    def normalize_ex_date(x):
+                        if pd.isna(x):
+                            return None
+                        # 如果是浮点数或整数，直接转换为整数
+                        if isinstance(x, (int, float)):
+                            try:
+                                return int(x)
+                            except:
+                                return None
+                        # 如果是字符串，尝试解析
+                        x = str(x).strip()
+                        # 尝试 YYYYMMDD 格式
+                        if len(x) == 8 and x.isdigit():
+                            return int(x)
+                        # 尝试 YYYY-MM-DD 格式
+                        if '-' in x:
+                            try:
+                                return int(x.replace('-', ''))
+                            except:
+                                return None
+                        return None
+
+                    df['ex_date_normalized'] = df['ex_date'].apply(normalize_ex_date)
+                    df = df[df['ex_date_normalized'] == query_date_int]
+                else:
+                    return []
+
+                # 转换为字典列表
+                result = []
+                for _, row in df.iterrows():
+                    # stk_bo_rate: 送股比例（每10股送X股）
+                    # stk_co_rate: 转增比例（每10股转增X股）
+                    # cash_div: 现金分红（每10股派X元）
+                    # cash_div_tax: 扣税后现金分红
+
+                    stk_bo_rate = row.get('stk_bo_rate', 0)
+                    stk_co_rate = row.get('stk_co_rate', 0)
+                    cash_div = row.get('cash_div', 0)
+
+                    # 跳过没有任何公司行为的记录
+                    if pd.isna(stk_bo_rate) and pd.isna(stk_co_rate) and pd.isna(cash_div):
+                        continue
+
+                    action = {
+                        'symbol': row.get('code', ''),
+                        'action_date': date_str,
+                        'split_ratio': float(stk_bo_rate) if pd.notna(stk_bo_rate) else 0,
+                        'dividend_ratio': float(cash_div) if pd.notna(cash_div) else 0,
+                        'transfer_ratio': float(stk_co_rate) if pd.notna(stk_co_rate) else 0,
+                        'record_date': row.get('record_date', ''),
+                    }
+                    result.append(action)
+
+            else:
+                # 通用格式: market_corporate_actions.csv
+                # 过滤指定日期的数据
+                if 'action_date' in df.columns:
+                    df['action_date'] = pd.to_datetime(df['action_date']).dt.strftime('%Y-%m-%d')
+                    df = df[df['action_date'] == date_str]
+                elif 'date' in df.columns:
+                    df['date'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d')
+                    df = df[df['date'] == date_str]
+
+                if df.empty:
+                    return []
+
+                # 转换为字典列表
+                result = []
+                for _, row in df.iterrows():
+                    action = {
+                        'symbol': row.get('symbol', row.get('code', '')),
+                        'action_date': row.get('action_date', row.get('date', date_str)),
+                        'split_ratio': row.get('split_ratio', row.get('bonus_ratio', 0)),
+                        'dividend_ratio': row.get('dividend_ratio', row.get('cash_dividend', 0)),
+                        'transfer_ratio': row.get('transfer_ratio', 0),
+                        'record_date': row.get('record_date', ''),
+                    }
+                    result.append(action)
 
             if result:
                 logger.info(f"[公司行为] {date_str} 找到{len(result)}条事件")

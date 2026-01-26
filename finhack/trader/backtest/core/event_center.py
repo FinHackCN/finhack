@@ -396,19 +396,23 @@ class EventCenter:
     def _generate_corporate_action_events(self, trade_date):
         """生成公司行为事件"""
         try:
+            logger.info(f"[EventCenter] _generate_corporate_action_events调用: trade_date={trade_date}")
             # 从DataCenter获取公司行为数据
             if not self.context or not hasattr(self.context, 'data_center'):
+                logger.warning("[EventCenter] context或data_center不存在")
                 return []
-            
+
             data_center = self.context.data_center
             market = self.context.get('settings', {}).get('market', 'cn_stock')
-            
+            logger.info(f"[EventCenter] 准备调用data_center.get_corporate_actions: date={trade_date}, market={market}")
+
             # 获取当前日期的公司行为事件
             corporate_actions = data_center.get_corporate_actions(
                 date=trade_date,
                 market=market
             )
-            
+            logger.info(f"[EventCenter] data_center.get_corporate_actions返回: {len(corporate_actions)}条记录")
+
             events = []
             for action in corporate_actions:
                 # 创建公司行为事件
@@ -424,14 +428,16 @@ class EventCenter:
                     'rights_ratio': action.get('rights_ratio', 0),
                     'rights_price': action.get('rights_price', 0)
                 })()
-                
+
                 events.append(event)
-            
+
             if events:
-                logger.debug(f"生成了{len(events)}个公司行为事件")
-            
+                logger.info(f"[EventCenter] 生成了{len(events)}个公司行为事件")
+            else:
+                logger.debug(f"[EventCenter] 未生成公司行为事件")
+
             return events
-            
+
         except Exception as e:
             logger.error(f"生成公司行为事件失败: {e}")
             return []
