@@ -199,22 +199,134 @@ class Core:
     
     #生成参数
     def generate_args(self):
-        parser = argparse.ArgumentParser(description='',usage=self.usage)
+        # 检查是否无参数，直接显示帮助信息
+        if len(sys.argv) == 1:
+            print(self.usage)
+            sys.exit(0)
+
+        # 检查是否有 -h/--help 参数（在解析前检查）
+        if '-h' in sys.argv or '--help' in sys.argv:
+            self._show_full_help()
+            sys.exit(0)
+
+        parser = argparse.ArgumentParser(description='',usage=self.usage, add_help=False)
         parser.add_argument('module', help='需要调用的模块')
         parser.add_argument('action', help='需要执行的动作')
         parser.add_argument("--background",  default=False, action='store_true', help="是否在后台运行")
         parser.add_argument('--project_path',metavar='', help='项目路径')
         parser.add_argument("--vendor",  metavar='',  help="模块的供给侧")
         parser.add_argument("--section",  metavar='',  help="配置文件section")
+
+        # 解析参数
+        args, unknown = parser.parse_known_args()
+
         self.parser=parser
+        self.args=args
         return parser
         
     
     #生成参数
     def parse_args(self):
-        args, unknown = self.parser.parse_known_args() 
-        self.args=args
-        return args
+        # args已在generate_args中解析，这里直接返回
+        return self.args
+
+    def _show_full_help(self):
+        """显示完整的帮助信息"""
+        full_help = """
+FinHack 量化框架 - 完整命令帮助
+
+用法: finhack {module} {action} [参数...]
+
+全局参数:
+  --vendor={vendor}      模块供应商 (如: tushare, lightgbm, backtest等)
+  --background           后台运行
+  --project_path={path}  项目路径
+  --section={section}    配置文件section
+  --log_level={level}    日志级别 (DEBUG/INFO/WARNING/ERROR)
+
+================================
+项目模块 (project)
+================================
+finhack project create --project_path={project_path}    # 创建新项目
+finhack project renew                                   # 更新项目结构
+
+================================
+数据采集模块 (collector)
+================================
+finhack collector run --vendor=tushare                  # 采集tushare数据
+finhack collector fix --vendor=tushare                  # 修复数据缺失和异常
+finhack collector fix --vendor=tushare --start_date=20250601 --end_date=20250630
+finhack collector fix --vendor=tushare --auto=true      # 自动修复质量异常数据
+finhack collector stop --vendor=tushare                  # 停止采集
+finhack collector save --vendor=tushare                  # 导出数据到CSV
+finhack collector count --vendor=tushare                 # 数据库统计
+
+================================
+K线模块 (kline)
+================================
+finhack kline cache                                     # K线数据缓存
+finhack kline cache --market=cn_stock --freq=1m         # 缓存指定市场和频率
+finhack kline cache --year=2024                         # 缓存指定年份
+finhack kline cache --force                             # 强制重建缓存
+finhack kline stop                                      # 停止任务
+
+================================
+因子模块 (factor)
+================================
+finhack factor run                                      # 计算所有因子
+finhack factor list                                     # 查看可用因子列表
+finhack factor show --factor=pe_0                       # 查看因子信息
+finhack factor analys --factor=pe_0                     # 分析因子
+finhack factor analys_all                               # 分析所有因子
+finhack factor compute --code=002624.sz --factor=rimv_0 # 单个股票因子计算
+finhack factor mining --method=gplearn                  # 使用gplearn因子挖掘
+finhack factor mining --method=chatgpt --prompt=autoalpha --model=gpt-4-1106-preview
+finhack factor calc --formula="close/open"              # 计算自定义公式
+
+================================
+交易模块 (trader)
+================================
+# 回测 (vendor=backtest)
+finhack trader run --vendor=backtest --strategy=demoStrategy
+finhack trader run --vendor=backtest --strategy=demoStrategy \\
+  --start_time=2024-01-01 --end_time=2024-12-31 --cash=1000000
+
+# 模拟交易 (vendor=sim)
+finhack trader run --vendor=sim --strategy=demoStrategy
+
+# 实盘交易 (vendor=qmt/miniqmt)
+finhack trader run --vendor=qmt --strategy=demoStrategy
+finhack trader run --vendor=miniqmt --strategy=demoStrategy
+
+# 其他
+finhack trader show --id={instance_id}                  # 显示回测结果
+finhack trader auto                                    # 自动交易(多进程)
+
+================================
+模型训练模块 (trainer)
+================================
+finhack trainer auto --vendor=lightgbm                  # 自动训练lightgbm
+finhack trainer run --vendor=lightgbm --market=cn_stock --freq=1d \\
+  --start_date=20200101 --valid_date=20210101 --end_date=20220101
+
+================================
+常用流程
+================================
+# 数据采集
+finhack collector run --vendor=tushare
+finhack collector fix --vendor=tushare --auto=true
+
+# 因子计算
+finhack factor run
+finhack factor analys --factor=pe_0
+
+# 训练与回测
+finhack trainer auto --vendor=lightgbm
+finhack trader run --vendor=backtest --strategy=xxx --model_id={hash}
+
+更多文档: https://github.com/FinHackCN/FinHack
+"""
+        print(full_help)
         
         
     def load_module(self):
