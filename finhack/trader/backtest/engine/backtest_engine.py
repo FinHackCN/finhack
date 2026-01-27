@@ -352,7 +352,7 @@ class TradeCenter:
         matched_orders = []
         partial_orders = []
         current_time = self.context.get('current_dt')
-        time_str = current_time.strftime('%H:%M:%S') if current_time else '--:--:--'
+        time_str = current_time.strftime('%Y-%m-%d %H:%M:%S') if current_time else '--:--:--'
 
         Log.logger.debug(f"[{time_str}] 开始撮合，共{len(self.active_orders)}个活跃订单（总订单{len(self.orders)}），市场数据: {list(market_data.keys())}")
 
@@ -395,10 +395,21 @@ class TradeCenter:
             fill_price = current_price
             fill_volume = order.remaining_volume  # 默认全部成交
 
+            # 判断是否可以成交
+            can_fill = False
+
             if order.order_type == OrderType.MARKET:
-                # 市价单部分成交：每次撮合只成交剩余量的30%-50%，模拟真实成交
+                # 市价单部分成交：每次撮合只成交剩余量的30%-80%，模拟真实成交
+                # 分钟级回测中每分钟都会撮合，所以可以部分成交
                 import random
-                fill_ratio = random.uniform(0.3, 0.5)
+                # 根据订单大小调整成交比例（大订单成交比例更小）
+                if order.remaining_volume > 10000:
+                    fill_ratio = random.uniform(0.3, 0.5)
+                elif order.remaining_volume > 5000:
+                    fill_ratio = random.uniform(0.5, 0.7)
+                else:
+                    fill_ratio = random.uniform(0.7, 1.0)  # 小订单更容易全部成交
+
                 fill_volume = max(100, int(order.remaining_volume * fill_ratio))
                 # 确保是100的整数倍（A股规则）
                 fill_volume = (fill_volume // 100) * 100
@@ -407,7 +418,10 @@ class TradeCenter:
 
                 can_fill = True
                 fill_price = self._apply_slippage(current_price, order.side)
-                Log.logger.info(f"[{time_str}] [撮合] {order_id} {symbol} 市价单部分成交: {order.remaining_volume}->{fill_volume}股 @{fill_price:.4f}")
+                if fill_volume < order.remaining_volume:
+                    Log.logger.info(f"[{time_str}] [撮合] {order_id} {symbol} 市价单部分成交: {order.remaining_volume}->{fill_volume}股 @{fill_price:.4f}")
+                else:
+                    Log.logger.info(f"[{time_str}] [撮合] {order_id} {symbol} 市价单成交: {fill_volume}股 @{fill_price:.4f}")
             elif order.order_type == OrderType.LIMIT:
                 # 限价单需要判断价格
                 if order.side == Side.BUY and order.price >= current_price:
@@ -473,7 +487,7 @@ class TradeCenter:
 
             # 获取事件时间
             current_time = self.context.get('current_dt', datetime.now())
-            time_str = current_time.strftime('%H:%M:%S')
+            time_str = current_time.strftime('%Y-%m-%d %H:%M:%S')
 
             # 生成成交ID
             trade_id = f"trade_{self.trade_id_counter:06d}"
@@ -538,7 +552,7 @@ class TradeCenter:
 
         except Exception as e:
             current_time = self.context.get('current_dt', datetime.now())
-            time_str = current_time.strftime('%H:%M:%S')
+            time_str = current_time.strftime('%Y-%m-%d %H:%M:%S')
             Log.logger.error(f"[{time_str}] 执行成交失败: {e}")
             order.status = OrderStatus.REJECTED
             order.rejected_reason = f"成交执行失败: {str(e)}"
@@ -607,6 +621,68 @@ class TradeCenter:
             return self.positions[symbol].cost_price
         return 0
 
+    def handle_corporate_action(self, event):
+        """处理公司行为事件（分红、送股等）"""
+        try:
+            # 从event.data中获取公司行为详细信息
+            if not hasattr(event, 'data') or not event.data:
+                return
+
+            action_type = event.data.get('action_type', '')
+            symbol = event.data.get('symbol', '')
+
+            if not symbol or not action_type:
+                return
+
+            # 处理除权除息
+            if action_type in ['dividend', 'bonus', 'split', 'rights']:
+                if symbol not in self.positions:
+                    return
+
+                position = self.positions[symbol]
+
+                # 处理分红
+                if action_type == 'dividend':
+                    dividend_per_share = event.data.get('dividend_per_share', 0)
+                    if dividend_per_share > 0:
+                        dividend_amount = position.volume * dividend_per_share
+                        # 扣除所得税
+                        tax_rate = event.data.get('tax_rate', 0.10)
+                        after_tax = dividend_amount * (1 - tax_rate)
+                        self.account.cash_available += after_tax
+                        Log.logger.info(f"[公司行为] {symbol} 分红: 每股{dividend_per_share:.4f}元, 税率{tax_rate:.0%}, 实得{after_tax:.2f}元")
+
+                # 处理送股
+                elif action_type == 'bonus':
+                    bonus_ratio = event.data.get('bonus_ratio', 0)
+                    if bonus_ratio > 0:
+                        bonus_shares = int(position.volume * bonus_ratio)
+                        if bonus_shares > 0:
+                            # 100股整数倍
+                            bonus_shares = (bonus_shares // 100) * 100
+                            position.volume += bonus_shares
+                            position.available_volume += bonus_shares
+                            Log.logger.info(f"[公司行为] {symbol} 送股: 每10股送{bonus_ratio*10:.2f}股, 获得{bonus_shares}股")
+
+                # 处理拆股
+                elif action_type == 'split':
+                    split_ratio = event.data.get('split_ratio', 1)
+                    if split_ratio > 0 and split_ratio != 1:
+                        old_volume = position.volume
+                        new_volume = int(old_volume * split_ratio)
+                        actual_ratio = new_volume / old_volume if old_volume > 0 else 1
+                        position.volume = new_volume
+                        position.available_volume = new_volume
+                        position.cost_price = position.cost_price / actual_ratio
+                        Log.logger.info(f"[公司行为] {symbol} 拆股: 比例{split_ratio:.2f}, 持仓{old_volume}→{new_volume}股")
+
+                # 更新持仓市值
+                self._update_account_value()
+
+        except Exception as e:
+            Log.logger.error(f"处理公司行为事件失败: {e}")
+            import traceback
+            traceback.print_exc()
 
 class BacktestEngine:
     """回测引擎主类"""
@@ -746,32 +822,100 @@ class BacktestEngine:
             # 从上下文中查找定时任务
             if not self.context or 'scheduled_tasks' not in self.context:
                 return
-            
+
             function_name = getattr(event, 'function_name', None)
             if not function_name:
                 Log.logger.warning("ON_TIME事件缺少function_name属性")
                 return
-                
+
             # 查找对应的函数对象
             func = None
             for task in self.context['scheduled_tasks']:
                 if task.get('function_name') == function_name:
                     func = task.get('function_object')
                     break
-            
+
             if func:
                 # 调用策略函数
                 if asyncio.iscoroutinefunction(func):
                     await func(self.context)
                 else:
                     func(self.context)
-                    
+
                 Log.logger.info(f"执行定时任务成功: {function_name}")
+
+                # 注意：不再立即撮合，让订单在后续的分钟级撮合事件中自然成交
+                # 分钟级回测中，后续每分钟都会触发撮合事件
+
             else:
                 Log.logger.warning(f"未找到定时任务函数: {function_name}")
-                
+
         except Exception as e:
             Log.logger.error(f"执行定时任务失败: {e}")
+
+    async def _try_match_after_scheduled_task(self):
+        """定时任务执行后尝试撮合订单"""
+        try:
+            current_time = self.context.get('current_dt')
+            if not current_time:
+                return
+
+            market = self.context.get('settings', {}).get('market', 'cn_stock')
+            freq = self.context.get('settings', {}).get('freq', '1d')
+
+            # 获取所有需要行情的标的
+            symbols = set()
+            for order in self.trade_center.active_orders.values():
+                symbols.add(order.symbol)
+
+            if not symbols:
+                return
+
+            # 获取行情数据
+            try:
+                market_data = {}
+                symbols_list = list(symbols)
+
+                if freq == '1d':
+                    # 日线数据批量获取
+                    quote_df = self.data_center.get_quotes(symbols_list, freq=freq, time=current_time, fields=['close'])
+                    if not quote_df.empty:
+                        for symbol in symbols_list:
+                            if symbol in quote_df.index:
+                                market_data[symbol] = quote_df.loc[symbol].to_dict()
+                else:
+                    # 分钟线数据
+                    from datetime import timedelta
+                    start_time = current_time - timedelta(minutes=5)
+                    klines_df = self.data_center.get_klines(
+                        codes=symbols_list,
+                        freq=freq,
+                        start_time=start_time.strftime('%Y-%m-%d %H:%M:%S'),
+                        end_time=(current_time + timedelta(minutes=1)).strftime('%Y-%m-%d %H:%M:%S'),
+                        fields=['close']
+                    )
+
+                    if not klines_df.empty:
+                        for symbol in symbols_list:
+                            try:
+                                symbol_klines = klines_df[klines_df.index.get_level_values('symbol') == symbol]
+                                if not symbol_klines.empty:
+                                    latest_close = symbol_klines['close'].iloc[-1]
+                                    market_data[symbol] = {'close': latest_close}
+                            except Exception:
+                                pass
+
+                # 执行撮合
+                if market_data:
+                    time_str = current_time.strftime('%Y-%m-%d %H:%M:%S')
+                    Log.logger.info(f"[{time_str}] [定时任务后撮合] 活跃订单={len(self.trade_center.active_orders)}, 标的={list(symbols)}")
+                    self.trade_center.try_match_orders_sync(market_data)
+
+            except Exception as e:
+                Log.logger.error(f"定时任务后撮合失败: {e}")
+
+        except Exception as e:
+            Log.logger.error(f"_try_match_after_scheduled_task 失败: {e}")
             
     async def run(self, start_date: str, end_date: str, strategy, scheduled_tasks: List):
         """运行回测"""
@@ -1014,7 +1158,7 @@ class BacktestEngine:
                     # 如果没有事件循环，创建一个新的
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
-                
+
                 # 调用异步方法
                 order_id = loop.run_until_complete(
                     self.trade_center.place_order(
@@ -1026,14 +1170,18 @@ class BacktestEngine:
                         price=price
                     )
                 )
-                
-                Log.logger.info(f"下单成功: {security} {side} {volume:.2f} @ {price:.2f}, 订单ID: {order_id}")
+
+                current_time = self.context.get('current_dt')
+                time_str = current_time.strftime('%Y-%m-%d %H:%M:%S') if current_time else '--'
+                Log.logger.info(f"[{time_str}] 下单成功: {security} {side} {volume:.2f} @ {price:.2f}, 订单ID: {order_id}")
                 return order_id
-                
+
             except Exception as e:
-                Log.logger.error(f"下单失败: {e}")
+                current_time = self.context.get('current_dt')
+                time_str = current_time.strftime('%Y-%m-%d %H:%M:%S') if current_time else '--'
+                Log.logger.error(f"[{time_str}] 下单失败: {e}")
                 return None
-        
+
         def order_volume(security, volume, side, order_type=OrderType.MARKET,
                           order_cost=None, slippage=None):
             """下单函数 - 按数量下单"""
@@ -1081,14 +1229,18 @@ class BacktestEngine:
                         price=price
                     )
                 )
-                
-                Log.logger.info(f"下单成功: {security} {side} {volume:.2f} @ {price:.2f}, 订单ID: {order_id}")
+
+                current_time = self.context.get('current_dt')
+                time_str = current_time.strftime('%Y-%m-%d %H:%M:%S') if current_time else '--'
+                Log.logger.info(f"[{time_str}] 下单成功: {security} {side} {volume:.2f} @ {price:.2f}, 订单ID: {order_id}")
                 return order_id
-                
+
             except Exception as e:
-                Log.logger.error(f"下单失败: {e}")
+                current_time = self.context.get('current_dt')
+                time_str = current_time.strftime('%Y-%m-%d %H:%M:%S') if current_time else '--'
+                Log.logger.error(f"[{time_str}] 下单失败: {e}")
                 return None
-        
+
         # 设置全局函数
         globals()['order_value'] = order_value
         globals()['order_volume'] = order_volume
@@ -1238,34 +1390,102 @@ class BacktestEngine:
             # 从上下文中查找定时任务
             if not self.context or 'scheduled_tasks' not in self.context:
                 return
-            
+
             function_name = getattr(event, 'function_name', None)
             if not function_name:
                 Log.logger.warning("ON_TIME事件缺少function_name属性")
                 return
-                
+
             # 查找对应的函数对象
             func = None
             for task in self.context['scheduled_tasks']:
                 if task.get('function_name') == function_name:
                     func = task.get('function_object')
                     break
-            
+
             if func:
                 # 调用策略函数 - 强制同步调用
                 func(self.context)
                 Log.logger.info(f"执行定时任务成功: {function_name}")
+
+                # 注意：不再立即撮合，让订单在后续的分钟级撮合事件中自然成交
+                # 分钟级回测中，后续每分钟都会触发撮合事件
+
             else:
                 Log.logger.warning(f"未找到定时任务函数: {function_name}")
-                
+
         except Exception as e:
             Log.logger.error(f"执行定时任务失败: {e}")
+
+    def _try_match_after_scheduled_task_sync(self):
+        """定时任务执行后尝试撮合订单 - 同步版本"""
+        try:
+            current_time = self.context.get('current_dt')
+            if not current_time:
+                return
+
+            market = self.context.get('settings', {}).get('market', 'cn_stock')
+            freq = self.context.get('settings', {}).get('freq', '1d')
+
+            # 获取所有需要行情的标的
+            symbols = set()
+            for order in self.trade_center.active_orders.values():
+                symbols.add(order.symbol)
+
+            if not symbols:
+                return
+
+            # 获取行情数据
+            try:
+                market_data = {}
+                symbols_list = list(symbols)
+
+                if freq == '1d':
+                    # 日线数据批量获取
+                    quote_df = self.data_center.get_quotes(symbols_list, freq=freq, time=current_time, fields=['close'])
+                    if not quote_df.empty:
+                        for symbol in symbols_list:
+                            if symbol in quote_df.index:
+                                market_data[symbol] = quote_df.loc[symbol].to_dict()
+                else:
+                    # 分钟线数据
+                    from datetime import timedelta
+                    start_time = current_time - timedelta(minutes=5)
+                    klines_df = self.data_center.get_klines(
+                        codes=symbols_list,
+                        freq=freq,
+                        start_time=start_time.strftime('%Y-%m-%d %H:%M:%S'),
+                        end_time=(current_time + timedelta(minutes=1)).strftime('%Y-%m-%d %H:%M:%S'),
+                        fields=['close']
+                    )
+
+                    if not klines_df.empty:
+                        for symbol in symbols_list:
+                            try:
+                                symbol_klines = klines_df[klines_df.index.get_level_values('symbol') == symbol]
+                                if not symbol_klines.empty:
+                                    latest_close = symbol_klines['close'].iloc[-1]
+                                    market_data[symbol] = {'close': latest_close}
+                            except Exception:
+                                pass
+
+                # 执行撮合
+                if market_data:
+                    time_str = current_time.strftime('%Y-%m-%d %H:%M:%S')
+                    Log.logger.info(f"[{time_str}] [定时任务后撮合] 活跃订单={len(self.trade_center.active_orders)}, 标的={list(symbols)}")
+                    self.trade_center.try_match_orders_sync(market_data)
+
+            except Exception as e:
+                Log.logger.error(f"定时任务后撮合失败: {e}")
+
+        except Exception as e:
+            Log.logger.error(f"_try_match_after_scheduled_task_sync 失败: {e}")
             
     def _handle_try_match_sync(self, event):
         """处理撮合事件 - 同步版本"""
         # 获取当前市场数据
         current_time = self.context['current_dt']
-        time_str = current_time.strftime('%H:%M:%S') if current_time else '--:--:--'
+        time_str = current_time.strftime('%Y-%m-%d %H:%M:%S') if current_time else '--:--:--'
         market = self.context['settings']['market']
         freq = self.context['settings']['freq']
 
@@ -1284,7 +1504,7 @@ class BacktestEngine:
 
         # 如果之前有累积的跳过记录，先输出合并后的日志
         if self._match_skip_count > 0:
-            start_str = self._match_skip_start_time.strftime('%H:%M:%S') if self._match_skip_start_time else '--:--:--'
+            start_str = self._match_skip_start_time.strftime('%Y-%m-%d %H:%M:%S') if self._match_skip_start_time else '--:--:--'
             Log.logger.info(f"[{time_str}] [TRY_MATCH] 累计跳过撮合 {self._match_skip_count} 次 ({start_str} -> {time_str})")
             self._match_skip_count = 0
             self._match_skip_start_time = None
@@ -1491,10 +1711,13 @@ class BacktestEngine:
         try:
             # 调用TradeCenter处理公司行为事件
             self.trade_center.handle_corporate_action(event)
-            
-            # 记录事件
-            Log.logger.info(f"处理公司行为事件: {event.symbol} {event.action_type}")
-            
+
+            # 记录事件 - 从event.data获取信息
+            if hasattr(event, 'data') and event.data:
+                symbol = event.data.get('symbol', '')
+                action_type = event.data.get('action_type', '')
+                Log.logger.info(f"处理公司行为事件: {symbol} {action_type}")
+
         except Exception as e:
             Log.logger.error(f"处理公司行为事件失败: {e}")
             

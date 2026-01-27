@@ -112,12 +112,71 @@ class BacktestTrader:
         
         # 从参数中获取基础配置
         market = getattr(self.args, 'market', 'cn_stock')
-        freq = getattr(self.args, 'freq', '1d') 
+        freq = getattr(self.args, 'freq', '1d')
         start_date = getattr(self.args, 'start_time', '2024-01-01')
         end_date = getattr(self.args, 'end_time', '2024-12-31')
         initial_cash = float(getattr(self.args, 'cash', 1000000))
         benchmark = getattr(self.args, 'benchmark', '000001.SH')
-        strategy_name = getattr(self.args, 'strategy', 'demoStrategy')
+        strategy_name = getattr(self.args, 'strategy', 'simple_1m_strategy')
+
+        # 如果args中没有这些参数，尝试从配置文件中读取
+        vendor = getattr(self.args, 'vendor', 'backtest')
+        try:
+            from finhack.library.config import Config
+
+            # 读取 [trader-{vendor}] 配置
+            vendor_section = f'trader-{vendor}'
+            vendor_config = Config.get_config('args', vendor_section)
+
+            # 读取 model.conf (trader.conf) 配置 - 这个优先级最高
+            model_config = Config.get_config('trader', 'args')
+
+            # 合并配置（model配置覆盖vendor配置）
+            merged_config = {}
+            merged_config.update(vendor_config)
+            merged_config.update(model_config)
+
+            # 应用配置（如果args中没有对应值）
+            if 'market' in merged_config and not hasattr(self.args, 'market'):
+                market = merged_config['market']
+            if 'freq' in merged_config and not hasattr(self.args, 'freq'):
+                freq = merged_config['freq']
+                Log.logger.info(f"[CONFIG] 从配置文件读取到 freq={freq}")
+            if 'start_time' in merged_config and not hasattr(self.args, 'start_time'):
+                start_date = merged_config['start_time']
+            if 'end_time' in merged_config and not hasattr(self.args, 'end_time'):
+                end_date = merged_config['end_time']
+            if 'cash' in merged_config and not hasattr(self.args, 'cash'):
+                initial_cash = float(merged_config['cash'])
+            if 'benchmark' in merged_config and not hasattr(self.args, 'benchmark'):
+                benchmark = merged_config['benchmark']
+            if 'strategy' in merged_config and not hasattr(self.args, 'strategy'):
+                strategy_name = merged_config['strategy']
+
+        except Exception as e:
+            Log.logger.warning(f"[CONFIG] 无法读取配置文件: {e}")
+
+        # 调试日志：显示最终使用的参数值
+        Log.logger.info(f"[DEBUG] ===== 最终参数值 =====")
+        Log.logger.info(f"[DEBUG] market={market}, freq={freq}, start_date={start_date}, end_date={end_date}")
+        Log.logger.info(f"[DEBUG] cash={initial_cash}, benchmark={benchmark}, strategy={strategy_name}")
+        Log.logger.info(f"[DEBUG] ===== 参数值结束 =====")
+
+        # 调试日志：显示从args读取的freq值
+        Log.logger.info(f"[DEBUG] ===== args属性调试 =====")
+        Log.logger.info(f"[DEBUG] args.__dict__ keys: {list(self.args.__dict__.keys())}")
+        Log.logger.info(f"[DEBUG] args对象中'freq'属性存在: {hasattr(self.args, 'freq')}")
+        Log.logger.info(f"[DEBUG] args对象中'frequency'属性存在: {hasattr(self.args, 'frequency')}")
+        Log.logger.info(f"[DEBUG] args.freq = {getattr(self.args, 'freq', 'NOT_SET')}")
+        Log.logger.info(f"[DEBUG] args.frequency = {getattr(self.args, 'frequency', 'NOT_SET')}")
+        Log.logger.info(f"[DEBUG] 最终使用的freq值: {freq}")
+        Log.logger.info(f"[DEBUG] args中所有与freq相关的值: {[(k,v) for k,v in self.args.__dict__.items() if 'freq' in k.lower()]}")
+        Log.logger.info(f"[DEBUG] ===== args属性调试结束 =====") 
+        start_date = getattr(self.args, 'start_time', '2024-01-01')
+        end_date = getattr(self.args, 'end_time', '2024-12-31')
+        initial_cash = float(getattr(self.args, 'cash', 1000000))
+        benchmark = getattr(self.args, 'benchmark', '000001.SH')
+        strategy_name = getattr(self.args, 'strategy', 'simple_1m_strategy')
         
         # 解析params参数
         params = {}
@@ -543,13 +602,22 @@ class PriceRelatedSlippage:
                 self.engine.trade_center.active_orders[order_id] = order  # 同时添加到活跃订单
                 order.status = OrderStatus.NEW
 
-                Log.logger.info(f"下单成功: {symbol} {side.value} {order_type.value} 数量:{volume} 价格:{price} | 活跃订单数: {len(self.engine.trade_center.active_orders)}")
+                # 格式化价格显示
+                price_str = "市价" if price is None else f"{price:.2f}"
+                # 获取回测时间
+                bt_time = self.context.get('current_dt')
+                time_str = bt_time.strftime('%Y-%m-%d %H:%M:%S') if bt_time else '--'
+                Log.logger.info(f"[{time_str}] 下单成功: {symbol} {side.value} {order_type.value} 数量:{volume} 价格:{price_str} | 活跃订单数: {len(self.engine.trade_center.active_orders)}")
                 return order_id
             else:
-                Log.logger.info(f"模拟下单: {symbol} {side} {order_type} 数量:{volume} 价格:{price}")
+                bt_time = self.context.get('current_dt')
+                time_str = bt_time.strftime('%Y-%m-%d %H:%M:%S') if bt_time else '--'
+                Log.logger.info(f"[{time_str}] 模拟下单: {symbol} {side} {order_type} 数量:{volume} 价格:{price}")
                 return f"order_{symbol}_{int(datetime.now().timestamp())}"
         except Exception as e:
-            Log.logger.error(f"下单失败: {e}")
+            bt_time = self.context.get('current_dt')
+            time_str = bt_time.strftime('%Y-%m-%d %H:%M:%S') if bt_time else '--'
+            Log.logger.error(f"[{time_str}] 下单失败: {e}")
             return None
     
     def cancel_order_sync(self, adapter_id, order_id, **kwargs):
@@ -562,13 +630,19 @@ class PriceRelatedSlippage:
                 # 从活跃订单中移除
                 if order_id in self.engine.trade_center.active_orders:
                     del self.engine.trade_center.active_orders[order_id]
-                Log.logger.info(f"撤单成功: {order_id}")
+                bt_time = self.context.get('current_dt')
+                time_str = bt_time.strftime('%Y-%m-%d %H:%M:%S') if bt_time else '--'
+                Log.logger.info(f"[{time_str}] 撤单成功: {order_id}")
                 return True
             else:
-                Log.logger.info(f"模拟撤单: {order_id}")
+                bt_time = self.context.get('current_dt')
+                time_str = bt_time.strftime('%Y-%m-%d %H:%M:%S') if bt_time else '--'
+                Log.logger.info(f"[{time_str}] 模拟撤单: {order_id}")
                 return True
         except Exception as e:
-            Log.logger.error(f"撤单失败: {e}")
+            bt_time = self.context.get('current_dt')
+            time_str = bt_time.strftime('%Y-%m-%d %H:%M:%S') if bt_time else '--'
+            Log.logger.error(f"[{time_str}] 撤单失败: {e}")
             return False
     
     def get_account_sync(self, adapter_id='backtest', refresh=False):
@@ -673,17 +747,21 @@ class PriceRelatedSlippage:
         try:
             positions = self.get_positions_sync()
             sell_orders = []
-            
+
             for position in positions:
                 if position.volume > 0:  # 确保有持仓
                     order_id = self.order_sell_sync(position.symbol, position.volume)
                     if order_id:
                         sell_orders.append(order_id)
-                        Log.logger.info(f"卖出持仓: {position.symbol} 数量: {position.volume}")
-                    
+                        bt_time = self.context.get('current_dt')
+                        time_str = bt_time.strftime('%Y-%m-%d %H:%M:%S') if bt_time else '--'
+                        Log.logger.info(f"[{time_str}] 卖出持仓: {position.symbol} 数量: {position.volume}")
+
             return sell_orders
         except Exception as e:
-            Log.logger.error(f"卖出所有股票失败: {e}")
+            bt_time = self.context.get('current_dt')
+            time_str = bt_time.strftime('%Y-%m-%d %H:%M:%S') if bt_time else '--'
+            Log.logger.error(f"[{time_str}] 卖出所有股票失败: {e}")
             return []
     
     def set_benchmark(self, benchmark):
