@@ -127,19 +127,19 @@ class Trade:
     
     @classmethod
     def from_dict(cls, data: dict) -> 'Trade':
-        """从字典创建Trade对象"""
+        """从字典创建Trade对象（类型安全）"""
         data = data.copy()
-        
-        # 处理枚举类型
+
+        # 处理枚举类型 - 使用 from_value 进行类型安全转换
         if 'side' in data and isinstance(data['side'], str):
-            data['side'] = Side(data['side'])
+            data['side'] = Side.from_value(data['side'])
         if 'position_effect' in data and data['position_effect'] and isinstance(data['position_effect'], str):
-            data['position_effect'] = PositionEffect(data['position_effect'])
-            
+            data['position_effect'] = PositionEffect.from_value(data['position_effect'])
+
         # 处理时间字段
         if 'trade_time' in data and isinstance(data['trade_time'], str):
             data['trade_time'] = datetime.fromisoformat(data['trade_time'])
-            
+
         return cls(**data)
     
     def __str__(self) -> str:

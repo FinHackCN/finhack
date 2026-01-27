@@ -17,29 +17,35 @@ from .position import Position
 from .instrument import Instrument
 from .enums import (
     PlatformEnum, ExchangeEnum, AccountTypeEnum, AssetTypeEnum,
-    Side, PositionEffect, PositionSide, OrderType, OrderStatus,
-    TimeInForceEnum, AccountStatusEnum, OptionTypeEnum
+    Side, OrderSide, PositionEffect, PositionSide, OrderType, OrderStatus,
+    TimeInForceEnum, AccountStatusEnum, OptionTypeEnum,
+    normalize_enum_value, validate_enum_value,
 )
 
 __all__ = [
     # 数据模型
     "Account",
-    "Order", 
+    "Order",
     "Trade",
     "Position",
     "Instrument",
-    
+
     # 枚举类型
     "PlatformEnum",
-    "ExchangeEnum", 
+    "ExchangeEnum",
     "AccountTypeEnum",
     "AssetTypeEnum",
     "Side",
+    "OrderSide",  # Side 的别名
     "PositionEffect",
-    "PositionSide", 
+    "PositionSide",
     "OrderType",
     "OrderStatus",
     "TimeInForceEnum",
     "AccountStatusEnum",
-    "OptionTypeEnum"
+    "OptionTypeEnum",
+
+    # 工具函数
+    "normalize_enum_value",
+    "validate_enum_value",
 ] 

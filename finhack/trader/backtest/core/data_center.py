@@ -481,37 +481,44 @@ class DataCenter:
     
 
 
-    def get_quotes(self, codes: Union[str, List[str]], freq: str = '1d', 
+    def get_quotes(self, codes: Union[str, List[str]], freq: str = '1d',
                   time: datetime = None, fields: List[str] = None,
                   adj_type: str = 'none') -> pd.DataFrame:
         """获取指定时间点的行情数据
-        
+
         Args:
             codes: 股票代码或代码列表
             freq: 数据频率
             time: 查询时间点，如果为None则使用context.current_dt
             fields: 需要的字段列表
             adj_type: 复权类型 ('none': 不复权, 'front': 前复权, 'back': 后复权)
-            
+
         Returns:
             pd.DataFrame: 行情数据，index为symbol，columns为fields
-            
+
         Note:
             当指定时间点没有数据时，会自动使用最近的历史交易日数据
+            会自动过滤超过回测当前时间的数据，防止未来函数
         """
         if time is None and self.context:
             time = self.context.get('current_dt')
-        
+
         if time is None:
             raise ValueError("必须指定查询时间或设置context")
-        
+
         if fields is None:
             fields = ['open', 'high', 'low', 'close', 'volume']
-        
+
         market = self._get_market_from_context()
-        
+
+        # 限制查询时间不超过回测当前时间
+        backtest_time = self._get_backtest_time()
+        if backtest_time and time > backtest_time:
+            logger.debug(f"[时间约束] 限制查询时间 {time} -> {backtest_time}")
+            time = backtest_time
+
         # 使用统一数据接口获取行情数据
-        return self.data_interface.get_quotes(
+        result = self.data_interface.get_quotes(
             codes=codes,
             market=market,
             freq=freq,
@@ -520,39 +527,54 @@ class DataCenter:
             adj_type=adj_type,
             use_cache=True
         )
+
+        # 双重保险：过滤可能超过回测时间的数据
+        return self._filter_future_data(result, backtest_time)
     
     def get_klines(self, codes: Union[str, List[str]], freq: str = '1d',
                   start_time: Union[str, datetime] = None, end_time: Union[str, datetime] = None,
                   fields: List[str] = None, adj_type: str = 'none') -> pd.DataFrame:
         """获取K线数据
-        
+
         Args:
             codes: 股票代码或代码列表
             freq: 数据频率
             start_time: 开始时间
-            end_time: 结束时间
+            end_time: 结束时间（会被限制为不超过回测当前时间）
             fields: 需要的字段列表
             adj_type: 复权类型 ('none': 不复权, 'front': 前复权, 'back': 后复权)
-            
+
         Returns:
             pd.DataFrame: K线数据，MultiIndex(time, symbol)
+
+        Note:
+            会自动限制end_time不超过回测当前时间，防止未来函数
         """
         if fields is None:
             fields = ['open', 'high', 'low', 'close', 'volume']
-        
+
         market = self._get_market_from_context()
-        
+
+        # 获取回测当前时间作为硬性上限
+        backtest_time = self._get_backtest_time()
+
+        # 限制 end_time 不超过回测当前时间
+        if backtest_time and end_time:
+            end_time = self._min_time(end_time, backtest_time)
+            if end_time == backtest_time:
+                logger.debug(f"[时间约束] 限制end_time <= {backtest_time}")
+
         logger.info(f"[DataCenter] get_klines调用: market={market}, freq={freq}, "
                    f"codes_count={len(codes) if isinstance(codes, list) else 1}, "
                    f"start={start_time}, end={end_time}")
-        
+
         # 检查频率是否支持
         if freq not in self.supported_frequencies:
             logger.warning(f"不支持的频率: {freq}, 将使用1m数据进行聚合")
             # 如果请求的频率不是1m，则从1m数据聚合
             if freq != '1m':
                 return self._aggregate_klines(codes, '1m', freq, start_time, end_time, fields, adj_type)
-        
+
         # 使用统一数据接口获取K线数据
         result = self.data_interface.get_klines(
             codes=codes,
@@ -564,16 +586,17 @@ class DataCenter:
             adj_type=adj_type,
             use_cache=True
         )
-        
+
         logger.info(f"[DataCenter] get_klines返回: shape={result.shape if not result.empty else 'empty'}, "
                    f"empty={result.empty}, "
                    f"index_names={result.index.names if not result.empty else 'N/A'}")
-        
+
         if result.empty:
             logger.warning(f"[DataCenter] ⚠️ 返回空DataFrame！参数: codes={codes[:3] if isinstance(codes, list) else codes}, "
                          f"start={start_time}, end={end_time}")
-        
-        return result
+
+        # 双重保险：过滤可能超过回测时间的数据
+        return self._filter_future_data(result, backtest_time)
     
     def _aggregate_klines(self, codes: Union[str, List[str]], source_freq: str, target_freq: str,
                          start_time: Union[str, datetime] = None, end_time: Union[str, datetime] = None,
@@ -713,6 +736,87 @@ class DataCenter:
             logger.error(f"获取公司行为数据失败: {e}")
             return []
     
+    def _get_backtest_time(self) -> Optional[datetime]:
+        """获取回测当前时间
+
+        Returns:
+            回测当前时间，如果context未设置则返回None
+        """
+        if self.context:
+            return self.context.get('current_dt')
+        return None
+
+    def _min_time(self, t1: Union[str, datetime], t2: datetime) -> datetime:
+        """比较两个时间，返回较小的（较早的）
+
+        Args:
+            t1: 时间1（可能是str或datetime）
+            t2: 时间2（datetime）
+
+        Returns:
+            较早的时间（datetime类型）
+        """
+        # 统一转换为datetime进行比较
+        if isinstance(t1, str):
+            t1 = pd.to_datetime(t1)
+        if isinstance(t2, str):
+            t2 = pd.to_datetime(t2)
+
+        return min(t1, t2)
+
+    def _filter_future_data(self, df: pd.DataFrame, backtest_time: Optional[datetime]) -> pd.DataFrame:
+        """过滤超过回测时间的数据（防止未来函数）
+
+        注意：
+        - 对于 get_klines 返回的 MultiIndex(time, symbol) 数据，进行时间过滤
+        - 对于 get_quotes 返回的 index=symbol 数据，跳过过滤（无时间维度）
+
+        Args:
+            df: 数据DataFrame
+            backtest_time: 回测当前时间
+
+        Returns:
+            过滤后的DataFrame
+        """
+        if backtest_time is None or df.empty:
+            return df
+
+        # 处理MultiIndex (time, symbol) 的情况
+        if isinstance(df.index, pd.MultiIndex):
+            time_index = df.index.get_level_values(0)
+        else:
+            time_index = df.index
+
+        # 检查是否为时间索引：如果不是 datetime 类型，尝试转换
+        # 如果已经是 datetime 类型，直接使用
+        if not isinstance(time_index, pd.DatetimeIndex):
+            # 尝试转换为 datetime
+            try:
+                time_index = pd.to_datetime(time_index)
+            except Exception:
+                # 转换失败：可能是股票代码索引（get_quotes 的返回结果）
+                # 这种情况不需要时间过滤，直接返回
+                return df
+
+        # 转换backtest_time以匹配index的时区（如果有）
+        if hasattr(time_index, 'tz') and time_index.tz is not None:
+            if backtest_time.tzinfo is None:
+                backtest_time = backtest_time.tz_localize(time_index.tz)
+            else:
+                backtest_time = backtest_time.tz_convert(time_index.tz)
+
+        # 过滤未来数据
+        mask = time_index <= backtest_time
+        filtered = df[mask]
+
+        # 记录被过滤的数据量
+        filtered_count = len(df) - len(filtered)
+        if filtered_count > 0:
+            logger.debug(f"[时间约束] 过滤了 {filtered_count} 条未来数据 "
+                        f"(backtest_time={backtest_time})")
+
+        return filtered
+
     def _get_market_from_context(self) -> str:
         """从context获取当前市场"""
         if self.context:

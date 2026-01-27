@@ -6,25 +6,13 @@ import uuid
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
-from enum import Enum
 
 from finhack.core.classes.dictobj import DictObj
-
-
-class OrderStatus(Enum):
-    """订单状态枚举"""
-    PENDING = "pending"       # 待处理
-    SUBMITTED = "submitted"   # 已提交
-    FILLED = "filled"        # 已成交
-    PARTIALLY_FILLED = "partially_filled"  # 部分成交
-    CANCELLED = "cancelled"   # 已取消
-    REJECTED = "rejected"     # 已拒绝
-
-
-class OrderSide(Enum):
-    """订单方向枚举"""
-    BUY = "buy"
-    SELL = "sell"
+from finhack.trader.backtest.models.enums import (
+    Side as OrderSide,
+    OrderStatus,
+    OrderType,
+)
 
 
 @dataclass
@@ -35,8 +23,8 @@ class Order:
     side: OrderSide
     quantity: float
     price: Optional[float] = None  # None表示市价单
-    order_type: str = "market"  # market, limit
-    status: OrderStatus = OrderStatus.PENDING
+    order_type: OrderType = OrderType.MARKET  # MARKET, LIMIT
+    status: OrderStatus = OrderStatus.PENDING_NEW
     filled_quantity: float = 0.0
     avg_fill_price: float = 0.0
     commission: float = 0.0
@@ -347,7 +335,7 @@ class TradeCenter:
     def place_order(self, adapter_id: str = "default", symbol: str = "",
                    side: str = "buy", volume: float = 0,
                    price: Optional[float] = None,
-                   order_type: str = "market", **kwargs) -> Optional[str]:
+                   order_type: OrderType = OrderType.MARKET, **kwargs) -> Optional[str]:
         """
         下单 - 兼容UniTrader接口
 
@@ -401,7 +389,7 @@ class TradeCenter:
 
             # 提交订单
             self.orders[order_id] = order
-            order.status = OrderStatus.SUBMITTED
+            order.status = OrderStatus.NEW
 
             # 记录订单日志
             if self._context:
@@ -442,7 +430,7 @@ class TradeCenter:
             order = self.orders[order_id]
             
             # 只有未成交或部分成交的订单可以撤销
-            if order.status in [OrderStatus.PENDING, OrderStatus.SUBMITTED, OrderStatus.PARTIALLY_FILLED]:
+            if order.status in [OrderStatus.PENDING_NEW, OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED]:
                 order.status = OrderStatus.CANCELLED
                 order.updated_at = datetime.now()
                 
@@ -501,7 +489,7 @@ class TradeCenter:
                 return False
             
             # 检查限价单价格
-            if order.order_type == "limit" and (not order.price or order.price <= 0):
+            if order.order_type == OrderType.LIMIT and (not order.price or order.price <= 0):
                 if self._context:
                     self._context.logger.error("限价单必须指定有效价格")
                 return False
@@ -539,7 +527,7 @@ class TradeCenter:
             return 0.0
         
         # 使用当前价格估算（市价单）或使用限价（限价单）
-        price = current_price if order.order_type == "market" else (order.price or current_price)
+        price = current_price if order.order_type == OrderType.MARKET else (order.price or current_price)
         
         # 计算成本（包含手续费）
         trade_value = price * order.quantity
@@ -587,12 +575,12 @@ class TradeCenter:
                 if self._context:
                     self._context.logger.warning(f"无法获取 {order.symbol} 的价格({current_price})，订单暂时无法成交")
                 # 将订单标记为待处理，等待下次尝试
-                if order.status != OrderStatus.SUBMITTED:
-                    order.status = OrderStatus.SUBMITTED
+                if order.status != OrderStatus.NEW:
+                    order.status = OrderStatus.NEW
                 return
             
             # 检查涨跌停限制（仅限价单需要检查）
-            if self.trading_rules.get("limit_up_down", False) and order.order_type == "limit":
+            if self.trading_rules.get("limit_up_down", False) and order.order_type == OrderType.LIMIT:
                 if not self._check_price_limit(order.symbol, current_price, order.price):
                     order.status = OrderStatus.REJECTED
                     if self._context:
@@ -604,7 +592,7 @@ class TradeCenter:
             fill_price = current_price
             fill_quantity = order.quantity - order.filled_quantity
             
-            if order.order_type == "market":
+            if order.order_type == OrderType.MARKET:
                 # 市价单：立即成交，但增加滑点
                 can_fill = True
                 slippage = self._calculate_slippage(order)
@@ -613,7 +601,7 @@ class TradeCenter:
                 else:
                     fill_price = current_price * (1 - slippage)
                     
-            elif order.order_type == "limit" and order.price:
+            elif order.order_type == OrderType.LIMIT and order.price:
                 # 限价单：价格合适时成交
                 if order.side == OrderSide.BUY and current_price <= order.price:
                     can_fill = True
@@ -652,8 +640,8 @@ class TradeCenter:
                     self._context.logger.debug(f"订单暂未成交: {order.symbol} {order.side.value} - {reason}")
                     
                 # 确保订单状态正确，以便下次继续尝试
-                if order.status != OrderStatus.SUBMITTED and order.status != OrderStatus.PARTIALLY_FILLED:
-                    order.status = OrderStatus.SUBMITTED
+                if order.status != OrderStatus.NEW and order.status != OrderStatus.PARTIALLY_FILLED:
+                    order.status = OrderStatus.NEW
         
         except Exception as e:
             if self._context:
@@ -721,7 +709,7 @@ class TradeCenter:
         
         # 根据订单类型调整滑点
         type_adjustment = 1.0
-        if order.order_type == "market":
+        if order.order_type == OrderType.MARKET:
             type_adjustment = 1.5  # 市价单滑点更大
         
         # 根据当前市场波动性调整滑点（简化处理）
@@ -738,7 +726,7 @@ class TradeCenter:
     def _get_max_single_fill(self, order: Order, current_price: float) -> float:
         """获取单次最大成交量"""
         # 模拟市场流动性限制
-        if order.order_type == "market":
+        if order.order_type == OrderType.MARKET:
             # 市价单可以成交更多
             return min(order.quantity, 100000)
         else:
@@ -1168,7 +1156,7 @@ class TradeCenter:
 
     # 增加一些便捷方法
     def submit_order(self, symbol: str, side: str, volume: float, 
-                    price: Optional[float] = None, order_type: str = "market",
+                    price: Optional[float] = None, order_type: OrderType = OrderType.MARKET,
                     **kwargs) -> Optional[str]:
         """提交订单 - 兼容旧接口"""
         return self.place_order(
@@ -1184,7 +1172,7 @@ class TradeCenter:
     def get_pending_orders(self) -> List[Order]:
         """获取待处理订单"""
         return [order for order in self.orders.values() 
-                if order.status in [OrderStatus.PENDING, OrderStatus.SUBMITTED, OrderStatus.PARTIALLY_FILLED]]
+                if order.status in [OrderStatus.PENDING_NEW, OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED]]
     
     def get_filled_orders(self) -> List[Order]:
         """获取已成交订单"""
@@ -1255,7 +1243,7 @@ class TradeCenter:
         for order in pending_orders:
             # 重新验证订单
             if self._validate_order(order):
-                order.status = OrderStatus.SUBMITTED
+                order.status = OrderStatus.NEW
             else:
                 order.status = OrderStatus.REJECTED
                 if self._context:
@@ -1353,7 +1341,7 @@ class TradeCenter:
     def _process_market_orders(self):
         """处理市价单"""
         market_orders = [order for order in self.get_pending_orders() 
-                        if order.order_type == "market"]
+                        if order.order_type == OrderType.MARKET]
         
         for order in market_orders:
             self._try_fill_order(order)
@@ -1368,11 +1356,11 @@ class TradeCenter:
     def _handle_unfilled_orders(self):
         """处理未成交的订单"""
         unfilled_orders = [order for order in self.get_pending_orders() 
-                          if order.status == OrderStatus.SUBMITTED]
+                          if order.status == OrderStatus.NEW]
         
         for order in unfilled_orders:
             # 限价单继续保留，市价单取消
-            if order.order_type == "market":
+            if order.order_type == OrderType.MARKET:
                 order.status = OrderStatus.CANCELLED
                 if self._context:
                     self._context.logger.info(f"取消未成交的市价单: {order.order_id}")
@@ -1400,7 +1388,7 @@ class TradeCenter:
         """处理收盘前的订单"""
         # 强制成交所有市价单
         market_orders = [order for order in self.get_pending_orders() 
-                        if order.order_type == "market"]
+                        if order.order_type == OrderType.MARKET]
         
         for order in market_orders:
             self._try_fill_order(order)
@@ -1834,7 +1822,7 @@ class TradeCenter:
         
         for order_id, order in self.orders.items():
             # 简化实现：取消所有未成交的订单
-            if order.status in [OrderStatus.PENDING, OrderStatus.SUBMITTED]:
+            if order.status in [OrderStatus.PENDING_NEW, OrderStatus.NEW]:
                 order.status = OrderStatus.CANCELLED
                 expired_orders.append(order_id)
         
@@ -1983,7 +1971,7 @@ class TradeCenter:
         try:
             # 获取所有未完全成交的订单
             pending_orders = [order for order in self.orders.values() 
-                            if order.status in [OrderStatus.PENDING, OrderStatus.SUBMITTED, OrderStatus.PARTIALLY_FILLED]]
+                            if order.status in [OrderStatus.PENDING_NEW, OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED]]
             
             if not pending_orders:
                 return
@@ -2083,8 +2071,8 @@ class TradeCenter:
             
             # 处理市价单优先
             market_orders = [order for order in self.orders.values() 
-                           if order.status in [OrderStatus.PENDING, OrderStatus.PARTIALLY_FILLED] 
-                           and order.order_type == "market"]
+                           if order.status in [OrderStatus.PENDING_NEW, OrderStatus.PARTIALLY_FILLED] 
+                           and order.order_type == OrderType.MARKET]
             
             for order in market_orders:
                 self._try_fill_order(order)
@@ -2166,8 +2154,8 @@ class TradeCenter:
         """
         try:
             market_orders = [order for order in self.orders.values() 
-                           if order.status in [OrderStatus.PENDING, OrderStatus.PARTIALLY_FILLED] 
-                           and order.order_type == "market"]
+                           if order.status in [OrderStatus.PENDING_NEW, OrderStatus.PARTIALLY_FILLED] 
+                           and order.order_type == OrderType.MARKET]
             
             cancelled_count = 0
             for order in market_orders:
@@ -2454,7 +2442,168 @@ class TradeCenter:
             
             if self._context and corporate_actions:
                 self._context.logger.info(f"处理了{len(corporate_actions)}个公司行为事件")
-        
+
         except Exception as e:
             if self._context:
                 self._context.logger.error(f"处理公司行为事件失败: {e}")
+
+    # ========================================================================
+    # 订单撮合方法（事件驱动接口）
+    # ========================================================================
+
+    def try_match_orders(self, event):
+        """尝试撮合订单（事件驱动接口）
+
+        Args:
+            event: 包含市场数据的 TRY_MATCH 事件
+        """
+        try:
+            if not hasattr(event, 'market_data'):
+                if self._context:
+                    self._context.logger.warning("TRY_MATCH 事件缺少 market_data")
+                return
+
+            market_data = event.market_data
+            current_time = self._context.current_dt if self._context and hasattr(self._context, 'current_dt') else datetime.now()
+
+            # 获取所有待撮合订单
+            pending_orders = [
+                order for order in self.orders.values()
+                if order.status in [OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED]
+            ]
+
+            if not pending_orders:
+                return
+
+            if self._context:
+                self._context.logger.debug(f"[撮合] 开始处理 {len(pending_orders)} 个待撮合订单")
+
+            # 处理每个订单
+            for order in pending_orders:
+                self._try_fill_order(order)
+
+        except Exception as e:
+            if self._context:
+                self._context.logger.error(f"订单撮合失败: {e}")
+
+    def try_match_orders_sync(self, market_data: Dict[str, Dict]):
+        """尝试撮合订单（同步接口，供回测引擎直接调用）
+
+        Args:
+            market_data: 市场数据字典 {symbol: {field: value}}
+        """
+        try:
+            current_time = self._context.current_dt if self._context and hasattr(self._context, 'current_dt') else datetime.now()
+
+            # 更新价格缓存
+            if market_data:
+                self._price_cache = {
+                    symbol: data.get('close', 0)
+                    for symbol, data in market_data.items()
+                }
+                self._current_bar_time = current_time
+
+            # 获取所有待撮合订单
+            pending_orders = [
+                order for order in self.orders.values()
+                if order.status in [OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED]
+            ]
+
+            if not pending_orders:
+                return
+
+            # 处理每个订单
+            for order in pending_orders:
+                self._try_fill_order(order)
+
+        except Exception as e:
+            if self._context:
+                self._context.logger.error(f"订单撮合失败: {e}")
+
+    def handle_order_submission(self, event):
+        """处理订单提交事件
+
+        Args:
+            event: ORDER_SUBMISSION 事件
+        """
+        try:
+            # 订单已在下单时提交到 self.orders
+            # 这里可以添加额外的处理逻辑，如日志记录
+            if self._context and hasattr(event, 'order_id'):
+                order = self.orders.get(event.order_id)
+                if order:
+                    self._context.logger.debug(f"订单提交事件处理: {event.order_id} - {order.symbol} {order.side.value}")
+        except Exception as e:
+            if self._context:
+                self._context.logger.error(f"处理订单提交事件失败: {e}")
+
+    def handle_order_cancellation(self, event):
+        """处理订单撤销事件
+
+        Args:
+            event: ORDER_CANCELLATION 事件
+        """
+        try:
+            if hasattr(event, 'order_id'):
+                order_id = event.order_id
+                # 撤销订单
+                if order_id in self.orders:
+                    order = self.orders[order_id]
+                    if order.status in [OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED]:
+                        order.status = OrderStatus.CANCELLED
+                        order.updated_at = datetime.now()
+                        if self._context:
+                            self._context.logger.info(f"订单撤销成功: {order_id}")
+                    else:
+                        if self._context:
+                            self._context.logger.warning(f"订单无法撤销，当前状态: {order.status.value}")
+        except Exception as e:
+            if self._context:
+                self._context.logger.error(f"处理订单撤销事件失败: {e}")
+
+    def cancel_pending_orders(self, event):
+        """取消所有待处理订单（市场收盘时调用）
+
+        Args:
+            event: MARKET_END 事件
+        """
+        try:
+            cancelled_count = 0
+            for order in list(self.orders.values()):
+                if order.status in [OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED]:
+                    order.status = OrderStatus.CANCELLED
+                    order.updated_at = datetime.now()
+                    cancelled_count += 1
+
+            if self._context and cancelled_count > 0:
+                self._context.logger.info(f"收盘取消待处理订单: {cancelled_count} 个")
+
+        except Exception as e:
+            if self._context:
+                self._context.logger.error(f"取消待处理订单失败: {e}")
+
+    def daily_settlement(self, event):
+        """日终清算
+
+        Args:
+            event: MARKET_END 事件
+        """
+        try:
+            # 更新持仓市值
+            current_time = self._context.current_dt if self._context and hasattr(self._context, 'current_dt') else datetime.now()
+
+            for position in self.positions.values():
+                if position.last_price > 0:
+                    position.market_value = position.quantity * position.last_price
+                    position.updated_at = current_time
+
+            # 计算账户总值
+            if self._context:
+                total_market_value = sum(pos.market_value for pos in self.positions.values())
+                total_assets = self._context.account.cash + total_market_value
+
+                self._context.logger.info(f"日终清算 - 总资产: {total_assets:.2f}, 现金: {self._context.account.cash:.2f}, 市值: {total_market_value:.2f}")
+
+        except Exception as e:
+            if self._context:
+                self._context.logger.error(f"日终清算失败: {e}")

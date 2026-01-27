@@ -198,7 +198,10 @@ class EventCenter:
         market_name = self.context.get('settings', {}).get('market', 'cn_stock')
         frequency = self.context.get('settings', {}).get('freq', '1d')
         self.current_frequency = frequency
-        
+
+        # 添加调试日志
+        logger.info(f"[事件生成] 交易日期: {trade_date}, 频率: {frequency}, 市场: {market_name}")
+
         events = []
         
         try:
@@ -216,12 +219,11 @@ class EventCenter:
             
             # 4. 按时间排序所有事件
             events.sort(key=lambda x: (x.event_time, x.priority.value))
-            
+
             # 添加调试日志
             try_match_events = [e for e in events if e.event_type == EventTypeEnum.TRY_MATCH]
-            logger.debug(f"生成 {trade_date} 的事件: {len(events)} 个，其中撮合事件: {len(try_match_events)} 个")
-            
-            logger.debug(f"生成 {trade_date} 的事件: {len(events)} 个")
+            bar_events = [e for e in events if 'BAR' in e.event_type.value]
+            logger.info(f"[事件生成] {trade_date} 频率={frequency}: 总事件={len(events)}, 撮合={len(try_match_events)}, K线={len(bar_events)}")
             
         except Exception as e:
             logger.error(f"生成事件失败 {trade_date}: {e}")
@@ -398,11 +400,12 @@ class EventCenter:
         try:
             logger.info(f"[EventCenter] _generate_corporate_action_events调用: trade_date={trade_date}")
             # 从DataCenter获取公司行为数据
-            if not self.context or not hasattr(self.context, 'data_center'):
-                logger.warning("[EventCenter] context或data_center不存在")
+            # Note: data_center is set via set_data_center(), not stored in context dict
+            if not self.data_center:
+                logger.warning("[EventCenter] data_center未设置")
                 return []
 
-            data_center = self.context.data_center
+            data_center = self.data_center
             market = self.context.get('settings', {}).get('market', 'cn_stock')
             logger.info(f"[EventCenter] 准备调用data_center.get_corporate_actions: date={trade_date}, market={market}")
 
@@ -415,10 +418,21 @@ class EventCenter:
 
             events = []
             for action in corporate_actions:
-                # 创建公司行为事件
-                event = type('CorporateActionEvent', (), {
-                    'event_type': type('EventType', (), {'value': 'CORPORATE_ACTION'})(),
-                    'event_time': datetime.combine(trade_date, datetime.min.time()),
+                # 导入EventPriorityEnum用于设置事件优先级
+                from ..events.event_types import EventPriorityEnum
+
+                # 创建公司行为事件（使用BaseEvent的data属性存储额外信息）
+                from ..events.event_types import BaseEvent, EventTypeEnum
+
+                event = BaseEvent(
+                    event_type=EventTypeEnum.CORPORATE_ACTION if hasattr(EventTypeEnum, 'CORPORATE_ACTION') else EventTypeEnum.DAY_START,
+                    event_time=datetime.combine(trade_date, datetime.min.time()),
+                    market=market,
+                    frequency=self.current_frequency,
+                    priority=EventPriorityEnum.NORMAL
+                )
+                # 将公司行为详细信息存储在data属性中
+                event.data = {
                     'symbol': action.get('symbol', ''),
                     'action_type': action.get('action_type', ''),
                     'dividend_per_share': action.get('dividend_per_share', 0),
@@ -427,7 +441,7 @@ class EventCenter:
                     'split_ratio': action.get('split_ratio', 1),
                     'rights_ratio': action.get('rights_ratio', 0),
                     'rights_price': action.get('rights_price', 0)
-                })()
+                }
 
                 events.append(event)
 

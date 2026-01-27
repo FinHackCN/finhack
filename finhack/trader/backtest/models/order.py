@@ -193,27 +193,27 @@ class Order:
     
     @classmethod
     def from_dict(cls, data: dict) -> 'Order':
-        """从字典创建Order对象"""
+        """从字典创建Order对象（类型安全）"""
         data = data.copy()
-        
-        # 处理枚举类型
+
+        # 处理枚举类型 - 使用 from_value 进行类型安全转换
         if 'side' in data and isinstance(data['side'], str):
-            data['side'] = Side(data['side'])
+            data['side'] = Side.from_value(data['side'])
         if 'order_type' in data and isinstance(data['order_type'], str):
-            data['order_type'] = OrderType(data['order_type'])
+            data['order_type'] = OrderType.from_value(data['order_type'])
         if 'position_effect' in data and data['position_effect'] and isinstance(data['position_effect'], str):
-            data['position_effect'] = PositionEffect(data['position_effect'])
+            data['position_effect'] = PositionEffect.from_value(data['position_effect'])
         if 'status' in data and isinstance(data['status'], str):
-            data['status'] = OrderStatus(data['status'])
+            data['status'] = OrderStatus.from_value(data['status'])
         if 'asset_type' in data and data['asset_type'] and isinstance(data['asset_type'], str):
-            data['asset_type'] = AssetTypeEnum(data['asset_type'])
+            data['asset_type'] = AssetTypeEnum.from_value(data['asset_type'])
         if 'time_in_force' in data and isinstance(data['time_in_force'], str):
-            data['time_in_force'] = TimeInForceEnum(data['time_in_force'])
-            
+            data['time_in_force'] = TimeInForceEnum.from_value(data['time_in_force'])
+
         # 处理时间字段
         if 'created_time' in data and isinstance(data['created_time'], str):
             data['created_time'] = datetime.fromisoformat(data['created_time'])
         if 'updated_time' in data and isinstance(data['updated_time'], str):
             data['updated_time'] = datetime.fromisoformat(data['updated_time'])
-            
+
         return cls(**data) 

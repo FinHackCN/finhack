@@ -191,19 +191,19 @@ class Position:
     
     @classmethod
     def from_dict(cls, data: dict) -> 'Position':
-        """从字典创建Position对象"""
+        """从字典创建Position对象（类型安全）"""
         data = data.copy()
-        
-        # 处理枚举类型
+
+        # 处理枚举类型 - 使用 from_value 进行类型安全转换
         if 'position_side' in data and isinstance(data['position_side'], str):
-            data['position_side'] = PositionSide(data['position_side'])
-            
+            data['position_side'] = PositionSide.from_value(data['position_side'])
+
         # 处理时间字段
         if 'open_time' in data and isinstance(data['open_time'], str):
             data['open_time'] = datetime.fromisoformat(data['open_time'])
         if 'timestamp_updated' in data and isinstance(data['timestamp_updated'], str):
             data['timestamp_updated'] = datetime.fromisoformat(data['timestamp_updated'])
-            
+
         return cls(**data)
     
     def __str__(self) -> str:
