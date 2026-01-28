@@ -239,6 +239,10 @@ class BacktestTrader:
                     'small_order_min': float(merged_config.get('partial_fill_ratio_small_order_min', 0.7)),
                     'small_order_max': float(merged_config.get('partial_fill_ratio_small_order_max', 1.0)),
                 },
+                # 模拟盘配置（从配置文件读取）
+                'simulation_mode': merged_config.get('simulation_mode', 'false').lower() == 'true',
+                'context_persistence': merged_config.get('context_persistence', 'false').lower() == 'true',
+                'base_dir': BASE_DIR,
             },
             
             'account': {

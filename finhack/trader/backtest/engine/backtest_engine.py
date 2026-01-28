@@ -6,7 +6,10 @@
 """
 
 import asyncio
+import os
+import pickle
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Dict, List, Optional, Any
 import pandas as pd
 
@@ -17,6 +20,7 @@ from ..models.account import Account
 from ..models.position import Position
 from ..models.order import Order
 from ..models.trade import Trade
+from ..core.context import Context
 
 
 class TradeCenter:
@@ -1037,29 +1041,177 @@ class BacktestEngine:
                 
             # 更新前一交易日
             self.context['previous_date'] = trade_date.date()
-            
+
         # 计算绩效
         await self._calculate_performance()
-        
+
         Log.logger.info("回测完成")
-        
+
+    def _get_context_filepath(self) -> Optional[str]:
+        """获取上下文文件路径"""
+        settings = self.context.get('settings', {})
+        base_dir = settings.get('base_dir', os.getcwd())
+        running_dir = Path(base_dir) / "data" / "running"
+        running_dir.mkdir(parents=True, exist_ok=True)
+
+        # 使用策略名和market生成文件名
+        strategy_name = settings.get('strategy_name', 'unknown')
+        market = settings.get('market', 'unknown')
+        filename = f"backtest_{market}_{strategy_name}.pkl"
+        return str(running_dir / filename)
+
+    def _save_context(self) -> bool:
+        """保存上下文到文件（用于模拟盘续跑）
+
+        Returns:
+            bool: 是否保存成功
+        """
+        try:
+            filepath = self._get_context_filepath()
+            if not filepath:
+                return False
+
+            # 准备保存的数据
+            save_data = {
+                'context': self.context,
+                'trade_center_state': {
+                    'account': self.trade_center.account.to_dict() if hasattr(self.trade_center.account, 'to_dict') else self.trade_center.account.__dict__,
+                    'positions': {k: v.to_dict() if hasattr(v, 'to_dict') else v.__dict__
+                                 for k, v in self.trade_center.positions.items()},
+                    'orders': {k: v.to_dict() if hasattr(v, 'to_dict') else v.__dict__
+                              for k, v in self.trade_center.orders.items()},
+                    'order_id_counter': self.trade_center.order_id_counter,
+                    'trade_id_counter': self.trade_center.trade_id_counter,
+                },
+                'saved_at': datetime.now().isoformat(),
+                'saved_end_date': self.context.get('settings', {}).get('end_date'),
+            }
+
+            with open(filepath, 'wb') as f:
+                pickle.dump(save_data, f)
+
+            Log.logger.info(f"上下文已保存到: {filepath}")
+            return True
+        except Exception as e:
+            Log.logger.error(f"保存上下文失败: {e}")
+            return False
+
+    def _load_context(self) -> Optional[Dict]:
+        """加载保存的上下文
+
+        Returns:
+            Optional[Dict]: 保存的上下文数据，如果不存在则返回None
+        """
+        try:
+            filepath = self._get_context_filepath()
+            if not filepath or not os.path.exists(filepath):
+                return None
+
+            with open(filepath, 'rb') as f:
+                save_data = pickle.load(f)
+
+            Log.logger.info(f"从文件加载上下文: {filepath}")
+            Log.logger.info(f"保存时间: {save_data.get('saved_at')}")
+            Log.logger.info(f"保存时的结束日期: {save_data.get('saved_end_date')}")
+            return save_data
+        except Exception as e:
+            Log.logger.error(f"加载上下文失败: {e}")
+            return None
+
+    def _restore_from_saved_context(self, saved_data: Dict) -> datetime:
+        """从保存的上下文恢复状态
+
+        Args:
+            saved_data: 保存的上下文数据
+
+        Returns:
+            datetime: 恢复的开始时间（从保存的结束时间的下一天开始）
+        """
+        # 恢复context状态
+        saved_context = saved_data['context']
+        self.context.update(saved_context)
+
+        # 恢复TradeCenter状态
+        tc_state = saved_data['trade_center_state']
+        if 'account' in tc_state:
+            from ..models.account import Account
+            self.trade_center.account = Account.from_dict(tc_state['account'])
+
+        # 恢复positions
+        from ..models.position import Position
+        self.trade_center.positions = {}
+        for symbol, pos_data in tc_state.get('positions', {}).items():
+            self.trade_center.positions[symbol] = Position.from_dict(pos_data)
+
+        # 恢复orders
+        from ..models.order import Order
+        self.trade_center.orders = {}
+        for order_id, order_data in tc_state.get('orders', {}).items():
+            self.trade_center.orders[order_id] = Order.from_dict(order_data)
+
+        # 恢复活跃订单
+        self.trade_center.active_orders = {
+            k: v for k, v in self.trade_center.orders.items()
+            if v.status not in [OrderStatus.FILLED, OrderStatus.CANCELLED, OrderStatus.REJECTED]
+        }
+
+        # 恢复计数器
+        self.trade_center.order_id_counter = tc_state.get('order_id_counter', 1)
+        self.trade_center.trade_id_counter = tc_state.get('trade_id_counter', 1)
+
+        # 计算新的开始时间：从保存结束日期的下一天开始
+        saved_end_date_str = saved_data.get('saved_end_date')
+        if saved_end_date_str:
+            saved_end_date = datetime.strptime(saved_end_date_str, '%Y-%m-%d %H:%M:%S')
+            new_start_date = saved_end_date + timedelta(days=1)
+            Log.logger.info(f"从保存的上下文恢复，新的开始日期: {new_start_date.strftime('%Y-%m-%d')}")
+            return new_start_date
+
+        return None
+
     def run_sync(self, start_date: str, end_date: str, strategy, scheduled_tasks: List):
         """运行回测 - 同步版本"""
         Log.logger.info(f"开始回测: {start_date} -> {end_date}")
-        
+
         # 保存策略引用
         self.strategy = strategy
-        
+
         # 初始化全局函数
         self.initialize_global_functions()
-        
+
         # 如果策略有set_order_functions函数，则调用它
         if hasattr(strategy, 'set_order_functions'):
             strategy.set_order_functions(
                 globals()['order_value'],
                 globals()['order_volume']
             )
-        
+
+        # ========== 模拟盘：检查是否有保存的上下文 ==========
+        settings = self.context.get('settings', {})
+        simulation_mode = settings.get('simulation_mode', False)
+        context_persistence = settings.get('context_persistence', False)
+
+        if simulation_mode and context_persistence:
+            saved_data = self._load_context()
+            if saved_data:
+                saved_end_date_str = saved_data.get('saved_end_date')
+                current_end_date = datetime.strptime(end_date, '%Y-%m-%d %H:%M:%S')
+
+                # 如果当前结束日期 > 保存的结束日期，说明用户延长了回测时间
+                if saved_end_date_str:
+                    saved_end_date = datetime.strptime(saved_end_date_str, '%Y-%m-%d %H:%M:%S')
+                    if current_end_date > saved_end_date:
+                        Log.logger.info(f"检测到延长结束日期：{saved_end_date} -> {current_end_date}")
+                        Log.logger.info("从保存的上下文恢复状态...")
+                        restored_start = self._restore_from_saved_context(saved_data)
+                        if restored_start:
+                            start_date = restored_start.strftime('%Y-%m-%d %H:%M:%S')
+                            Log.logger.info(f"新的开始日期: {start_date}")
+                        else:
+                            Log.logger.warning("恢复上下文失败，使用原始配置")
+                    else:
+                        Log.logger.info("检测到保存的上下文，但结束日期未延长，正常回测")
+
         # 生成交易日历
         calendar = self._generate_calendar_sync(start_date, end_date)
         Log.logger.info(f"交易日历已生成，共{len(calendar)}天")
@@ -1204,12 +1356,17 @@ class BacktestEngine:
 
             # 更新前一交易日
             self.context['previous_date'] = trade_date.date()
-            
+
         # 计算绩效
         self._calculate_performance_sync()
-        
+
         Log.logger.info("回测完成")
-        
+
+        # ========== 模拟盘：保存上下文 ==========
+        if simulation_mode and context_persistence:
+            Log.logger.info("模拟盘模式：保存上下文状态...")
+            self._save_context()
+
         # 返回回测结果
         return self.context['performance']
     
@@ -1886,6 +2043,108 @@ class BacktestEngine:
             Log.logger.info(f"回测绩效 - 总收益: {total_return:.2%}, 年化收益: {annual_return:.2%}, "
                           f"夏普比率: {sharpe_ratio:.2f}, 最大回撤: {max_drawdown:.2%}, "
                           f"胜率: {win_ratio:.2%}, 交易次数: {len(self.trade_center.trades)}")
+
+            # ========== 计算基准收益率和超额收益 ==========
+            self._calculate_benchmark_performance(daily_history, returns_array, trading_days)
+
+    def _calculate_benchmark_performance(self, daily_history: List[Dict], strategy_returns_array, trading_days: int):
+        """计算基准收益率和超额收益指标
+
+        Args:
+            daily_history: 每日历史记录
+            strategy_returns_array: 策略日收益率数组
+            trading_days: 交易日数量
+        """
+        benchmark = self.context.get('benchmark')
+        if not benchmark:
+            Log.logger.info("未设置基准，跳过基准收益率计算")
+            return
+
+        try:
+            # 获取回测起止日期
+            start_date = daily_history[0].get('date') if isinstance(daily_history[0], dict) else daily_history[0]
+            end_date = daily_history[-1].get('date') if isinstance(daily_history[-1], dict) else daily_history[-1]
+
+            # 如果是 datetime 对象，转为字符串
+            if hasattr(start_date, 'strftime'):
+                start_date = start_date.strftime('%Y-%m-%d')
+            if hasattr(end_date, 'strftime'):
+                end_date = end_date.strftime('%Y-%m-%d')
+
+            Log.logger.info(f"获取基准数据: {benchmark}, {start_date} -> {end_date}")
+
+            # 获取基准K线数据
+            benchmark_df = self.data_center.get_klines(
+                codes=benchmark,
+                freq='1d',
+                start_time=start_date,
+                end_time=end_date,
+                fields=['close'],
+                adj_type='none'
+            )
+
+            if benchmark_df is None or benchmark_df.empty:
+                Log.logger.warning(f"无法获取基准数据: {benchmark}")
+                return
+
+            # 提取基准收盘价（处理 MultiIndex）
+            if hasattr(benchmark_df.index, 'levels') and len(benchmark_df.index.levels) > 0:
+                # MultiIndex (time, symbol)，按 symbol 过滤
+                if benchmark in benchmark_df.index.get_level_values(1):
+                    benchmark_prices = benchmark_df.loc[(slice(None), benchmark), 'close']
+                else:
+                    Log.logger.warning(f"基准 {benchmark} 不在返回数据中")
+                    return
+            else:
+                # 单一 index，直接使用
+                benchmark_prices = benchmark_df['close']
+
+            # 计算基准日收益率
+            benchmark_returns = benchmark_prices.pct_change().dropna().values
+
+            # 对齐收益率序列长度（取较小值）
+            min_len = min(len(strategy_returns_array), len(benchmark_returns))
+            if min_len < 2:
+                Log.logger.warning("数据点不足，无法计算基准指标")
+                return
+
+            aligned_strategy_returns = strategy_returns_array[:min_len]
+            aligned_benchmark_returns = benchmark_returns[:min_len]
+
+            # 计算基准指标
+            benchmark_total_return = (benchmark_prices.iloc[-1] / benchmark_prices.iloc[0]) - 1
+            benchmark_annual_return = (1 + benchmark_total_return) ** (252 / trading_days) - 1
+            benchmark_volatility = np.std(aligned_benchmark_returns) * np.sqrt(252)
+
+            # 超额收益
+            strategy_total_return = self.context['performance']['indicators']['total_return']
+            excess_return = strategy_total_return - benchmark_total_return
+
+            # 跟踪误差（策略收益与基准收益的差值的标准差）
+            excess_returns_daily = aligned_strategy_returns - aligned_benchmark_returns
+            tracking_error = np.std(excess_returns_daily) * np.sqrt(252)
+
+            # 信息比率（年化超额收益 / 跟踪误差）
+            information_ratio = excess_return / tracking_error if tracking_error > 0 else 0
+
+            # 更新绩效指标
+            self.context['performance']['benchmark'] = {
+                'total_return': float(benchmark_total_return),
+                'annual_return': float(benchmark_annual_return),
+                'volatility': float(benchmark_volatility),
+            }
+
+            self.context['performance']['indicators'].update({
+                'excess_return': float(excess_return),
+                'tracking_error': float(tracking_error),
+                'information_ratio': float(information_ratio),
+            })
+
+            Log.logger.info(f"基准收益率 - 总收益: {benchmark_total_return:.2%}, 年化收益: {benchmark_annual_return:.2%}")
+            Log.logger.info(f"超额收益 - 超额收益: {excess_return:.2%}, 跟踪误差: {tracking_error:.2%}, 信息比率: {information_ratio:.2f}")
+
+        except Exception as e:
+            Log.logger.error(f"计算基准收益率失败: {e}")
     
     def _handle_market_event(self, event):
         """通用市场事件处理器"""
