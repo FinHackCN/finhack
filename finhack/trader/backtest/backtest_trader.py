@@ -209,7 +209,7 @@ class BacktestTrader:
             'previous_date': None,
             'params': params,
             'benchmark': benchmark,
-            
+
             'settings': {
                 'market': market,
                 'freq': freq,
@@ -228,6 +228,17 @@ class BacktestTrader:
                 'close_commission': float(getattr(self.args, 'close_commission', 0.0003)),
                 'close_today_commission': float(getattr(self.args, 'close_today_commission', 0.0)),
                 'min_commission': float(getattr(self.args, 'min_commission', 5.0)),
+                # 部分成交比例配置（从配置文件读取）
+                'partial_fill_ratio': {
+                    'large_order_threshold': float(merged_config.get('partial_fill_ratio_large_order_threshold', 10000)),
+                    'large_order_min': float(merged_config.get('partial_fill_ratio_large_order_min', 0.3)),
+                    'large_order_max': float(merged_config.get('partial_fill_ratio_large_order_max', 0.5)),
+                    'medium_order_threshold': float(merged_config.get('partial_fill_ratio_medium_order_threshold', 5000)),
+                    'medium_order_min': float(merged_config.get('partial_fill_ratio_medium_order_min', 0.5)),
+                    'medium_order_max': float(merged_config.get('partial_fill_ratio_medium_order_max', 0.7)),
+                    'small_order_min': float(merged_config.get('partial_fill_ratio_small_order_min', 0.7)),
+                    'small_order_max': float(merged_config.get('partial_fill_ratio_small_order_max', 1.0)),
+                },
             },
             
             'account': {
@@ -310,9 +321,10 @@ class BacktestTrader:
             event_bus=self.event_bus
         )
         
-        # 设置交易中心的引用
+        # 设置交易中心和事件中心的双向引用
         self.event_center.set_trade_center(self.engine.trade_center)
-        
+        self.engine.trade_center.set_event_center(self.event_center)
+
         Log.logger.info("回测组件初始化完成")
         
     def load_strategy(self):

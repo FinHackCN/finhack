@@ -42,17 +42,162 @@ class AccountInfo:
     unrealized_pnl: float = 0.0       # 未实现盈亏
 
 
-@dataclass 
+@dataclass
 class PortfolioInfo:
-    """组合信息"""
-    total_value: float = 1000000.0
-    cash: float = 1000000.0
-    positions_value: float = 0.0
-    locked_cash: float = 0.0
-    margin: float = 0.0
-    returns: float = 0.0
-    daily_returns: List[float] = field(default_factory=list)
-    positions: Dict[str, Any] = field(default_factory=dict)
+    """投资组合信息（策略视角）"""
+    # 基础资产信息
+    total_value: float = 1000000.0       # 总资产
+    cash: float = 1000000.0                # 现金
+    positions_value: float = 0.0          # 持仓市值
+    locked_cash: float = 0.0              # 冻结资金
+    margin: float = 0.0                   # 保证金
+    available_cash: float = 0.0           # 可用现金（新增）
+
+    # 收益相关
+    returns: float = 0.0                  # 累计收益率
+    daily_returns: List[float] = field(default_factory=list)  # 每日收益率列表
+    pnl_unrealized: float = 0.0           # 未实现盈亏（新增）
+    pnl_realized: float = 0.0             # 已实现盈亏（新增）
+    daily_pnl: float = 0.0                # 当日盈亏（新增）
+    daily_return: float = 0.0             # 当日收益率（新增）
+
+    # 风险指标
+    leverage: float = 1.0                 # 杠杆倍数（新增）
+    margin_used: float = 0.0              # 已用保证金（新增）
+
+    # 持仓和订单
+    positions: Dict[str, Any] = field(default_factory=dict)  # 持仓字典 {symbol: Position}
+    active_orders: List[str] = field(default_factory=list)  # 活跃订单ID列表（新增）
+
+    # 时间戳
+    updated_at: Optional[datetime] = None   # 更新时间（新增）
+
+    def update_market_value(self, current_prices: Dict[str, float]) -> float:
+        """更新市值（策略视角）
+
+        Args:
+            current_prices: 当前价格字典 {symbol: price}
+
+        Returns:
+            float: 更新后的总资产
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        self.positions_value = 0.0
+        self.pnl_unrealized = 0.0
+
+        for symbol, position in self.positions.items():
+            # 支持 Position 对象和字典格式
+            if hasattr(position, 'update_market_price'):
+                # Position 对象（models/position.py）
+                position.update_market_price(current_prices.get(symbol, 0))
+                self.positions_value += position.market_value
+                self.pnl_unrealized += position.unrealized_pnl
+            elif isinstance(position, dict):
+                # 字典格式（向后兼容）
+                if 'volume' in position and symbol in current_prices:
+                    price = current_prices[symbol]
+                    position['market_value'] = position['volume'] * price
+                    if 'cost_price' in position and position['cost_price'] > 0:
+                        position['unrealized_pnl'] = (price - position['cost_price']) * position['volume']
+                    else:
+                        position['unrealized_pnl'] = 0.0
+                    self.positions_value += position['market_value']
+                    self.pnl_unrealized += position.get('unrealized_pnl', 0.0)
+
+        # 更新总资产
+        self.total_value = self.cash + self.positions_value
+        self.updated_at = datetime.now()
+
+        return self.total_value
+
+    def update_daily_pnl(self, prev_total_value: float) -> float:
+        """更新每日盈亏
+
+        Args:
+            prev_total_value: 前一日总资产
+
+        Returns:
+            float: 当日盈亏
+        """
+        self.daily_pnl = self.total_value - prev_total_value
+        if prev_total_value > 0:
+            self.daily_return = self.daily_pnl / prev_total_value
+        else:
+            self.daily_return = 0.0
+
+        # 记录每日收益率
+        self.daily_returns.append(self.daily_return)
+
+        return self.daily_pnl
+
+    def get_position(self, symbol: str) -> Optional[Any]:
+        """获取持仓信息
+
+        Args:
+            symbol: 股票代码
+
+        Returns:
+            Optional[Position]: 持仓对象，如果不存在则返回None
+        """
+        return self.positions.get(symbol)
+
+    def add_position(self, symbol: str, position: Any) -> None:
+        """添加持仓
+
+        Args:
+            symbol: 股票代码
+            position: 持仓对象
+        """
+        self.positions[symbol] = position
+        self.updated_at = datetime.now()
+
+    def remove_position(self, symbol: str) -> None:
+        """移除持仓
+
+        Args:
+            symbol: 股票代码
+        """
+        if symbol in self.positions:
+            del self.positions[symbol]
+        self.updated_at = datetime.now()
+
+    def add_active_order(self, order_id: str) -> None:
+        """添加活跃订单
+
+        Args:
+            order_id: 订单ID
+        """
+        if order_id not in self.active_orders:
+            self.active_orders.append(order_id)
+        self.updated_at = datetime.now()
+
+    def remove_active_order(self, order_id: str) -> None:
+        """移除活跃订单
+
+        Args:
+            order_id: 订单ID
+        """
+        if order_id in self.active_orders:
+            self.active_orders.remove(order_id)
+        self.updated_at = datetime.now()
+
+    def get_positions_count(self) -> int:
+        """获取持仓数量
+
+        Returns:
+            int: 持仓数量
+        """
+        return len(self.positions)
+
+    def get_active_orders_count(self) -> int:
+        """获取活跃订单数量
+
+        Returns:
+            int: 活跃订单数量
+        """
+        return len(self.active_orders)
 
 
 @dataclass

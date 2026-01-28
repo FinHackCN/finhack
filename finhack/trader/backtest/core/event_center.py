@@ -218,7 +218,12 @@ class EventCenter:
             events.extend(corporate_action_events)
             
             # 4. 按时间排序所有事件
-            events.sort(key=lambda x: (x.event_time, x.priority.value))
+            # 同时间点的事件，TRY_MATCH 优先级最低（最后执行），确保撮合时使用最新的数据和订单
+            events.sort(key=lambda x: (
+                x.event_time,
+                1 if x.event_type == EventTypeEnum.TRY_MATCH else 0,  # TRY_MATCH 放最后
+                x.priority.value
+            ))
 
             # 添加调试日志
             try_match_events = [e for e in events if e.event_type == EventTypeEnum.TRY_MATCH]

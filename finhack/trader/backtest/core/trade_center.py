@@ -12,7 +12,11 @@ from finhack.trader.backtest.models.enums import (
     Side as OrderSide,
     OrderStatus,
     OrderType,
+    AssetTypeEnum,
+    ExchangeEnum,
 )
+from finhack.trader.backtest.models.instrument import Instrument
+from finhack.trader.backtest.events.event_types import EventTypeEnum
 
 
 @dataclass
@@ -104,23 +108,26 @@ class TradeCenter:
     
     def __init__(self, market: str = "cn_stock"):
         self.market = market
-        
+
         # 交易对象存储
         self.g = DictObj()  # 全局变量，类似原系统
         self.orders: Dict[str, Order] = {}
         self.trades: Dict[str, Trade] = {}
         self.positions: Dict[str, Position] = {}
-        
+
         # 账户信息（通过context获取）
         self._context = None
-        
+
+        # 事件中心（由BacktestEngine注入）
+        self.event_center = None
+
         # 交易状态
         self.is_trading = False
-        
+
         # 交易规则
         self.trading_rules = {}
         self._load_trading_rules()
-        
+
         # 性能优化：价格缓存
         self._price_cache = {}  # {symbol: price} 当前bar的价格缓存
         self._current_bar_time = None  # 当前bar时间戳
@@ -128,18 +135,26 @@ class TradeCenter:
     def initialize(self, context):
         """
         初始化交易中心
-        
+
         Args:
             context: 回测上下文
         """
         self._context = context
-        
+
         # 将持仓信息同步到context
         context.portfolio.positions = self.positions
-        
+
         # 初始化g变量
         self.g = context.g
-    
+
+    def set_event_center(self, event_center):
+        """设置事件中心
+
+        Args:
+            event_center: 事件中心实例
+        """
+        self.event_center = event_center
+
     def _load_trading_rules(self):
         """加载交易规则"""
         # 根据市场类型加载不同的交易规则
@@ -275,7 +290,157 @@ class TradeCenter:
             "locked_cash": getattr(self._context.account, 'locked_cash', 0),
             "margin": getattr(self._context.account, 'margin', 0)
         }
-    
+
+    # ========== Instrument 管理 ==========
+
+    def get_instrument(self, symbol: str) -> Optional[Instrument]:
+        """获取合约信息（动态构造）
+
+        Args:
+            symbol: 合约代码，如 000001.SZ
+
+        Returns:
+            Optional[Instrument]: 合约信息对象
+        """
+        try:
+            # 解析 symbol
+            code, exchange_str = self._parse_symbol(symbol)
+
+            # 获取交易规则
+            rules = self.trading_rules
+
+            # 动态构造 Instrument
+            return Instrument(
+                symbol=symbol,
+                exchange=self._get_exchange_enum(exchange_str),
+                asset_type=self._get_asset_type(self.market),
+                name="",  # 可选：后续可从数据源获取
+                currency=self._get_currency(self.market),
+                contract_multiplier=self._get_contract_multiplier(self.market),
+                tick_size=rules.get('tick_size', 0.01),
+                lot_size=rules.get('min_order_quantity', 100),
+                min_order_volume=rules.get('min_order_quantity', 100),
+                max_order_volume=1e9,
+                volume_step=self._get_volume_step(self.market),
+                margin_ratio=rules.get('margin_ratio', 0.0),
+            )
+        except Exception as e:
+            if self._context:
+                self._context.logger.warning(f"构造 Instrument 失败: {symbol}, {e}")
+            return None
+
+    def _parse_symbol(self, symbol: str) -> tuple:
+        """解析合约代码
+
+        Args:
+            symbol: 合约代码，如 000001.SZ
+
+        Returns:
+            tuple: (code, exchange) 如 (000001, SZ)
+        """
+        if '.' in symbol:
+            code, exchange = symbol.split('.', 1)
+            return code, exchange
+        return symbol, None
+
+    def _get_exchange_enum(self, exchange_str: Optional[str]) -> ExchangeEnum:
+        """将交易所字符串转换为枚举
+
+        Args:
+            exchange_str: 交易所字符串，如 SH, SZ, SHFE, CFFEX 等
+
+        Returns:
+            ExchangeEnum: 交易所枚举
+        """
+        if not exchange_str:
+            return ExchangeEnum.SSE  # 默认上交所
+
+        exchange_map = {
+            'SH': ExchangeEnum.SSE,
+            'SZ': ExchangeEnum.SZSE,
+            'SSE': ExchangeEnum.SSE,
+            'SZSE': ExchangeEnum.SZSE,
+            'SHFE': ExchangeEnum.SHFE,
+            'CFFEX': ExchangeEnum.CFFEX,
+            'DCE': ExchangeEnum.DCE,
+            'CZCE': ExchangeEnum.CZCE,
+            'INE': ExchangeEnum.INE,
+            'HKEX': ExchangeEnum.HKEX,
+            'NYSE': ExchangeEnum.NYSE,
+            'NASDAQ': ExchangeEnum.NASDAQ,
+            'CME': ExchangeEnum.CME,
+            'ICE': ExchangeEnum.ICE,
+            'LME': ExchangeEnum.LME,
+        }
+
+        return exchange_map.get(exchange_str.upper(), ExchangeEnum.OTHER)
+
+    def _get_asset_type(self, market: str) -> AssetTypeEnum:
+        """根据市场类型获取资产类型
+
+        Args:
+            market: 市场类型
+
+        Returns:
+            AssetTypeEnum: 资产类型枚举
+        """
+        market = market.lower()
+        asset_type_map = {
+            'cn_stock': AssetTypeEnum.STOCK,
+            'cn_fund': AssetTypeEnum.FUND,
+            'cn_future': AssetTypeEnum.FUTURE,
+            'cn_index': AssetTypeEnum.OTHER,  # 指数映射到 OTHER
+            'global_cryptospot': AssetTypeEnum.CRYPTO,
+            'global_forex': AssetTypeEnum.FX,
+        }
+        return asset_type_map.get(market, AssetTypeEnum.STOCK)
+
+    def _get_currency(self, market: str) -> str:
+        """根据市场类型获取币种
+
+        Args:
+            market: 市场类型
+
+        Returns:
+            str: 币种代码
+        """
+        market = market.lower()
+        if market.startswith('cn_'):
+            return 'CNY'
+        elif market == 'global_cryptospot' or market == 'global_forex':
+            return 'USD'
+        return 'CNY'
+
+    def _get_contract_multiplier(self, market: str) -> float:
+        """根据市场类型获取合约乘数
+
+        Args:
+            market: 市场类型
+
+        Returns:
+            float: 合约乘数
+        """
+        market = market.lower()
+        if market == 'cn_future':
+            return 1.0  # 期货合约乘数根据品种不同，这里简化为1
+        return 1.0
+
+    def _get_volume_step(self, market: str) -> float:
+        """根据市场类型获取数量步长
+
+        Args:
+            market: 市场类型
+
+        Returns:
+            float: 数量步长
+        """
+        market = market.lower()
+        if market in ['cn_stock', 'cn_fund']:
+            return 100.0  # A股100股为一手
+        elif market == 'cn_future':
+            return 1.0  # 期货1手为单位
+        return 1.0
+
     def get_positions(self, adapter_id: str = "default") -> Dict[str, Position]:
         """
         获取持仓信息
@@ -391,6 +556,19 @@ class TradeCenter:
             self.orders[order_id] = order
             order.status = OrderStatus.NEW
 
+            # 发布订单提交事件
+            if self.event_center:
+                self.event_center.publish_order_event(
+                    event_type=EventTypeEnum.ORDER_SUBMISSION,
+                    order_data={
+                        "order_id": order_id,
+                        "symbol": symbol,
+                        "side": side,
+                        "volume": volume,
+                        "price": price
+                    }
+                )
+
             # 记录订单日志
             if self._context:
                 order_log = {
@@ -433,10 +611,20 @@ class TradeCenter:
             if order.status in [OrderStatus.PENDING_NEW, OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED]:
                 order.status = OrderStatus.CANCELLED
                 order.updated_at = datetime.now()
-                
+
+                # 发布订单撤销事件
+                if self.event_center:
+                    self.event_center.publish_order_event(
+                        event_type=EventTypeEnum.ORDER_CANCELLATION,
+                        order_data={
+                            "order_id": order_id,
+                            "symbol": order.symbol
+                        }
+                    )
+
                 if self._context:
                     self._context.logger.info(f"订单撤销成功: {order_id}")
-                
+
                 return True
             
             return False

@@ -21,21 +21,60 @@ from ..models.trade import Trade
 
 class TradeCenter:
     """交易中心 - 模拟交易所功能"""
-    
+
     def __init__(self, context: Dict, market_adapter=None):
         self.context = context
         self.market_adapter = market_adapter
-        
+
+        # 事件中心（由BacktestEngine注入）
+        self.event_center = None
+
         # 初始化账户
         self.account = Account.from_dict(context['account'])
         self.positions = {}  # symbol -> Position
         self.orders = {}     # order_id -> Order (所有订单历史)
         self.active_orders = {}  # order_id -> Order (仅活跃订单，用于撮合)
         self.trades = []     # List[Trade]
-        
+
         # 订单ID计数器
         self.order_id_counter = 1
         self.trade_id_counter = 1
+
+        # ========== 部分成交比例配置 ==========
+        # 从配置文件获取，如果没有则使用默认值
+        settings = context.get('settings', {})
+        partial_fill_config = settings.get('partial_fill_ratio', {
+            'large_order_threshold': 10000,    # 大订单阈值（股）
+            'large_order_min': 0.3,             # 大订单最小成交比例
+            'large_order_max': 0.5,             # 大订单最大成交比例
+            'medium_order_threshold': 5000,    # 中订单阈值（股）
+            'medium_order_min': 0.5,            # 中订单最小成交比例
+            'medium_order_max': 0.7,            # 中订单最大成交比例
+            'small_order_min': 0.7,             # 小订单最小成交比例
+            'small_order_max': 1.0,             # 小订单最大成交比例
+        })
+        # 兼容旧格式：如果配置是单个数字，则作为统一比例
+        if isinstance(partial_fill_config, (int, float)):
+            ratio = partial_fill_config
+            partial_fill_config = {
+                'large_order_threshold': 10000,
+                'large_order_min': ratio,
+                'large_order_max': ratio,
+                'medium_order_threshold': 5000,
+                'medium_order_min': ratio,
+                'medium_order_max': ratio,
+                'small_order_min': ratio,
+                'small_order_max': ratio,
+            }
+        self.partial_fill_config = partial_fill_config
+
+    def set_event_center(self, event_center):
+        """设置事件中心
+
+        Args:
+            event_center: 事件中心实例
+        """
+        self.event_center = event_center
         
     async def get_account(self, adapter_id: str, refresh: bool = False) -> Account:
         """获取账户信息"""
@@ -100,7 +139,20 @@ class TradeCenter:
         self.orders[order_id] = order
         self.active_orders[order_id] = order  # 同时添加到活跃订单
         order.status = OrderStatus.NEW
-        
+
+        # 发布订单提交事件
+        if self.event_center:
+            self.event_center.publish_order_event(
+                event_type=EventTypeEnum.ORDER_SUBMISSION,
+                order_data={
+                    "order_id": order_id,
+                    "symbol": symbol,
+                    "side": side.value if hasattr(side, 'value') else str(side),
+                    "volume": volume,
+                    "price": price
+                }
+            )
+
         Log.logger.info(f"订单提交成功: {order_id} {symbol} {side} {volume}@{price}")
         return order_id
         
@@ -117,42 +169,77 @@ class TradeCenter:
             
         order.status = OrderStatus.CANCELLED
         order.updated_time = self.context.get('current_dt', datetime.now())
-        
+
+        # 发布订单撤销事件
+        if self.event_center:
+            self.event_center.publish_order_event(
+                event_type=EventTypeEnum.ORDER_CANCELLATION,
+                order_data={
+                    "order_id": order_id,
+                    "symbol": order.symbol
+                }
+            )
+
         # 从活跃订单中移除
         if order_id in self.active_orders:
             del self.active_orders[order_id]
-        
+
         Log.logger.info(f"订单撤销成功: {order_id}")
         return True
         
-    async def try_match_orders(self, market_data: Dict):
-        """尝试撮合订单"""
+    def try_match_orders(self, event):
+        """尝试撮合订单（事件驱动接口）
+
+        Args:
+            event: TRY_MATCH 事件
+        """
+        # 如果事件包含 market_data，直接使用
+        if hasattr(event, 'market_data') and event.market_data:
+            self.try_match_orders_sync(event.market_data)
+            return
+
+        # 否则从 DataCenter 动态获取市场数据
         current_time = self.context.get('current_dt', datetime.now())
-        
-        for order_id, order in list(self.orders.items()):
-            if order.status != OrderStatus.NEW:
-                continue
-                
-            symbol = order.symbol
-            if symbol not in market_data:
-                continue
-                
-            # 获取市场价格
-            market_price = None
-            if order.order_type == OrderType.MARKET:
-                market_price = market_data[symbol].get('close', market_data[symbol].get('price'))
-            elif order.order_type == OrderType.LIMIT and order.price:
-                current_price = market_data[symbol].get('close', market_data[symbol].get('price'))
-                # 简单撮合逻辑：买单价格大于等于市价，卖单价格小于等于市价
-                if ((order.side == Side.BUY and order.price >= current_price) or 
-                    (order.side == Side.SELL and order.price <= current_price)):
-                    market_price = order.price
-                    
-            if market_price is None or market_price <= 0:
-                continue
-                
-            # 执行撮合
-            await self._execute_trade(order, market_price, current_time)
+        freq = self.context.get('settings', {}).get('freq', '1d')
+
+        # 获取所有需要行情的标的
+        symbols = set(order.symbol for order in self.active_orders.values()
+                     if order.status in [OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED])
+
+        if not symbols:
+            return
+
+        # 获取市场数据
+        market_data = {}
+        if freq == '1m' and self.event_center and hasattr(self.event_center, 'data_center'):
+            data_center = self.event_center.data_center
+            from datetime import timedelta
+            start_time = current_time - timedelta(minutes=5)
+            end_time = current_time + timedelta(minutes=1)
+
+            try:
+                klines_df = data_center.get_klines(
+                    codes=list(symbols),
+                    freq=freq,
+                    start_time=start_time.strftime('%Y-%m-%d %H:%M:%S'),
+                    end_time=end_time.strftime('%Y-%m-%d %H:%M:%S'),
+                    fields=['close']
+                )
+
+                if not klines_df.empty:
+                    for symbol in symbols:
+                        try:
+                            symbol_klines = klines_df[klines_df.index.get_level_values('symbol') == symbol]
+                            if not symbol_klines.empty:
+                                market_data[symbol] = {'close': symbol_klines['close'].iloc[-1]}
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+        # 调用同步撮合逻辑
+        if market_data:
+            self.try_match_orders_sync(market_data)
             
     async def _execute_trade(self, order: Order, price: float, trade_time: datetime):
         """执行交易"""
@@ -402,13 +489,22 @@ class TradeCenter:
                 # 市价单部分成交：每次撮合只成交剩余量的30%-80%，模拟真实成交
                 # 分钟级回测中每分钟都会撮合，所以可以部分成交
                 import random
-                # 根据订单大小调整成交比例（大订单成交比例更小）
-                if order.remaining_volume > 10000:
-                    fill_ratio = random.uniform(0.3, 0.5)
-                elif order.remaining_volume > 5000:
-                    fill_ratio = random.uniform(0.5, 0.7)
+                # 从配置获取成交比例
+                if order.remaining_volume > self.partial_fill_config['large_order_threshold']:
+                    fill_ratio = random.uniform(
+                        self.partial_fill_config['large_order_min'],
+                        self.partial_fill_config['large_order_max']
+                    )
+                elif order.remaining_volume > self.partial_fill_config['medium_order_threshold']:
+                    fill_ratio = random.uniform(
+                        self.partial_fill_config['medium_order_min'],
+                        self.partial_fill_config['medium_order_max']
+                    )
                 else:
-                    fill_ratio = random.uniform(0.7, 1.0)  # 小订单更容易全部成交
+                    fill_ratio = random.uniform(
+                        self.partial_fill_config['small_order_min'],
+                        self.partial_fill_config['small_order_max']
+                    )  # 小订单更容易全部成交
 
                 fill_volume = max(100, int(order.remaining_volume * fill_ratio))
                 # 确保是100的整数倍（A股规则）
@@ -1079,7 +1175,8 @@ class BacktestEngine:
                                     break
                                 next_event_idx += 1
 
-                            if next_event_idx > i + 1:
+                            # 只有找到了目标事件且不在列表末尾时才跳转
+                            if next_event_idx > i + 1 and next_event_idx < len(daily_events):
                                 target_event = daily_events[next_event_idx]
                                 time_diff = (target_event.event_time - event.event_time).total_seconds() / 60
 
