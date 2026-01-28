@@ -528,8 +528,18 @@ class DataCenter:
             use_cache=True
         )
 
+        # 调试：记录原始返回数据
+        if result.empty:
+            logger.debug(f"[get_quotes] 数据接口返回空数据: codes={codes}, market={market}, freq={freq}, time={time}")
+        else:
+            logger.debug(f"[get_quotes] 数据接口返回数据: shape={result.shape}, index类型={type(result.index)}, "
+                        f"index前3个={result.index[:3].tolist() if len(result.index) >= 3 else result.index.tolist()}")
+
         # 双重保险：过滤可能超过回测时间的数据
-        return self._filter_future_data(result, backtest_time)
+        filtered = self._filter_future_data(result, backtest_time)
+        if filtered.empty and not result.empty:
+            logger.warning(f"[get_quotes] 过滤后数据为空！原始shape={result.shape}, backtest_time={backtest_time}")
+        return filtered
     
     def get_klines(self, codes: Union[str, List[str]], freq: str = '1d',
                   start_time: Union[str, datetime] = None, end_time: Union[str, datetime] = None,
@@ -596,7 +606,10 @@ class DataCenter:
                          f"start={start_time}, end={end_time}")
 
         # 双重保险：过滤可能超过回测时间的数据
-        return self._filter_future_data(result, backtest_time)
+        filtered = self._filter_future_data(result, backtest_time)
+        if filtered.empty and not result.empty:
+            logger.warning(f"[get_klines] 过滤后数据为空！原始shape={result.shape}, backtest_time={backtest_time}")
+        return filtered
     
     def _aggregate_klines(self, codes: Union[str, List[str]], source_freq: str, target_freq: str,
                          start_time: Union[str, datetime] = None, end_time: Union[str, datetime] = None,
@@ -758,9 +771,16 @@ class DataCenter:
         """
         # 统一转换为datetime进行比较
         if isinstance(t1, str):
-            t1 = pd.to_datetime(t1)
+            # 尝试常见格式，避免警告
+            import warnings
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                t1 = pd.to_datetime(t1, errors='coerce')
         if isinstance(t2, str):
-            t2 = pd.to_datetime(t2)
+            import warnings
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                t2 = pd.to_datetime(t2, errors='coerce')
 
         return min(t1, t2)
 
@@ -792,7 +812,39 @@ class DataCenter:
         if not isinstance(time_index, pd.DatetimeIndex):
             # 尝试转换为 datetime
             try:
-                time_index = pd.to_datetime(time_index)
+                # 智能处理多种时间格式
+                if time_index.dtype in ['int64', 'int32', 'int16', 'float64', 'float32']:
+                    # 可能是Unix时间戳（秒或毫秒）或YYYYMMDD格式
+                    # 尝试Unix时间戳（先尝试秒，再尝试毫秒）
+                    import warnings
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore")
+
+                        # 首先尝试Unix时间戳（秒）
+                        converted = pd.to_datetime(time_index, unit='s', errors='coerce')
+                        # 检查转换是否成功（不是NaT）
+                        if converted.isna().all():
+                            # 如果秒级失败，尝试毫秒级
+                            converted = pd.to_datetime(time_index, unit='ms', errors='coerce')
+                        # 如果时间戳都失败，尝试YYYYMMDD格式
+                        if converted.isna().all():
+                            converted = pd.to_datetime(time_index.astype(str), format='%Y%m%d', errors='coerce')
+
+                        # 如果全部成功，使用转换后的时间
+                        if not converted.isna().all():
+                            time_index = converted
+                        else:
+                            # 转换失败，可能是股票代码索引，直接返回
+                            return df
+                else:
+                    # 字符串或其他格式，让pandas自动推断
+                    import warnings
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore")
+                        time_index = pd.to_datetime(time_index, errors='coerce', infer_datetime_format=True)
+                    # 如果转换后全部是NaT，说明不是时间格式，直接返回
+                    if time_index.isna().all():
+                        return df
             except Exception:
                 # 转换失败：可能是股票代码索引（get_quotes 的返回结果）
                 # 这种情况不需要时间过滤，直接返回
@@ -806,7 +858,13 @@ class DataCenter:
                 backtest_time = backtest_time.tz_convert(time_index.tz)
 
         # 过滤未来数据
-        mask = time_index <= backtest_time
+        # 使用pd.to_datetime确保backtest_time也是datetime类型
+        backtest_time_dt = pd.to_datetime(backtest_time)
+
+        # 过滤时也要处理NaT（无效时间）
+        valid_time_mask = time_index.notna()
+        price_filter_mask = time_index <= backtest_time_dt
+        mask = valid_time_mask & price_filter_mask
         filtered = df[mask]
 
         # 记录被过滤的数据量
@@ -814,6 +872,20 @@ class DataCenter:
         if filtered_count > 0:
             logger.debug(f"[时间约束] 过滤了 {filtered_count} 条未来数据 "
                         f"(backtest_time={backtest_time})")
+
+        # 如果所有数据都被过滤，且原本有数据，记录警告
+        if len(df) > 0 and len(filtered) == 0:
+            # 输出调试信息
+            if hasattr(time_index, 'min'):
+                min_time = time_index.min()
+                max_time = time_index.max()
+                logger.warning(f"[时间约束] 所有数据被过滤！原始数据量: {len(df)}, "
+                            f"时间范围: {min_time} - {max_time}, "
+                            f"backtest_time={backtest_time_dt}, "
+                            f"索引类型: {type(time_index)}, "
+                            f"索引dtype: {time_index.dtype}")
+                # 输出前几行数据用于调试
+                logger.warning(f"[时间约束] DataFrame前几行:\n{df.head(3)}")
 
         return filtered
 

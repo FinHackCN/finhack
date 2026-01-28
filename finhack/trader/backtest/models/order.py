@@ -28,6 +28,7 @@ class Order:
 
     # 可选字段
     price: Optional[float] = None   # 委托价格 (限价单必填)
+    market_price: Optional[float] = None  # 市价单的固定成交价（下单时获取并固定）
     position_effect: Optional[PositionEffect] = None # 开平仓类型
     client_order_id: Optional[str] = None # 用户自定义订单标识
     broker_order_id: Optional[str] = None # 券商/交易所订单标识

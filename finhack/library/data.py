@@ -789,6 +789,7 @@ class DataInterface:
         """加载单个股票的codebased数据"""
         try:
             logger.debug(f"加载{symbol}的codebased数据: 市场={market}, 频率={freq}, 开始日期={start_date}, 结束日期={end_date}")
+            logger.debug(f"[{symbol}] 参数类型: start_date类型={type(start_date)}, end_date类型={type(end_date)}")
             
             # 确定数据文件路径
             kline_dir = os.path.join(self.market_data_dir, 'kline', 'codebased', market, freq)
@@ -815,25 +816,53 @@ class DataInterface:
                                               names=['time', 'code', 'open', 'high', 'low', 'close', 'volume', 'amount'])
                         
                         logger.debug(f"读取{year}年{symbol}数据: 原始行数={len(year_data)}")
-                        
+
+                        # 调试：输出前几行原始数据
+                        if len(year_data) > 0:
+                            logger.debug(f"[{symbol}] 原始时间列前3个值: {year_data['time'].head(3).tolist()}")
+
                         # 转换时间格式（修复：处理带时区的格式）
                         year_data['time'] = year_data['time'].str.strip()
                         # 移除时区信息后解析
                         year_data['time'] = year_data['time'].str.replace(r'[+-]\d{2}:\d{2}$', '', regex=True)
+
+                        # 调试：输出清理后的数据
+                        if len(year_data) > 0:
+                            logger.debug(f"[{symbol}] 清理后时间列前3个值: {year_data['time'].head(3).tolist()}")
+
                         year_data['time'] = pd.to_datetime(year_data['time'], errors='coerce')
+
+                        # 检查转换结果
+                        nat_count = year_data['time'].isna().sum()
+                        if nat_count > 0:
+                            if nat_count == len(year_data):
+                                logger.error(f"[{symbol}] 时间转换全部失败！所有{len(year_data)}行都转为NaT")
+                                # 输出样本数据用于调试
+                                logger.error(f"[{symbol}] 原始数据样本: {year_data['time'].head(5).tolist()}")
+                            else:
+                                logger.warning(f"[{symbol}] 时间转换部分失败: {nat_count}/{len(year_data)} 行转为NaT")
 
                         # 过滤日期范围 - 对于日线数据，扩展到整天范围以确保包含性
                         start_dt = pd.to_datetime(start_date).normalize()  # 设置为当天的开始
                         end_dt = pd.to_datetime(end_date).normalize() + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)  # 设置为当天的结束
                         
                         logger.debug(f"时间范围检查: 开始={start_dt}, 结束={end_dt}, 数据时间范围={year_data['time'].min()}-{year_data['time'].max()}")
-                        
+
+                        # 保存原始数据范围用于调试
+                        original_time_min = year_data['time'].min()
+                        original_time_max = year_data['time'].max()
+
                         original_count = len(year_data)
                         year_data = year_data[(year_data['time'] >= start_dt) & (year_data['time'] <= end_dt)]
                         filtered_count = len(year_data)
-                        
+
                         logger.debug(f"过滤后数据: 原始={original_count}, 过滤后={filtered_count}")
-                        
+
+                        # 调试：输出过滤条件
+                        if filtered_count == 0 and original_count > 0:
+                            logger.warning(f"[{symbol}] 时间过滤导致所有数据被过滤！查询范围={start_dt} ~ {end_dt}, "
+                                        f"原始数据范围={original_time_min} ~ {original_time_max}")
+
                         if not year_data.empty:
                             # 选择需要的字段
                             available_fields = ['time'] + [f for f in fields if f in year_data.columns]
@@ -902,11 +931,22 @@ class DataInterface:
         
         # 从数据源获取
         try:
-            # 获取指定时间点的K线数据 - 精确时间匹配
-            start_time = time.strftime('%Y-%m-%d %H:%M:%S')
-            end_time = time.strftime('%Y-%m-%d %H:%M:%S')
+            # 获取指定时间点的K线数据 - 扩大范围以确保包含目标时间
+            # 对于日线数据，查询整个日期范围
+            # 对于分钟数据，查询当日00:00到23:59
+            if freq == '1d':
+                # 日线：查询从目标日期开始到未来7天（确保包含当天的数据）
+                start_time = time.strftime('%Y-%m-%d 00:00:00')
+                end_time_dt = time + timedelta(days=7)
+                end_time = end_time_dt.strftime('%Y-%m-%d 23:59:59')
+            else:
+                # 分钟数据：查询当天整个交易时段
+                start_time = time.strftime('%Y-%m-%d 00:00:00')
+                end_time = time.strftime('%Y-%m-%d 23:59:59')
 
-            # 使用get_klines方法获取精确时间的数据
+            logger.info(f"[get_quotes] 查询时间范围: {start_time} - {end_time}")
+
+            # 使用get_klines方法获取数据
             klines_df = self.get_klines(
                 codes=codes,
                 market=market,
@@ -920,6 +960,10 @@ class DataInterface:
 
             # 提取指定时间点的数据
             if not klines_df.empty:
+                logger.info(f"[get_quotes] klines_df非空，shape={klines_df.shape}, index_names={klines_df.index.names}")
+                logger.info(f"[get_quotes] 时间范围: {klines_df.index.get_level_values('time').min()} - {klines_df.index.get_level_values('time').max()}")
+                logger.info(f"[get_quotes] 目标时间: time={time}, target_date={time.date()}")
+
                 # 查找指定时间点的数据
                 target_time = time
 
@@ -927,10 +971,25 @@ class DataInterface:
                 if freq == '1d':
                     # 对于日线数据，只匹配日期部分，忽略时间
                     target_date = target_time.date()
-                    matching_data = klines_df[klines_df.index.get_level_values('time').date == target_date]
+                    # 获取时间索引并转换为日期进行比较
+                    time_index = klines_df.index.get_level_values('time')
+                    # 处理可能的timezone问题，统一转换为date进行比较
+                    if hasattr(time_index, 'date'):
+                        matching_data = klines_df[time_index.date == target_date]
+                    else:
+                        # 如果没有.date方法，尝试直接比较
+                        matching_data = klines_df[time_index == target_time]
+                    logger.info(f"[get_quotes] 日线匹配后: matching_data.shape={matching_data.shape}, 匹配数量={len(matching_data)}")
                 else:
-                    # 对于分钟数据，精确匹配时间
-                    matching_data = klines_df[klines_df.index.get_level_values('time') == target_time]
+                    # 对于分钟数据，找到小于等于目标时间的最近数据
+                    time_index = klines_df.index.get_level_values('time')
+                    # 只保留小于等于目标时间的数据
+                    before_or_at_target = klines_df[time_index <= target_time]
+                    if not before_or_at_target.empty:
+                        # 按symbol分组，取每个symbol最新的数据
+                        matching_data = before_or_at_target.groupby(level='symbol').tail(1)
+                    else:
+                        matching_data = before_or_at_target
 
                 if not matching_data.empty:
                     # 提取指定时间点的数据

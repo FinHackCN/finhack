@@ -534,6 +534,15 @@ class TradeCenter:
             if self._context and hasattr(self._context, 'current_dt'):
                 current_time = self._context.current_dt
 
+            # 对于市价单，立即获取并固定当前价格
+            market_price = None
+            if order_type == OrderType.MARKET:
+                current_price = self._get_price_from_datacenter(symbol)
+                if current_price and current_price > 0:
+                    market_price = current_price
+                    if self._context:
+                        self._context.logger.debug(f"市价单固定价格: {symbol} = {market_price:.2f}")
+
             # 创建订单 - 使用模拟时间
             order = Order(
                 order_id=order_id,
@@ -543,7 +552,8 @@ class TradeCenter:
                 price=price,
                 order_type=order_type,
                 created_at=current_time,  # 使用模拟时间
-                updated_at=current_time   # 使用模拟时间
+                updated_at=current_time,  # 使用模拟时间
+                market_price=market_price  # 市价单的固定成交价
             )
 
             # 验证订单
@@ -756,17 +766,37 @@ class TradeCenter:
         try:
             if order.status in [OrderStatus.FILLED, OrderStatus.CANCELLED, OrderStatus.REJECTED]:
                 return  # 已处理的订单不再尝试成交
-            
-            # 主动从DataCenter获取当前价格
-            current_price = self._get_price_from_datacenter(order.symbol)
-            if not current_price or current_price <= 0:
-                if self._context:
-                    self._context.logger.warning(f"无法获取 {order.symbol} 的价格({current_price})，订单暂时无法成交")
-                # 将订单标记为待处理，等待下次尝试
-                if order.status != OrderStatus.NEW:
-                    order.status = OrderStatus.NEW
-                return
-            
+
+            # 获取成交价格：
+            # - 市价单：使用下单时固定的价格（order.market_price）
+            # - 限价单：使用订单价格或当前价格
+            if order.order_type == OrderType.MARKET:
+                # 市价单：使用下单时固定的价格
+                current_price = order.market_price
+                if not current_price or current_price <= 0:
+                    # 如果下单时没有获取到价格，尝试现在获取（向后兼容）
+                    current_price = self._get_price_from_datacenter(order.symbol)
+                    if current_price and current_price > 0:
+                        # 更新订单的固定价格，避免重复获取
+                        order.market_price = current_price
+                    else:
+                        if self._context:
+                            self._context.logger.warning(f"无法获取 {order.symbol} 的价格({current_price})，订单暂时无法成交")
+                        # 将订单标记为待处理，等待下次尝试
+                        if order.status != OrderStatus.NEW:
+                            order.status = OrderStatus.NEW
+                        return
+            else:
+                # 限价单：从DataCenter获取当前价格
+                current_price = self._get_price_from_datacenter(order.symbol)
+                if not current_price or current_price <= 0:
+                    if self._context:
+                        self._context.logger.warning(f"无法获取 {order.symbol} 的价格({current_price})，订单暂时无法成交")
+                    # 将订单标记为待处理，等待下次尝试
+                    if order.status != OrderStatus.NEW:
+                        order.status = OrderStatus.NEW
+                    return
+
             # 检查涨跌停限制（仅限价单需要检查）
             if self.trading_rules.get("limit_up_down", False) and order.order_type == OrderType.LIMIT:
                 if not self._check_price_limit(order.symbol, current_price, order.price):
@@ -774,14 +804,14 @@ class TradeCenter:
                     if self._context:
                         self._context.logger.warning(f"订单价格超出涨跌停限制: {order.symbol}")
                     return
-            
+
             # 增强的撮合逻辑
             can_fill = False
             fill_price = current_price
             fill_quantity = order.quantity - order.filled_quantity
-            
+
             if order.order_type == OrderType.MARKET:
-                # 市价单：立即成交，但增加滑点
+                # 市价单：立即成交，但增加滑点（基于固定价格）
                 can_fill = True
                 slippage = self._calculate_slippage(order)
                 if order.side == OrderSide.BUY:
