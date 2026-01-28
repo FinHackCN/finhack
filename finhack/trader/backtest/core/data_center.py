@@ -79,10 +79,10 @@ class DataCenter:
         self.context = context
         logger.debug("数据中心已设置上下文")
     
-    def preload_monthly_data(self, market: str, year: int, month: int, 
+    def preload_monthly_data(self, market: str, year: int, month: int,
                             universe: List[str] = None, frequency: str = '1m'):
-        """预加载指定月份的1分钟数据 - 优化版
-        
+        """预加载指定月份的1分钟数据 - 优化版（直接使用Parquet批量加载）
+
         Args:
             market: 市场名称
             year: 年份
@@ -91,37 +91,32 @@ class DataCenter:
             frequency: 数据频率
         """
         month_key = f"{year}-{month:02d}"
-        
+
         # 检查是否已经预加载
         with self.preload_lock:
             if market in self.preloaded_months and month_key in self.preloaded_months[market]:
                 logger.debug(f"{market} {month_key} 数据已预加载，跳过")
                 return
-        
+
         # 如果没有提供universe，尝试从context中获取
         if universe is None and self.context:
             universe = []
-            # 从context中获取当前策略需要的股票（context是字典）
             context_universe = self.context.get('universe', None)
             if context_universe:
                 if isinstance(context_universe, dict):
-                    # 多市场情况
                     if market in context_universe:
                         universe = context_universe[market]
                 else:
-                    # 单市场情况
                     universe = context_universe
-        
+
         # 如果仍然没有universe，则加载全市场数据
         if not universe:
             logger.info(f"没有提供股票池，将加载 {market} 全市场数据进行预加载")
             try:
                 stock_list_df = self.data_interface.get_stock_list(market, use_cache=True)
-                # 从DataFrame中提取代码列表
                 if 'code' in stock_list_df.columns:
                     universe = stock_list_df['code'].tolist()
                 else:
-                    # 如果没有code列，使用索引
                     universe = stock_list_df.index.tolist()
                 logger.info(f"成功获取 {market} 全市场股票列表，共 {len(universe)} 只")
             except Exception as e:
@@ -130,77 +125,150 @@ class DataCenter:
 
         import time
         start_time = time.time()
-        logger.info(f"[预加载] 开始预加载 {market} {month_key} 的1分钟数据，股票数量: {len(universe)}")
+        logger.info(f"[预加载] 开始预加载 {market} {month_key} 的{frequency}数据，股票数量: {len(universe)}")
         print(f"[预加载] 开始加载 {market} {month_key}，共{len(universe)}只股票", flush=True)
-        
+
         try:
-            # 计算月份的开始和结束日期（包含全天数据）
+            # 计算月份的开始和结束日期
             start_date = datetime(year, month, 1, 0, 0, 0)
             if month == 12:
-                # 12月的最后一天，设置为23:59:59
                 end_date = datetime(year + 1, 1, 1) - timedelta(days=1)
                 end_date = end_date.replace(hour=23, minute=59, second=59)
             else:
-                # 其他月份的最后一天，设置为23:59:59
                 end_date = datetime(year, month + 1, 1) - timedelta(days=1)
                 end_date = end_date.replace(hour=23, minute=59, second=59)
-            
-            # 判断是否适合使用Parquet优化
-            # 条件：单年份 + 代码数量>=100
-            is_single_year = (start_date.year == end_date.year)
 
-            # 无论是否使用Parquet，都使用分批加载以控制内存
-            # 由于使用了Parquet filter，内存压力大幅减小，可以使用较大批次
-            calculated_batch = self._calculate_adaptive_batch_size(len(universe), frequency)
+            # 【优化】优先使用Parquet批量加载，而不是分批加载CSV
+            # Parquet支持列裁剪和行过滤，内存效率高，速度快
+            parquet_file = os.path.join(
+                self.data_interface.market_data_dir, 'kline', 'codebased',
+                market, frequency, f'{year}.parquet'
+            )
 
-            # 对于大批量数据，使用较大的批次（因为Parquet filter减少了内存使用）
-            if len(universe) > 1000:
-                batch_size = max(1000, calculated_batch)  # 至少1000只股票一批
-            else:
-                batch_size = calculated_batch
-
-            batches = [universe[i:i + batch_size] for i in range(0, len(universe), batch_size)]
-
-            logger.info(f"[预加载] 分批加载: {len(batches)}个批次，每批{batch_size}只")
-            print(f"[预加载] 分为{len(batches)}个批次进行并行加载", flush=True)
-            
-            # 使用线程池并行加载
-            futures = {}
-            for idx, batch in enumerate(batches):
-                future = self.preload_thread_pool.submit(
-                    self._preload_batch, market, batch, frequency, start_date, end_date
-                )
-                futures[future] = (idx, batch)
-            
-            # 等待所有批次加载完成，并显示进度
             total_records = 0
-            completed = 0
-            for future in as_completed(futures):
+
+            if os.path.exists(parquet_file):
+                # 使用Parquet批量加载（推荐方式）
+                logger.info(f"[预加载] 使用Parquet批量加载: {parquet_file}")
+                print(f"[预加载] 使用Parquet批量加载...", flush=True)
+
+                # 定义需要的字段
+                required_columns = ['time', 'code'] + ['open', 'high', 'low', 'close', 'volume', 'amount']
+
                 try:
-                    batch_idx, batch = futures[future]
-                    result = future.result(timeout=60)  # 60秒超时
-                    total_records += sum(result.values())
-                    completed += 1
-                    logger.info(f"[预加载] 批次 {completed}/{len(batches)} 完成: {batch}")
-                    print(f"[预加载] 进度: {completed}/{len(batches)} ({completed*100//len(batches)}%)", flush=True)
+                    import pyarrow.parquet as pq
+
+                    # 读取parquet文件
+                    table = pq.read_table(
+                        parquet_file,
+                        columns=required_columns,
+                        use_threads=True
+                    )
+                    df = table.to_pandas()
+
+                    logger.info(f"[预加载] Parquet文件大小: {len(df):,}行")
+
+                    # 移除时区信息
+                    if hasattr(df['time'].dt, 'tz') and df['time'].dt.tz is not None:
+                        df['time'] = df['time'].dt.tz_localize(None)
+
+                    # 先按code过滤（快速过滤）
+                    df = df[df['code'].isin(universe)]
+                    logger.info(f"[预加载] 代码过滤后: {len(df):,}行")
+
+                    # 再按时间过滤
+                    df = df[(df['time'] >= start_date) & (df['time'] <= end_date)]
+                    logger.info(f"[预加载] 时间过滤后: {len(df):,}行")
+
+                    if not df.empty:
+                        # 设置MultiIndex
+                        df = df.set_index(['time', 'code'])
+                        df = df.sort_index()
+
+                        # 按月份分组缓存
+                        df['month'] = df.index.get_level_values('time').strftime('%Y-%m')
+                        for month_group, month_df in df.groupby('month'):
+                            cache_key = f"{market}_{frequency}_{month_group}"
+                            month_df = month_df.drop(columns=['month'])
+                            self.kline_cache[cache_key] = month_df
+                            logger.info(f"[预加载] 缓存月份 {month_group}: {len(month_df):,}行")
+
+                        total_records = len(df)
+
                 except Exception as e:
-                    logger.error(f"[预加载] 批次预加载失败: {e}")
-                    import traceback
-                    traceback.print_exc()
-            
+                    logger.warning(f"[预加载] Parquet加载失败，回退到分批加载: {e}")
+                    # 回退到原有的分批加载方式
+                    total_records = self._fallback_batch_load(market, universe, frequency, start_date, end_date)
+
+            else:
+                # Parquet文件不存在，使用分批加载CSV的方式
+                logger.info(f"[预加载] Parquet文件不存在: {parquet_file}")
+                logger.info(f"[预加载] 使用CSV分批加载方式")
+                total_records = self._fallback_batch_load(market, universe, frequency, start_date, end_date)
+
             # 标记该月数据已预加载
             with self.preload_lock:
                 if market not in self.preloaded_months:
                     self.preloaded_months[market] = {}
                 self.preloaded_months[market][month_key] = datetime.now()
-            
+
             elapsed = time.time() - start_time
             logger.info(f"[预加载] 完成预加载 {market} {month_key}，共 {len(universe)} 只股票，{total_records} 条记录，耗时 {elapsed:.2f}秒")
             print(f"[预加载] ✓ 完成！共{total_records}条记录，耗时{elapsed:.2f}秒", flush=True)
-            
+
         except Exception as e:
             logger.error(f"预加载 {market} {month_key} 数据失败: {e}")
             raise
+
+    def _fallback_batch_load(self, market: str, universe: List[str], frequency: str,
+                             start_date: datetime, end_date: datetime) -> int:
+        """回退方式：分批加载CSV数据（兼容性保留）
+
+        Args:
+            market: 市场名称
+            universe: 股票池
+            frequency: 数据频率
+            start_date: 开始时间
+            end_date: 结束时间
+
+        Returns:
+            int: 加载的记录总数
+        """
+        total_records = 0
+
+        # 计算批次大小
+        calculated_batch = self._calculate_adaptive_batch_size(len(universe), frequency)
+        if len(universe) > 1000:
+            batch_size = max(1000, calculated_batch)
+        else:
+            batch_size = calculated_batch
+
+        batches = [universe[i:i + batch_size] for i in range(0, len(universe), batch_size)]
+        logger.info(f"[预加载] CSV分批加载: {len(batches)}个批次，每批{batch_size}只")
+        print(f"[预加载] 分为{len(batches)}个批次进行并行加载", flush=True)
+
+        # 使用线程池并行加载
+        futures = {}
+        for idx, batch in enumerate(batches):
+            future = self.preload_thread_pool.submit(
+                self._preload_batch, market, batch, frequency, start_date, end_date
+            )
+            futures[future] = (idx, batch)
+
+        # 等待所有批次加载完成
+        completed = 0
+        for future in as_completed(futures):
+            try:
+                batch_idx, batch = futures[future]
+                result = future.result(timeout=120)
+                total_records += sum(result.values())
+                completed += 1
+                logger.info(f"[预加载] 批次 {completed}/{len(batches)} 完成")
+                print(f"[预加载] 进度: {completed}/{len(batches)} ({completed*100//len(batches)}%)", flush=True)
+            except Exception as e:
+                logger.error(f"[预加载] 批次预加载失败: {e}")
+
+        return total_records
 
     def _calculate_adaptive_batch_size(self, total_stocks: int, frequency: str = '1m') -> int:
         """
@@ -351,7 +419,9 @@ class DataCenter:
     
     def ensure_monthly_data_loaded(self, market: str, current_date: datetime,
                                  universe: List[str] = None, frequency: str = '1m'):
-        """确保当前月份的数据已预加载 - 优化版（只预加载当前月）
+        """确保当前月份的数据已预加载 - 优化版（支持配置额外预加载历史月数）
+
+        优化策略：按年份组织加载，避免重复加载同一Parquet文件
 
         Args:
             market: 市场名称
@@ -363,48 +433,400 @@ class DataCenter:
         current_year = current_date.year
         current_month = current_date.month
 
-        # 只预加载当前月份的数据（不再预加载上个月）
+        # 获取额外预加载月数的配置（默认3个月）
+        extra_months = 3
+        if self.context and hasattr(self.context, 'data_config'):
+            extra_months = getattr(self.context.data_config, 'preload_extra_months', 3)
+
+        # 构建要预加载的月份列表（当前月 + 前N个月）
         months_to_load = [
             (current_year, current_month),
         ]
-        
+
+        for i in range(1, extra_months + 1):
+            prev_month = current_month - i
+            prev_year = current_year
+            if prev_month <= 0:
+                prev_month += 12
+                prev_year -= 1
+            months_to_load.append((prev_year, prev_month))
+
+        logger.debug(f"[预加载] 当前: {current_year}-{current_month:02d}, "
+                    f"额外预加载前{extra_months}个月: {[(f'{y}-{m:02d}') for y, m in months_to_load]}")
+
         # 如果没有提供universe，尝试从context中获取
         if universe is None and self.context:
             universe = []
-            # 从context中获取当前策略需要的股票（context是字典）
             context_universe = self.context.get('universe', None)
             if context_universe:
                 if isinstance(context_universe, dict):
-                    # 多市场情况
                     if market in context_universe:
                         universe = context_universe[market]
                 else:
-                    # 单市场情况
                     universe = context_universe
-        
-        # 并行预加载多个月份的数据
-        futures = []
+
+        # 【优化】按年份组织月份，避免重复加载同一Parquet
+        from collections import defaultdict
+        years_months = defaultdict(list)
         for year, month in months_to_load:
             month_key = f"{year}-{month:02d}"
-            
-            # 检查是否已经预加载
+            # 检查该月是否已加载
             with self.preload_lock:
                 if market in self.preloaded_months and month_key in self.preloaded_months[market]:
                     logger.debug(f"{market} {month_key} 数据已预加载，跳过")
                     continue
-            
-            # 提交预加载任务
-            future = self.preload_thread_pool.submit(
-                self.preload_monthly_data, market, year, month, universe, frequency
-            )
-            futures.append(future)
-        
-        # 等待所有预加载任务完成
-        for future in as_completed(futures):
+            years_months[year].append((year, month))
+
+        if not years_months:
+            logger.debug("[预加载] 所有月份都已加载，跳过")
+            return
+
+        logger.info(f"[预加载] 按年份组织: {dict(years_months)}")
+        print(f"[预加载] 按年份批量加载（避免重复加载Parquet）...", flush=True)
+
+        # 串行加载各年份（避免内存爆炸）
+        for year in sorted(years_months.keys()):
+            months_in_year = years_months[year]
+            logger.info(f"[预加载] 加载 {year} 年，包含 {len(months_in_year)} 个月份")
             try:
-                future.result()
+                self._load_year_months(market, year, months_in_year, universe, frequency)
+
+                # 【新增】同时预加载日线数据，用于技术指标计算
+                # 对于预加载的年份，都加载日线数据（确保有足够的历史数据）
+                daily_preloaded_key = f"{market}_1d_{year}"
+                with self.preload_lock:
+                    if daily_preloaded_key not in self.preloaded_months.get(market, {}):
+                        logger.info(f"[预加载] 同时预加载 {year} 年的日线数据（用于技术指标）")
+                        try:
+                            self._load_year_daily_data(market, year, universe)
+                            if market not in self.preloaded_months:
+                                self.preloaded_months[market] = {}
+                            self.preloaded_months[market][daily_preloaded_key] = datetime.now()
+                        except Exception as e:
+                            logger.warning(f"预加载 {year} 年日线数据失败: {e}")
+
             except Exception as e:
-                logger.error(f"预加载任务失败: {e}")
+                logger.error(f"加载 {year} 年数据失败: {e}")
+                import traceback
+                traceback.print_exc()
+
+    def _load_year_daily_data(self, market: str, year: int, universe: List[str]):
+        """加载指定年份的日线数据（用于技术指标计算）
+
+        Args:
+            market: 市场名称
+            year: 年份
+            universe: 股票池
+        """
+        import time
+        start_time = time.time()
+
+        logger.info(f"[预加载] 开始加载 {year} 年日线数据，共{len(universe)}只股票")
+        print(f"[预加载] 加载 {year} 年日线数据（技术指标用）...", flush=True)
+
+        # Parquet文件路径
+        parquet_file = os.path.join(
+            self.data_interface.market_data_dir, 'kline', 'codebased',
+            market, '1d', f'{year}.parquet'
+        )
+
+        if not os.path.exists(parquet_file):
+            logger.warning(f"[预加载] 日线Parquet不存在: {parquet_file}，跳过")
+            return
+
+        import pyarrow.parquet as pq
+
+        try:
+            # 读取Parquet文件（单线程）
+            table = pq.read_table(
+                parquet_file,
+                columns=['time', 'code'] + ['open', 'high', 'low', 'close', 'volume', 'amount'],
+                use_threads=False
+            )
+            df = table.to_pandas()
+
+            logger.info(f"[预加载] {year}年日线原始数据: {len(df):,}行")
+
+            # 移除时区信息
+            if hasattr(df['time'].dt, 'tz') and df['time'].dt.tz is not None:
+                df['time'] = df['time'].dt.tz_localize(None)
+
+            # 检查parquet包含的股票数量
+            parquet_codes = set(df['code'].unique())
+            universe_set = set(universe)
+            missing_codes = universe_set - parquet_codes
+
+            # 如果parquet缺少超过50%的股票，回退到CSV加载
+            if len(missing_codes) > len(universe) * 0.5:
+                logger.warning(f"[预加载] {year}年日线Parquet数据不完整（{len(parquet_codes)}/{len(universe)}只股票），回退到CSV加载")
+                print(f"[预加载] Parquet数据不完整，使用CSV加载...", flush=True)
+                self._load_year_daily_from_csv(market, year, universe, start_time)
+                return
+
+            # 先按代码过滤
+            df = df[df['code'].isin(universe)]
+            logger.info(f"[预加载] 日线代码过滤后: {len(df):,}行")
+
+            # 设置索引
+            df = df.set_index(['time', 'code'])
+            df = df.sort_index()
+
+            # 按月分组缓存（全部缓存，不限制月份）
+            df['month'] = df.index.get_level_values('time').strftime('%Y-%m')
+
+            total_cached = 0
+            for month_key, month_df in df.groupby('month'):
+                month_df = month_df.drop(columns=['month'])
+                cache_key = f"{market}_1d_{month_key}"
+                self.kline_cache[cache_key] = month_df
+                total_cached += len(month_df)
+
+            # 主动释放内存
+            del df, table
+            import gc
+            gc.collect()
+
+            elapsed = time.time() - start_time
+            logger.info(f"[预加载] {year}年日线完成，{total_cached}条记录，耗时{elapsed:.2f}秒")
+            print(f"[预加载] ✓ {year}年日线完成！{total_cached}条记录", flush=True)
+
+        except Exception as e:
+            logger.error(f"加载 {year} 年日线数据失败: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _load_year_daily_from_csv(self, market: str, year: int, universe: List[str], start_time: float):
+        """从CSV加载指定年份的日线数据（回退方式）
+
+        Args:
+            market: 市场名称
+            year: 年份
+            universe: 股票池
+            start_time: 开始时间戳
+        """
+        logger.info(f"[预加载] 从CSV加载 {year} 年日线数据，共{len(universe)}只股票")
+
+        # CSV目录路径（按年组织）
+        year_dir = os.path.join(
+            self.data_interface.market_data_dir, 'kline', 'codebased',
+            market, '1d', f'{year}'
+        )
+
+        if not os.path.exists(year_dir):
+            logger.warning(f"[预加载] 日线CSV目录不存在: {year_dir}")
+            return
+
+        # CSV列名（无表头文件）
+        csv_columns = ['time', 'code', 'open', 'high', 'low', 'close', 'volume', 'amount']
+
+        all_data = []
+        loaded_count = 0
+
+        # 遍历股票的CSV文件
+        for code in universe:
+            csv_file = os.path.join(year_dir, f'{code}.csv')
+            if not os.path.exists(csv_file):
+                continue
+
+            try:
+                # 读取CSV（无表头）
+                stock_df = pd.read_csv(csv_file, header=None, names=csv_columns)
+
+                # 转换时间列
+                stock_df['time'] = pd.to_datetime(stock_df['time'])
+                # 移除时区
+                if hasattr(stock_df['time'].dt, 'tz') and stock_df['time'].dt.tz is not None:
+                    stock_df['time'] = stock_df['time'].dt.tz_localize(None)
+
+                all_data.append(stock_df)
+                loaded_count += 1
+
+                # 每100只股票输出一次进度
+                if loaded_count % 100 == 0:
+                    logger.debug(f"[预加载] 已加载 {loaded_count}/{len(universe)} 只股票的日线数据")
+
+            except Exception as e:
+                logger.debug(f"读取 {csv_file} 失败: {e}")
+                continue
+
+        if not all_data:
+            logger.warning(f"[预加载] {year}年日线CSV数据为空")
+            return
+
+        # 合并所有数据
+        df = pd.concat(all_data, ignore_index=True)
+        logger.info(f"[预加载] {year}年日线CSV合并后: {len(df):,}行，来自{loaded_count}只股票")
+
+        # 移除时区信息
+        if hasattr(df['time'].dt, 'tz') and df['time'].dt.tz is not None:
+            df['time'] = df['time'].dt.tz_localize(None)
+
+        # 设置索引
+        df = df.set_index(['time', 'code'])
+        df = df.sort_index()
+
+        # 按月分组缓存
+        df['month'] = df.index.get_level_values('time').strftime('%Y-%m')
+
+        total_cached = 0
+        for month_key, month_df in df.groupby('month'):
+            month_df = month_df.drop(columns=['month'])
+            cache_key = f"{market}_1d_{month_key}"
+            self.kline_cache[cache_key] = month_df
+            total_cached += len(month_df)
+
+        # 释放内存
+        del df, all_data
+        import gc
+        gc.collect()
+
+        elapsed = time.time() - start_time
+        logger.info(f"[预加载] {year}年日线CSV完成，{total_cached}条记录，耗时{elapsed:.2f}秒")
+        print(f"[预加载] ✓ {year}年日线CSV完成！{total_cached}条记录", flush=True)
+
+    def _load_year_months(self, market: str, year: int, months_to_load: List[tuple],
+                          universe: List[str], frequency: str):
+        """加载指定年份的多个月份数据（只读取一次Parquet）
+
+        Args:
+            market: 市场名称
+            year: 年份
+            months_to_load: 该年需要加载的月份列表 [(year, month), ...]
+            universe: 股票池
+            frequency: 数据频率
+        """
+        import time
+        start_time = time.time()
+
+        month_strs = [f"{m:02d}" for _, m in months_to_load]
+        logger.info(f"[预加载] 开始加载 {year} 年份: {month_strs}，共{len(universe)}只股票")
+        print(f"[预加载] 开始加载 {year} ({','.join(month_str)})，共{len(universe)}只股票", flush=True)
+
+        # Parquet文件路径
+        parquet_file = os.path.join(
+            self.data_interface.market_data_dir, 'kline', 'codebased',
+            market, frequency, f'{year}.parquet'
+        )
+
+        if not os.path.exists(parquet_file):
+            logger.warning(f"[预加载] Parquet文件不存在: {parquet_file}，使用CSV方式")
+            # 回退到逐月加载CSV
+            for year, month in months_to_load:
+                self._load_single_month_from_csv(market, year, month, universe, frequency)
+            return
+
+        # 使用Parquet批量加载
+        import pyarrow.parquet as pq
+
+        required_columns = ['time', 'code'] + ['open', 'high', 'low', 'close', 'volume', 'amount']
+
+        # 【关键】单线程加载，避免内存爆炸
+        table = pq.read_table(
+            parquet_file,
+            columns=required_columns,
+            use_threads=False
+        )
+        df = table.to_pandas()
+
+        logger.info(f"[预加载] {year}年Parquet原始数据: {len(df):,}行")
+
+        # 移除时区信息
+        if hasattr(df['time'].dt, 'tz') and df['time'].dt.tz is not None:
+            df['time'] = df['time'].dt.tz_localize(None)
+
+        # 先按代码过滤
+        df = df[df['code'].isin(universe)]
+        logger.info(f"[预加载] 代码过滤后: {len(df):,}行")
+
+        # 设置索引方便后续操作
+        df = df.set_index(['time', 'code'])
+        df = df.sort_index()
+
+        # 提取需要的月份并分别缓存
+        total_cached = 0
+        for target_year, target_month in months_to_load:
+            month_key = f"{target_year}-{target_month:02d}"
+
+            # 计算该月的开始和结束时间
+            if target_month == 12:
+                month_end = datetime(target_year + 1, 1, 1) - timedelta(days=1)
+                month_end = month_end.replace(hour=23, minute=59, second=59)
+            else:
+                month_end = datetime(target_year, target_month + 1, 1) - timedelta(days=1)
+                month_end = month_end.replace(hour=23, minute=59, second=59)
+
+            month_start = datetime(target_year, target_month, 1, 0, 0, 0)
+
+            # 过滤该月的数据
+            month_df = df.loc[month_start:month_end]
+
+            if not month_df.empty:
+                cache_key = f"{market}_{frequency}_{month_key}"
+                self.kline_cache[cache_key] = month_df
+                total_cached += len(month_df)
+
+                # 标记已加载
+                with self.preload_lock:
+                    if market not in self.preloaded_months:
+                        self.preloaded_months[market] = {}
+                    self.preloaded_months[market][month_key] = datetime.now()
+
+                logger.info(f"[预加载] 缓存 {month_key}: {len(month_df):,}行")
+
+        # 主动释放内存
+        del df, table
+        import gc
+        gc.collect()
+
+        elapsed = time.time() - start_time
+        logger.info(f"[预加载] {year}年完成，共{total_cached}条记录，耗时{elapsed:.2f}秒")
+        print(f"[预加载] ✓ {year}年完成！{total_cached}条记录，耗时{elapsed:.2f}秒", flush=True)
+
+    def _load_single_month_from_csv(self, market: str, year: int, month: int,
+                                   universe: List[str], frequency: str):
+        """从CSV加载单个月份数据（回退方式）
+
+        Args:
+            market: 市场名称
+            year: 年份
+            month: 月份
+            universe: 股票池
+            frequency: 数据频率
+        """
+        month_key = f"{year}-{month:02d}"
+        import time
+        start_time = time.time()
+
+        logger.info(f"[预加载] CSV加载 {market} {month_key}")
+        print(f"[预加载] CSV加载 {market} {month_key}...", flush=True)
+
+        # 计算月份的开始和结束日期
+        start_date = datetime(year, month, 1, 0, 0, 0)
+        if month == 12:
+            end_date = datetime(year + 1, 1, 1) - timedelta(days=1)
+            end_date = end_date.replace(hour=23, minute=59, second=59)
+        else:
+            end_date = datetime(year, month + 1, 1) - timedelta(days=1)
+            end_date = end_date.replace(hour=23, minute=59, second=59)
+
+        # 使用分批加载CSV
+        batch_size = min(500, len(universe))
+        batches = [universe[i:i + batch_size] for i in range(0, len(universe), batch_size)]
+
+        total_records = 0
+        for idx, batch in enumerate(batches):
+            result = self._preload_batch(market, batch, frequency, start_date, end_date)
+            total_records += sum(result.values())
+
+        # 标记已加载
+        with self.preload_lock:
+            if market not in self.preloaded_months:
+                self.preloaded_months[market] = {}
+            self.preloaded_months[market][month_key] = datetime.now()
+
+        elapsed = time.time() - start_time
+        logger.info(f"[预加载] {month_key} CSV加载完成，{total_records}条记录，耗时{elapsed:.2f}秒")
+        print(f"[预加载] ✓ {month_key} 完成！{total_records}条记录", flush=True)
     
     def preload_data(self, market: str, start_date: str, end_date: str, 
                     universe: List[str] = None, frequency: str = '1d'):
@@ -540,7 +962,94 @@ class DataCenter:
         if filtered.empty and not result.empty:
             logger.warning(f"[get_quotes] 过滤后数据为空！原始shape={result.shape}, backtest_time={backtest_time}")
         return filtered
-    
+
+    def _get_from_cache(self, codes: Union[str, List[str]], market: str, freq: str,
+                       start_time: Union[str, datetime], end_time: Union[str, datetime],
+                       fields: List[str]) -> pd.DataFrame:
+        """从预加载缓存中获取K线数据
+
+        Args:
+            codes: 股票代码或代码列表
+            market: 市场名称
+            freq: 数据频率
+            start_time: 开始时间
+            end_time: 结束时间
+            fields: 需要的字段列表
+
+        Returns:
+            pd.DataFrame: 如果缓存命中返回数据，否则返回None
+        """
+        if not start_time or not end_time:
+            return None
+
+        # 标准化时间
+        if isinstance(start_time, str):
+            start_time = pd.to_datetime(start_time)
+        if isinstance(end_time, str):
+            end_time = pd.to_datetime(end_time)
+
+        # 确保codes是列表
+        if isinstance(codes, str):
+            codes = [codes]
+
+        # 【调试】输出缓存查询信息
+        logger.info(f"[缓存查询] market={market}, freq={freq}, start={start_time}, end={end_time}")
+        logger.info(f"[缓存查询] 当前缓存中的keys: {list(self.kline_cache.keys())[:10]}...")  # 只显示前10个
+
+        # 计算需要查询的月份范围
+        all_data = []
+        current = start_time
+        while current <= end_time:
+            month_key = current.strftime('%Y-%m')
+            cache_key = f"{market}_{freq}_{month_key}"
+
+            logger.info(f"[缓存查询] 查找key: {cache_key}, 找到: {cache_key in self.kline_cache}")
+
+            if cache_key not in self.kline_cache:
+                logger.debug(f"[缓存] 缓存未命中: {cache_key}")
+                return None  # 缓存不完整，回退到磁盘加载
+
+            month_df = self.kline_cache[cache_key]
+
+            # 过滤股票代码和时间范围
+            month_df = month_df[month_df.index.get_level_values('code').isin(codes)]
+
+            # 获取该月的起始和结束时间
+            month_start = current.replace(day=1, hour=0, minute=0, second=0)
+            if current.month == 12:
+                month_end = current.replace(year=current.year + 1, month=1, day=1) - pd.Timedelta(seconds=1)
+            else:
+                month_end = current.replace(month=current.month + 1, day=1) - pd.Timedelta(seconds=1)
+
+            # 限制在查询时间范围内
+            month_start = max(month_start, start_time)
+            month_end = min(month_end, end_time)
+
+            # 从缓存中提取时间范围数据
+            month_df = month_df.loc[month_start:month_end]
+
+            if not month_df.empty:
+                all_data.append(month_df)
+
+            # 移动到下个月
+            if current.month == 12:
+                current = current.replace(year=current.year + 1, month=1, day=1)
+            else:
+                current = current.replace(month=current.month + 1, day=1)
+
+        if not all_data:
+            return None
+
+        # 合并所有月份数据
+        result = pd.concat(all_data)
+
+        # 选择需要的字段
+        if fields:
+            available_fields = [f for f in fields if f in result.columns]
+            result = result[available_fields]
+
+        return result
+
     def get_klines(self, codes: Union[str, List[str]], freq: str = '1d',
                   start_time: Union[str, datetime] = None, end_time: Union[str, datetime] = None,
                   fields: List[str] = None, adj_type: str = 'none') -> pd.DataFrame:
@@ -585,7 +1094,15 @@ class DataCenter:
             if freq != '1m':
                 return self._aggregate_klines(codes, '1m', freq, start_time, end_time, fields, adj_type)
 
-        # 使用统一数据接口获取K线数据
+        # 【新增】先检查预加载缓存
+        cached_result = self._get_from_cache(codes, market, freq, start_time, end_time, fields)
+        if cached_result is not None:
+            logger.info(f"[DataCenter] 从缓存获取数据: shape={cached_result.shape}")
+            # 仍然需要过滤未来数据
+            filtered = self._filter_future_data(cached_result, backtest_time)
+            return filtered
+
+        # 缓存未命中，使用统一数据接口获取K线数据
         result = self.data_interface.get_klines(
             codes=codes,
             market=market,
