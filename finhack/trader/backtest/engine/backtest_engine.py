@@ -1226,23 +1226,38 @@ class BacktestEngine:
         
         # 如果是1分钟频率，预加载前两个月的数据
         if frequency == '1m':
-            Log.logger.info("检测到1分钟频率回测，使用按需加载策略（禁用预加载）")
+            # 检查是否启用预加载（可通过配置禁用）
+            enable_preload = True
+            if hasattr(self.context, 'data_config'):
+                enable_preload = getattr(self.context.data_config, 'preload_data', True)
 
-            # 禁用预加载，改为按需加载以提高启动速度
-            # 数据会在策略实际需要时才加载
-            # 预加载导致启动时间过长，已禁用
-            # if calendar:
-            #     first_trade_date = calendar[0]
-            #     Log.logger.info(f"开始预加载初始数据: {first_trade_date}")
-            #     print(f"[回测] 开始预加载 {market} 数据...", flush=True)
-            #     self.data_center.ensure_monthly_data_loaded(
-            #         market=market,
-            #         current_date=first_trade_date,
-            #         universe=universe,
-            #         frequency=frequency
-            #     )
-            #     print(f"[回测] 初始数据预加载完成", flush=True)
-            print(f"[回测] 使用按需加载策略，数据将在策略需要时加载", flush=True)
+            if enable_preload:
+                # 获取额外预加载月数配置
+                extra_months = 3
+                if hasattr(self.context, 'data_config'):
+                    extra_months = getattr(self.context.data_config, 'preload_extra_months', 3)
+
+                Log.logger.info(f"检测到1分钟频率回测，启用预加载策略（额外预加载前{extra_months}个月）")
+
+                # 预加载第一个交易日及其前N个月的数据
+                if calendar:
+                    first_trade_date = calendar[0]
+                    Log.logger.info(f"开始预加载初始数据: {first_trade_date}（含前{extra_months}个月）")
+                    print(f"[回测] 开始预加载 {market} 数据（含前{extra_months}个月历史数据）...", flush=True)
+
+                    # 获取universe（股票池）
+                    universe = self.context.get('universe', None)
+
+                    self.data_center.ensure_monthly_data_loaded(
+                        market=market,
+                        current_date=first_trade_date,
+                        universe=universe,
+                        frequency=frequency
+                    )
+                    print(f"[回测] 初始数据预加载完成（已加载前{extra_months}个月历史数据）", flush=True)
+            else:
+                Log.logger.info("检测到1分钟频率回测，使用按需加载策略（禁用预加载）")
+                print(f"[回测] 使用按需加载策略，数据将在策略需要时加载", flush=True)
         
         # 记录上一次处理的月份，用于检测月份变化
         last_processed_month = None
@@ -1252,20 +1267,32 @@ class BacktestEngine:
             self.context['current_dt'] = trade_date
             Log.logger.info(f"交易日: {trade_date.strftime('%Y-%m-%d')}")
             
-            # 检查是否进入新的月份（已禁用预加载，使用按需加载）
+            # 检查是否进入新的月份
             if frequency == '1m':
                 current_month = f"{trade_date.year}-{trade_date.month:02d}"
                 if current_month != last_processed_month:
                     Log.logger.info(f"检测到进入新月份: {current_month}")
-                    print(f"[回测] 进入新月份 {current_month}，使用按需加载", flush=True)
 
-                    # 禁用预加载，数据会在需要时自动加载
-                    # self.data_center.ensure_monthly_data_loaded(
-                    #     market=market,
-                    #     current_date=trade_date,
-                    #     universe=self.context.get('universe', None),
-                    #     frequency=frequency
-                    # )
+                    # 检查是否启用预加载
+                    enable_preload = True
+                    if hasattr(self.context, 'data_config'):
+                        enable_preload = getattr(self.context.data_config, 'preload_data', True)
+
+                    if enable_preload:
+                        extra_months = 3
+                        if hasattr(self.context, 'data_config'):
+                            extra_months = getattr(self.context.data_config, 'preload_extra_months', 3)
+                        print(f"[回测] 进入新月份 {current_month}，预加载本月及前{extra_months}个月数据", flush=True)
+
+                        # 预加载当前月及前N个月的数据
+                        self.data_center.ensure_monthly_data_loaded(
+                            market=market,
+                            current_date=trade_date,
+                            universe=self.context.get('universe', None),
+                            frequency=frequency
+                        )
+                    else:
+                        print(f"[回测] 进入新月份 {current_month}，使用按需加载", flush=True)
 
                     last_processed_month = current_month
             

@@ -232,6 +232,15 @@ class DataConfig:
     preload_data: bool = True
     calendar: List[str] = field(default_factory=list)
 
+    # 预加载历史数据配置
+    preload_extra_months: int = 3  # 额外预加载前几个月的数据（用于技术指标计算）
+    """
+    额外预加载前几个月的数据，确保有足够的历史数据计算技术指标。
+    例如：设置为3表示在预加载当前月数据时，同时预加载前3个月的数据。
+    这样可以确保在计算MA90等需要90天历史数据的指标时有足够的数据。
+    默认值：3个月（约90个交易日）
+    """
+
 
 class Context:
     """回测上下文管理器"""
