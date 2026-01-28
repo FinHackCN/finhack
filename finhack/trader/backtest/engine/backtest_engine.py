@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 import pandas as pd
+import numpy as np
 
 import finhack.library.log as Log
 from ..events.event_types import EventTypeEnum, BaseEvent
@@ -2071,16 +2072,25 @@ class BacktestEngine:
             if hasattr(end_date, 'strftime'):
                 end_date = end_date.strftime('%Y-%m-%d')
 
-            Log.logger.info(f"获取基准数据: {benchmark}, {start_date} -> {end_date}")
+            # 获取基准市场：优先使用配置，否则根据代码后缀智能推断
+            benchmark_market = self.context.get('settings', {}).get('benchmark_market')
+            if not benchmark_market:
+                # 根据基准代码后缀推断市场
+                benchmark_market = self._infer_benchmark_market(benchmark)
 
-            # 获取基准K线数据
-            benchmark_df = self.data_center.get_klines(
+            Log.logger.info(f"获取基准数据: {benchmark}, 市场: {benchmark_market}, {start_date} -> {end_date}")
+
+            # 获取基准K线数据 - 基准通常是指数，直接调用 data_interface
+            # 不能使用 data_center.get_klines()，因为后者会从 context 获取市场（默认 cn_stock）
+            benchmark_df = self.data_center.data_interface.get_klines(
                 codes=benchmark,
+                market=benchmark_market,
                 freq='1d',
-                start_time=start_date,
-                end_time=end_date,
+                start_date=start_date,
+                end_date=end_date,
                 fields=['close'],
-                adj_type='none'
+                adj_type='none',
+                use_cache=True
             )
 
             if benchmark_df is None or benchmark_df.empty:
@@ -2145,6 +2155,35 @@ class BacktestEngine:
 
         except Exception as e:
             Log.logger.error(f"计算基准收益率失败: {e}")
+
+    def _infer_benchmark_market(self, benchmark: str) -> str:
+        """根据基准代码后缀推断市场类型
+
+        Args:
+            benchmark: 基准代码，如 000001.SH, 000300.SZ, HSI.HK
+
+        Returns:
+            str: 市场类型 (cn_index, hk_index, global_index等)
+        """
+        # 后缀到市场的映射
+        suffix_to_market = {
+            '.SH': 'cn_index',   # 上证指数
+            '.SZ': 'cn_index',   # 深证指数
+            '.HK': 'hk_index',   # 香港指数
+            '.US': 'us_index',   # 美国指数
+            '.UK': 'global_index',
+            '.JP': 'global_index',
+        }
+
+        # 检查后缀
+        for suffix, market in suffix_to_market.items():
+            if benchmark.endswith(suffix):
+                Log.logger.debug(f"基准 {benchmark} 后缀 {suffix} 推断为市场: {market}")
+                return market
+
+        # 默认返回 cn_index
+        Log.logger.debug(f"基准 {benchmark} 无法推断市场，使用默认: cn_index")
+        return 'cn_index'
     
     def _handle_market_event(self, event):
         """通用市场事件处理器"""
