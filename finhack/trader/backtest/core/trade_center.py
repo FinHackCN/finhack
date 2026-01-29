@@ -81,26 +81,51 @@ class Position:
     realized_pnl: float = 0.0
     last_price: float = 0.0
     updated_at: datetime = None
-    
+
     # 新增字段以兼容旧接口
-    frozen_quantity: float = 0.0      # 冻结数量
+    frozen_quantity: float = 0.0      # 冻结数量（T+1规则：当日买入的持仓）
     total_cost: float = 0.0           # 总成本
     total_value: float = 0.0          # 总价值
     amount: float = 0.0               # 兼容字段：总数量
     enable_amount: float = 0.0        # 兼容字段：可用数量
     last_sale_price: float = 0.0      # 兼容字段：最新价格
     cost_basis: float = 0.0           # 兼容字段：成本基础
-    
+
+    # T+1 规则相关字段
+    buy_dates: list = None            # 记录每批买入的日期和数量 [(date, quantity), ...]
+                                    # 用于判断哪些持仓是当日买入的（不可卖）
+
     def __post_init__(self):
         if self.updated_at is None:
             self.updated_at = datetime.now()
-        
+
+        # 初始化 T+1 规则相关字段
+        if self.buy_dates is None:
+            self.buy_dates = []
+
         # 设置兼容字段
         self.amount = self.quantity
         self.enable_amount = self.available_quantity
         self.last_sale_price = self.last_price
         self.cost_basis = self.avg_cost
         self.total_value = self.market_value
+
+    def get_sellable_quantity(self, current_date: datetime) -> float:
+        """
+        获取可卖出数量（考虑T+1规则）
+
+        Args:
+            current_date: 当前日期
+
+        Returns:
+            可卖出数量
+        """
+        sellable = 0.0
+        for buy_date, qty in self.buy_dates:
+            # 判断是否是昨日及之前买入的（T+1：当日买入不可卖）
+            if buy_date and buy_date.date() < current_date.date():
+                sellable += qty
+        return sellable
 
 
 class TradeCenter:
@@ -154,6 +179,10 @@ class TradeCenter:
             event_center: 事件中心实例
         """
         self.event_center = event_center
+
+    def _get_backtest_time(self) -> datetime:
+        """获取回测当前时间，如果回测上下文不存在则返回系统时间"""
+        return self._context.current_dt if self._context and hasattr(self._context, 'current_dt') else datetime.now()
 
     def _load_trading_rules(self):
         """加载交易规则"""
@@ -620,7 +649,7 @@ class TradeCenter:
             # 只有未成交或部分成交的订单可以撤销
             if order.status in [OrderStatus.PENDING_NEW, OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED]:
                 order.status = OrderStatus.CANCELLED
-                order.updated_at = datetime.now()
+                order.updated_at = self._get_backtest_time()
 
                 # 发布订单撤销事件
                 if self.event_center:
@@ -797,13 +826,41 @@ class TradeCenter:
                         order.status = OrderStatus.NEW
                     return
 
-            # 检查涨跌停限制（仅限价单需要检查）
-            if self.trading_rules.get("limit_up_down", False) and order.order_type == OrderType.LIMIT:
-                if not self._check_price_limit(order.symbol, current_price, order.price):
-                    order.status = OrderStatus.REJECTED
-                    if self._context:
-                        self._context.logger.warning(f"订单价格超出涨跌停限制: {order.symbol}")
-                    return
+            # 检查涨跌停限制
+            if self.trading_rules.get("limit_up_down", False):
+                if order.order_type == OrderType.LIMIT:
+                    # 限价单：检查订单价格是否在涨跌停范围内
+                    if not self._check_price_limit(order.symbol, current_price, order.price):
+                        order.status = OrderStatus.REJECTED
+                        if self._context:
+                            self._context.logger.warning(f"限价单价格超出涨跌停限制: {order.symbol} 限价{order.price}")
+                        return
+                else:
+                    # 市价单：检查是否可以在涨跌停价格成交
+                    # 涨停时无法买入，跌停时无法卖出
+                    limit_ratio = self.trading_rules.get("price_limit_ratio", 0.10)
+                    if order.symbol.startswith('688') or order.symbol.startswith('300'):
+                        limit_ratio = self.trading_rules.get("star_price_limit_ratio", 0.20)
+                    elif 'ST' in order.symbol or 'st' in order.symbol:
+                        limit_ratio = self.trading_rules.get("st_price_limit_ratio", 0.05)
+
+                    upper_limit = current_price * (1 + limit_ratio)
+                    lower_limit = current_price * (1 - limit_ratio)
+
+                    if order.side == OrderSide.BUY:
+                        # 买入：如果当前价格已经达到或超过涨停价，无法买入
+                        if current_price >= upper_limit * 0.9999:  # 允许微小误差
+                            order.status = OrderStatus.REJECTED
+                            if self._context:
+                                self._context.logger.warning(f"股票已涨停，无法买入: {order.symbol} 当前价{current_price:.2f}")
+                            return
+                    else:
+                        # 卖出：如果当前价格已经达到或低于跌停价，无法卖出
+                        if current_price <= lower_limit * 1.0001:  # 允许微小误差
+                            order.status = OrderStatus.REJECTED
+                            if self._context:
+                                self._context.logger.warning(f"股票已跌停，无法卖出: {order.symbol} 当前价{current_price:.2f}")
+                            return
 
             # 增强的撮合逻辑
             can_fill = False
@@ -833,12 +890,21 @@ class TradeCenter:
                 # 对于大额订单，模拟分批成交
                 max_single_fill = self._get_max_single_fill(order, current_price)
                 actual_fill_quantity = min(fill_quantity, max_single_fill)
-                
+
+                # 确保成交量是最小交易单位的整数倍（A股为100股）
+                min_lot = self.trading_rules.get("min_order_quantity", 100)
+                # 向下取整到最小单位的整数倍
+                actual_fill_quantity = int(actual_fill_quantity / min_lot) * min_lot
+
+                # 确保至少成交1个最小单位（如果有剩余可成交量）
+                if actual_fill_quantity == 0 and fill_quantity >= min_lot:
+                    actual_fill_quantity = min_lot
+
                 if actual_fill_quantity > 0:
                     if self._context:
                         self._context.logger.info(f"订单成交: {order.symbol} {order.side.value} {actual_fill_quantity}@{fill_price:.2f}")
                     self._fill_order(order, actual_fill_quantity, fill_price)
-                    
+
                     # 如果还有剩余未成交，设置为部分成交状态，将在下次事件中继续尝试
                     if order.filled_quantity < order.quantity:
                         order.status = OrderStatus.PARTIALLY_FILLED
@@ -851,7 +917,7 @@ class TradeCenter:
                             self._context.logger.info(f"订单完全成交: {order.symbol} {order.side.value} {order.quantity}")
                 else:
                     if self._context:
-                        self._context.logger.debug(f"订单暂未成交: {order.symbol} {order.side.value} - 成交量为0")
+                        self._context.logger.debug(f"订单暂未成交: {order.symbol} {order.side.value} - 成交量不足最小单位({min_lot}股)")
             else:
                 if self._context:
                     reason = "价格不合适" if not can_fill else "无剩余数量"
@@ -959,24 +1025,10 @@ class TradeCenter:
     
     def _is_trading_time(self) -> bool:
         """检查是否在交易时间内"""
-        if not self._context or not self._context.current_dt:
-            return True  # 回测模式下默认允许交易
-        
-        current_time = self._context.current_dt.time()
-        trading_hours = self.trading_rules.get("trading_hours", [])
-        
-        if not trading_hours:
-            return True
-        
-        # 检查是否在交易时间段内
-        for start_time_str, end_time_str in trading_hours:
-            start_time = datetime.strptime(start_time_str, "%H:%M").time()
-            end_time = datetime.strptime(end_time_str, "%H:%M").time()
-            
-            if start_time <= current_time <= end_time:
-                return True
-        
-        return False
+        # 回测模式下，事件系统已经控制了交易时机（如MARKET_START事件）
+        # 策略应该只在正确的事件中下单，这里不再额外检查时间
+        # 这样可以保持策略的灵活性，避免过度限制
+        return True
     
     def _validate_symbol(self, symbol: str) -> bool:
         """验证股票代码格式"""
@@ -1025,17 +1077,18 @@ class TradeCenter:
                 side=order.side,
                 quantity=fill_quantity,
                 price=fill_price,
-                commission=commission
+                commission=commission,
+                timestamp=self._get_backtest_time()
             )
             
             self.trades[trade_id] = trade
             
             # 更新订单状态
             order.filled_quantity += fill_quantity
-            order.avg_fill_price = ((order.avg_fill_price * (order.filled_quantity - fill_quantity) + 
+            order.avg_fill_price = ((order.avg_fill_price * (order.filled_quantity - fill_quantity) +
                                    fill_price * fill_quantity) / order.filled_quantity)
             order.commission += commission
-            order.updated_at = datetime.now()
+            order.updated_at = self._get_backtest_time()
             
             if order.filled_quantity >= order.quantity:
                 order.status = OrderStatus.FILLED
@@ -1069,14 +1122,15 @@ class TradeCenter:
             if self._context:
                 self._context.logger.error(f"订单成交处理失败: {str(e)}")
     
-    def _update_position(self, symbol: str, side: OrderSide, quantity: float, 
+    def _update_position(self, symbol: str, side: OrderSide, quantity: float,
                         price: float, commission: float):
-        """更新持仓（增强版）"""
+        """更新持仓（增强版，正确实现T+1规则）"""
         if symbol not in self.positions:
             self.positions[symbol] = Position(symbol=symbol)
-        
+
         position = self.positions[symbol]
-        
+        current_time = self._get_backtest_time()
+
         if side == OrderSide.BUY:
             # 买入：增加持仓
             if position.quantity > 0:
@@ -1088,75 +1142,81 @@ class TradeCenter:
                 # 新建持仓
                 position.quantity = quantity
                 position.avg_cost = price + commission / quantity
-            
+
             # T+1规则处理
             if self.trading_rules.get("t1_rule", False):
-                # 当日买入的股票不能卖出
-                position.available_quantity = position.quantity - quantity
-                position.frozen_quantity = quantity
-                # 记录买入日期，用于T+1解锁
-                if not hasattr(position, 'buy_dates'):
+                # 当日买入的股票不能卖出，冻结数量增加
+                position.frozen_quantity += quantity
+
+                # 记录买入日期，用于T+1解锁（使用元组列表）
+                if position.buy_dates is None:
                     position.buy_dates = []
-                position.buy_dates.append({
-                    'date': self._context.current_dt.date() if self._context and self._context.current_dt else datetime.now().date(),
-                    'quantity': quantity
-                })
+                position.buy_dates.append((current_time, quantity))
+
+                # 计算可用数量：总持仓 - 冻结数量
+                position.available_quantity = position.quantity - position.frozen_quantity
             else:
                 position.available_quantity = position.quantity
-        
+
         else:
             # 卖出：减少持仓
             if position.quantity >= quantity:
                 position.quantity -= quantity
-                
+
                 # T+1规则处理：检查可用数量
                 if self.trading_rules.get("t1_rule", False):
-                    # 只有非冻结的股票可以卖出
-                    available_before = position.available_quantity
+                    # 从可用数量中扣除
                     position.available_quantity = max(0, position.available_quantity - quantity)
-                    
+
                     # 更新冻结数量
                     position.frozen_quantity = position.quantity - position.available_quantity
-                    
+
                     # 如果卖出了今日买入的股票，需要更新buy_dates记录
-                    if hasattr(position, 'buy_dates'):
+                    if position.buy_dates:
                         remaining_sell = quantity
                         updated_buy_dates = []
-                        for buy_record in position.buy_dates:
+                        for buy_date, buy_qty in position.buy_dates:
                             if remaining_sell <= 0:
-                                updated_buy_dates.append(buy_record)
+                                updated_buy_dates.append((buy_date, buy_qty))
                                 continue
-                            
-                            if buy_record['quantity'] <= remaining_sell:
-                                remaining_sell -= buy_record['quantity']
-                                # 完全卖出了该批买入的股票，不保留记录
+
+                            # 判断该批次买入是否已过T+1（可卖）
+                            is_sellable = buy_date.date() < current_time.date() if buy_date else False
+
+                            if is_sellable:
+                                # 该批次可卖，优先卖出可卖部分
+                                if buy_qty <= remaining_sell:
+                                    remaining_sell -= buy_qty
+                                    # 完全卖出，不保留记录
+                                else:
+                                    # 部分卖出
+                                    updated_buy_dates.append((buy_date, buy_qty - remaining_sell))
+                                    remaining_sell = 0
                             else:
-                                # 部分卖出了该批买入的股票
-                                buy_record['quantity'] -= remaining_sell
-                                updated_buy_dates.append(buy_record)
-                                remaining_sell = 0
-                        
+                                # 该批次不可卖（今日买入），保留记录
+                                updated_buy_dates.append((buy_date, buy_qty))
+
                         position.buy_dates = updated_buy_dates
                 else:
                     position.available_quantity = max(0, position.available_quantity - quantity)
-                
+
                 # 计算已实现盈亏
                 realized_pnl = (price - position.avg_cost) * quantity - commission
                 position.realized_pnl += realized_pnl
-                
+
                 # 更新账户的已实现盈亏
                 if self._context:
                     self._context.account.realized_pnl += realized_pnl
-        
+
         # 更新市值和未实现盈亏
         current_price = self.get_price(symbol=symbol)
         if current_price and position.quantity > 0:
             position.last_price = current_price
             position.market_value = position.quantity * current_price
             position.unrealized_pnl = (current_price - position.avg_cost) * position.quantity
-        
-        position.updated_at = datetime.now()
-        
+
+        position.updated_at = current_time
+
         # 同步兼容字段
         position.amount = position.quantity
         position.enable_amount = position.available_quantity
@@ -1164,7 +1224,7 @@ class TradeCenter:
         position.cost_basis = position.avg_cost
         position.total_value = position.market_value
         position.total_cost = position.avg_cost * position.quantity
-        
+
         # 如果持仓为0，移除持仓记录
         if position.quantity <= 0:
             if symbol in self.positions:
@@ -1763,9 +1823,9 @@ class TradeCenter:
             
             # 更新总成本保持不变
             position.total_cost = position.quantity * position.avg_cost
-            
+
             # 更新时间戳
-            position.updated_at = datetime.now()
+            position.updated_at = self._get_backtest_time()
             
             # 记录股票分拆日志
             if self._context:
@@ -1815,9 +1875,9 @@ class TradeCenter:
                 # 更新可用数量（送股通常立即可用）
                 position.available_quantity += dividend_shares
                 position.enable_amount = position.available_quantity  # 兼容字段
-                
+
                 # 更新时间戳
-                position.updated_at = datetime.now()
+                position.updated_at = self._get_backtest_time()
                 
                 # 记录送股日志
                 if self._context:
@@ -1878,9 +1938,9 @@ class TradeCenter:
                     # 更新可用数量
                     position.available_quantity += rights_shares
                     position.enable_amount = position.available_quantity  # 兼容字段
-                    
+
                     # 更新时间戳
-                    position.updated_at = datetime.now()
+                    position.updated_at = self._get_backtest_time()
                     
                     # 记录配股日志
                     if self._context:
@@ -1937,9 +1997,9 @@ class TradeCenter:
                 # 更新可用数量
                 position.available_quantity += bonus_shares
                 position.enable_amount = position.available_quantity  # 兼容字段
-                
+
                 # 更新时间戳
-                position.updated_at = datetime.now()
+                position.updated_at = self._get_backtest_time()
                 
                 # 记录转增日志
                 if self._context:
@@ -2266,8 +2326,8 @@ class TradeCenter:
                     # 计算未实现盈亏
                     if position.avg_cost > 0:
                         position.unrealized_pnl = (current_price - position.avg_cost) * position.quantity
-                    
-                    position.updated_at = datetime.now()
+
+                    position.updated_at = self._get_backtest_time()
             
             # 更新账户总资产
             self._update_account_value()
@@ -2304,27 +2364,58 @@ class TradeCenter:
     
     def handle_t1_unlock(self):
         """
-        处理T+1解冻
+        处理T+1解冻（每日开盘时调用）
+
+        解冻昨日及之前买入的持仓，今日买入的持仓仍然冻结
         """
         try:
             if not self.trading_rules.get("t1_rule", False):
                 return
-            
+
+            current_time = self._get_backtest_time()
+            if not current_time:
+                return
+
+            current_date = current_time.date()
+
             # 检查是否有需要解冻的持仓
             for symbol, position in self.positions.items():
-                if position.frozen_quantity > 0:
-                    # 简化处理：直接解冻所有冻结的股票
-                    unlock_quantity = position.frozen_quantity
-                    position.available_quantity += unlock_quantity
-                    position.enable_amount = position.available_quantity  # 兼容字段
-                    position.frozen_quantity = 0
-                    
-                    if self._context:
-                        self._context.logger.debug(f"T+1解冻: {symbol} 解冻数量 {unlock_quantity}")
-            
+                if position.frozen_quantity > 0 and position.buy_dates:
+                    # 计算应该解冻的数量（昨日及之前买入的）
+                    unlock_quantity = 0.0
+                    updated_buy_dates = []
+
+                    for buy_date, buy_qty in position.buy_dates:
+                        # 判断是否已过T+1（买入日期早于当前日期）
+                        if buy_date and buy_date.date() < current_date:
+                            # 该批次可解冻
+                            unlock_quantity += buy_qty
+                            # 解冻后不再需要跟踪该批次
+                        else:
+                            # 该批次仍需冻结（今日买入或无效日期）
+                            updated_buy_dates.append((buy_date, buy_qty))
+
+                    # 更新持仓状态
+                    if unlock_quantity > 0:
+                        position.frozen_quantity -= unlock_quantity
+                        position.available_quantity += unlock_quantity
+                        position.buy_dates = updated_buy_dates
+
+                        # 同步兼容字段
+                        position.enable_amount = position.available_quantity
+
+                        if self._context:
+                            self._context.logger.debug(
+                                f"T+1解冻: {symbol} 解冻数量 {unlock_quantity}, "
+                                f"剩余冻结 {position.frozen_quantity}, "
+                                f"可用数量 {position.available_quantity}"
+                            )
+
         except Exception as e:
             if self._context:
                 self._context.logger.error(f"T+1解冻处理失败: {e}")
+                import traceback
+                traceback.print_exc()
     
     def check_risk_limits(self):
         """
@@ -2378,7 +2469,7 @@ class TradeCenter:
             cancelled_count = 0
             for order in market_orders:
                 order.status = OrderStatus.CANCELLED
-                order.updated_at = datetime.now()
+                order.updated_at = self._get_backtest_time()
                 cancelled_count += 1
             
             if cancelled_count > 0 and self._context:
@@ -2607,7 +2698,7 @@ class TradeCenter:
                 position.unrealized_pnl = (current_price - position.avg_cost) * position.volume
             
             # 更新时间戳
-            position.updated_at = datetime.now()
+            position.updated_at = self._get_backtest_time()
             
             # 同步兼容字段
             position.amount = position.volume
@@ -2769,7 +2860,7 @@ class TradeCenter:
                     order = self.orders[order_id]
                     if order.status in [OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED]:
                         order.status = OrderStatus.CANCELLED
-                        order.updated_at = datetime.now()
+                        order.updated_at = self._get_backtest_time()
                         if self._context:
                             self._context.logger.info(f"订单撤销成功: {order_id}")
                     else:
@@ -2790,7 +2881,7 @@ class TradeCenter:
             for order in list(self.orders.values()):
                 if order.status in [OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED]:
                     order.status = OrderStatus.CANCELLED
-                    order.updated_at = datetime.now()
+                    order.updated_at = self._get_backtest_time()
                     cancelled_count += 1
 
             if self._context and cancelled_count > 0:

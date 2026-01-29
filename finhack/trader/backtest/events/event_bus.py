@@ -7,6 +7,7 @@
 import asyncio
 import inspect
 import logging
+import threading
 from queue import PriorityQueue
 from typing import Dict, List, Callable, Any
 from datetime import datetime
@@ -26,14 +27,18 @@ class EventBus:
         """初始化事件总线"""
         # 事件处理器映射：事件类型 -> 处理器列表
         self._handlers: Dict[EventTypeEnum, List[Callable]] = {}
-        
+
         # 事件队列（按优先级和时间排序）
         self._event_queue = PriorityQueue()
-        
+
+        # 事件序列号计数器（确保同时间戳事件的稳定排序）
+        self._event_counter = 0
+        self._counter_lock = threading.Lock()
+
         # 处理统计
         self._processed_count = 0
         self._error_count = 0
-        
+
         logger.info("事件总线初始化完成")
     
     def register_handler(self, event_type: EventTypeEnum, handler: Callable):
@@ -63,18 +68,24 @@ class EventBus:
     
     def publish_event(self, event: BaseEvent):
         """发布事件到队列
-        
+
         Args:
             event: 事件对象
         """
-        # 使用优先级和时间戳作为排序键
+        # 获取唯一序列号（线程安全）
+        with self._counter_lock:
+            event_seq = self._event_counter
+            self._event_counter += 1
+
+        # 使用优先级、时间戳和序列号作为排序键
         priority = event.priority.value
         timestamp = event.event_time.timestamp()
-        
-        # PriorityQueue使用元组进行排序：(优先级, 时间戳, 事件)
-        self._event_queue.put((priority, timestamp, event))
-        
-        logger.debug(f"发布事件: {event.event_type.value} at {event.event_time}")
+
+        # PriorityQueue使用元组进行排序：(优先级, 时间戳, 序列号, 事件)
+        # 序列号确保即使 priority 和 timestamp 相同，也能稳定排序
+        self._event_queue.put((priority, timestamp, event_seq, event))
+
+        logger.debug(f"发布事件: {event.event_type.value} at {event.event_time}, seq={event_seq}")
     
     async def _process_event_async(self, event: BaseEvent):
         """异步事件处理方法
@@ -157,19 +168,20 @@ class EventBus:
 
     async def process_next_event_async(self) -> bool:
         """异步处理下一个事件
-        
+
         Returns:
             bool: 是否处理了事件
         """
         if self._event_queue.empty():
             return False
-        
+
         try:
-            _, _, event = self._event_queue.get_nowait()
+            # 解包四元组：(优先级, 时间戳, 序列号, 事件)
+            _, _, _, event = self._event_queue.get_nowait()
             await self._process_event_async(event)
             self._processed_count += 1
             return True
-            
+
         except Exception as e:
             logger.error(f"处理事件时发生错误: {e}")
             self._error_count += 1
@@ -187,19 +199,20 @@ class EventBus:
     
     def process_next_event(self) -> bool:
         """处理下一个事件（同步版本）
-        
+
         Returns:
             bool: 是否处理了事件
         """
         if self._event_queue.empty():
             return False
-        
+
         try:
-            _, _, event = self._event_queue.get_nowait()
+            # 解包四元组：(优先级, 时间戳, 序列号, 事件)
+            _, _, _, event = self._event_queue.get_nowait()
             self._process_event(event)
             self._processed_count += 1
             return True
-            
+
         except Exception as e:
             logger.error(f"处理事件时发生错误: {e}")
             self._error_count += 1
