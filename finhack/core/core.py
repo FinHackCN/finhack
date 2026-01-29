@@ -76,12 +76,29 @@ class Core:
         my_args_group_list=Config.get_section_list('args')
         args, unknown = self.parser.parse_known_args()
 
+        # 调试：打印unknown参数
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"[DEBUG] unknown参数列表: {unknown}")
+
+        # 处理命令行传递的额外参数（支持 key=value 格式）
+        # 保存命令行参数，用于后续覆盖配置文件参数
+        cmdline_args = {}
+        for arg_str in unknown:
+            if '=' in arg_str:
+                key, value = arg_str.split('=', 1)
+                # 移除开头的 --（如果有）
+                key = key.lstrip('-')
+                cmdline_args[key] = value
+
         #[global]
         for my_args_group in my_args_group_list:
             if my_args_group=='global':
                 my_args_list=Config.get_config('args',my_args_group)
                 for arg,default in my_args_list.items():
-                    args_list[arg]=default
+                    # 只有命令行没有指定时，才使用配置文件的值
+                    if arg not in cmdline_args:
+                        args_list[arg]=default
 
         vendor="default" if args.vendor is None else args.vendor
         #[model]
@@ -89,39 +106,64 @@ class Core:
             if my_args_group==args.module:
                 my_args_list=Config.get_config('args',my_args_group)
                 for arg,default in my_args_list.items():
-                    args_list[arg]=default
+                    if arg not in cmdline_args:
+                        args_list[arg]=default
 
         #[model-vendor]
         for my_args_group in my_args_group_list:
             if my_args_group==args.module+'-'+vendor:
                 my_args_list=Config.get_config('args',my_args_group)
                 for arg,default in my_args_list.items():
-                    args_list[arg]=default
+                    if arg not in cmdline_args:
+                        args_list[arg]=default
 
         #[model-vendor-action]
         for my_args_group in my_args_group_list:
             if my_args_group==args.module+'-'+vendor+'-'+args.action:
                 my_args_list=Config.get_config('args',my_args_group)
                 for arg,default in my_args_list.items():
-                    args_list[arg]=default
+                    if arg not in cmdline_args:
+                        args_list[arg]=default
 
         #model.conf [args]
         my_args_list=Config.get_config(args.module,'args')
         for arg,default in my_args_list.items():
-            args_list[arg]=default
+            if arg not in cmdline_args:
+                args_list[arg]=default
 
 
         #model.conf [args.section]
         if args.section!=None and args.section!='':
             my_args_list=Config.get_config(args.module,args.section)
             for arg,default in my_args_list.items():
-                args_list[arg]=default
+                if arg not in cmdline_args:
+                    args_list[arg]=default
+
+        # 添加命令行参数（优先级最高）
+        for key, value in cmdline_args.items():
+            args_list[key] = value
+
+        # 调试：打印命令行参数
+        if cmdline_args:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(f"[命令行参数] 检测到 {len(cmdline_args)} 个命令行参数: {cmdline_args}")
 
 
         for arg,default in args_list.items():
                 group = self.parser.add_argument_group(my_args_group)
                 group.add_argument('--'+arg,metavar='', default=default)
         args=self.parse_args()
+
+        # 【关键】手动设置命令行参数到args对象
+        # 因为parse_args只处理--key value格式，不处理key=value格式
+        for key, value in cmdline_args.items():
+            setattr(args, key, value)
+            if cmdline_args:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.info(f"[命令行参数] 设置 {key}={value}")
+
         self.args=args
         
         import runtime.global_var as global_var 

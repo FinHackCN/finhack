@@ -700,7 +700,7 @@ class DataCenter:
 
         month_strs = [f"{m:02d}" for _, m in months_to_load]
         logger.info(f"[预加载] 开始加载 {year} 年份: {month_strs}，共{len(universe)}只股票")
-        print(f"[预加载] 开始加载 {year} ({','.join(month_str)})，共{len(universe)}只股票", flush=True)
+        print(f"[预加载] 开始加载 {year} ({','.join(month_strs)})，共{len(universe)}只股票", flush=True)
 
         # Parquet文件路径
         parquet_file = os.path.join(
