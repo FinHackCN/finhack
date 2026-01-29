@@ -34,6 +34,11 @@ class BaseLoader():
         if args.background:
             self.background(args)
 
+        # 调试：打印接收到的参数
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"[BaseLoader] 接收到的args.__dict__: {args.__dict__}")
+
         self.args=args
         self.module_name=args.module
         
