@@ -1,6 +1,7 @@
 import sys
 import os
 import re
+import threading
 import pandas as pd
 from finhack.library.config import Config
 import finhack.library.log as Log
@@ -12,10 +13,27 @@ class DB:
     数据库操作统一接口类
     提供统一的数据库访问方法，支持MySQL、DuckDB和SQLite
     隐藏底层适配器细节，让用户代码可以无缝切换数据库
+
+    线程安全说明：
+    - 所有写操作（exec, to_sql, safe_to_sql, delete, replace_table）使用全局锁序列化
+    - 读操作（select_*, table_exists等）可以并发执行
+    - 这是为了解决SQLite多线程并发写入导致的"database is locked"错误
     """
-    
+
     # 用于缓存数据库适配器
     _adapters = {}
+
+    # 全局数据库写入锁，确保同一时间只有一个线程执行写操作
+    # 使用RLock允许同一线程内的嵌套锁定（如replace_table中的多次exec）
+    _write_lock = threading.RLock()
+
+    # 锁的统计信息（用于调试）
+    _lock_stats = {
+        'acquire_count': 0,
+        'contention_count': 0,
+        'total_wait_time': 0.0
+    }
+    _stats_lock = threading.Lock()
     
     @staticmethod
     def get_db_engine(connection='default'):
@@ -126,18 +144,38 @@ class DB:
     @staticmethod
     def exec(sql: str, connection='default') -> None:
         """
-        执行SQL语句
-        
+        执行SQL语句（线程安全）
+
         Args:
             sql: SQL语句
             connection: 数据库连接名
         """
-        adapter = DbAdapterFactory.get_adapter(connection)
+        import time
+        start_time = time.time()
+
+        # 获取写入锁，确保线程安全
+        lock_acquired = DB._write_lock.acquire(timeout=300)  # 5分钟超时
+        if not lock_acquired:
+            Log.logger.error(f"获取数据库写入锁超时(5分钟)，SQL执行失败: {sql[:100]}...")
+            return
+
         try:
-            adapter.exec_sql(sql)
-        except Exception as e:
-            Log.logger.error(f"执行SQL异常: {str(e)}")
-            # 不抛出异常，避免中断程序流程
+            # 更新统计信息
+            with DB._stats_lock:
+                DB._lock_stats['acquire_count'] += 1
+                wait_time = time.time() - start_time
+                DB._lock_stats['total_wait_time'] += wait_time
+                if wait_time > 0.1:  # 记录等待时间超过100ms的情况
+                    DB._lock_stats['contention_count'] += 1
+
+            adapter = DbAdapterFactory.get_adapter(connection)
+            try:
+                adapter.exec_sql(sql)
+            except Exception as e:
+                Log.logger.error(f"执行SQL异常: {str(e)}")
+                # 不抛出异常，避免中断程序流程
+        finally:
+            DB._write_lock.release()
     
     @staticmethod
     def select_to_list(sql: str, connection='default') -> List[Dict[str, Any]]:
@@ -218,135 +256,221 @@ class DB:
     @staticmethod
     def to_sql(df: pd.DataFrame, table_name: str, connection='default', if_exists='append', **kwargs) -> int:
         """
-        将DataFrame写入数据库
-        
+        将DataFrame写入数据库（线程安全）
+
         Args:
             df: 待写入的DataFrame
             table_name: 表名
             connection: 数据库连接名
             if_exists: 表已存在时的处理策略
             **kwargs: 其他参数
-            
+
         Returns:
             写入的行数
         """
-        # 确保connection是字符串
-        if not isinstance(connection, str):
-            # 尝试从引擎对象中提取连接名称
-            if hasattr(connection, 'url') and 'sqlite' in str(connection.url):
-                # 从URL中提取连接名: sqlite:///data/db/tushare.sqlite -> tushare
-                url_str = str(connection.url)
-                if 'tushare' in url_str:
-                    Log.logger.warning(f"to_sql收到非字符串连接名, 提取连接为: tushare")
-                    connection = 'tushare'
+        import time
+        start_time = time.time()
+
+        # 空DataFrame快速返回
+        if df.empty or len(df.columns) == 0:
+            return 0
+
+        # 获取写入锁，确保线程安全
+        lock_acquired = DB._write_lock.acquire(timeout=300)  # 5分钟超时
+        if not lock_acquired:
+            Log.logger.error(f"获取数据库写入锁超时(5分钟)，无法写入表 {table_name}")
+            return 0
+
+        try:
+            # 更新统计信息
+            with DB._stats_lock:
+                DB._lock_stats['acquire_count'] += 1
+                wait_time = time.time() - start_time
+                DB._lock_stats['total_wait_time'] += wait_time
+                if wait_time > 0.1:
+                    DB._lock_stats['contention_count'] += 1
+
+            # 确保connection是字符串
+            if not isinstance(connection, str):
+                # 尝试从引擎对象中提取连接名称
+                if hasattr(connection, 'url') and 'sqlite' in str(connection.url):
+                    # 从URL中提取连接名: sqlite:///data/db/tushare.sqlite -> tushare
+                    url_str = str(connection.url)
+                    if 'tushare' in url_str:
+                        Log.logger.warning(f"to_sql收到非字符串连接名, 提取连接为: tushare")
+                        connection = 'tushare'
+                    else:
+                        Log.logger.warning(f"to_sql收到非字符串连接名: {connection}，将使用'default'")
+                        connection = 'default'
                 else:
                     Log.logger.warning(f"to_sql收到非字符串连接名: {connection}，将使用'default'")
                     connection = 'default'
-            else:
-                Log.logger.warning(f"to_sql收到非字符串连接名: {connection}，将使用'default'")
-                connection = 'default'
-        
-        # 空DataFrame处理
-        if df.empty or len(df.columns) == 0:
-            #Log.logger.warning(f"尝试写入空DataFrame到表 {table_name}, 操作已跳过")
-            return 0
-        
-        adapter = DbAdapterFactory.get_adapter(connection)
-        try:
+
+            # 空DataFrame处理（内部检查，外部已检查但保留安全冗余）
+            if df.empty or len(df.columns) == 0:
+                return 0
+
+            adapter = DbAdapterFactory.get_adapter(connection)
+
             # 移除可能会导致问题的参数
             clean_kwargs = kwargs.copy()
             clean_kwargs.pop('con', None)
             clean_kwargs.pop('connection', None)
-            
+
             return adapter.to_sql(df, table_name, if_exists=if_exists, **clean_kwargs)
         except Exception as e:
             Log.logger.error(f"写入DataFrame异常: {str(e)}")
             return 0
-    
+        finally:
+            DB._write_lock.release()
+
     @staticmethod
     def truncate_table(table: str, connection='default') -> bool:
         """
-        截断表
-        
+        截断表（线程安全）
+
         Args:
             table: 表名
             connection: 数据库连接名
-            
+
         Returns:
             是否成功
         """
-        adapter = DbAdapterFactory.get_adapter(connection)
-        try:
-            return adapter.truncate_table(table)
-        except Exception as e:
-            Log.logger.error(f"截断表异常: {str(e)}")
+        import time
+        start_time = time.time()
+
+        # 获取写入锁，确保线程安全
+        lock_acquired = DB._write_lock.acquire(timeout=300)
+        if not lock_acquired:
+            Log.logger.error(f"获取数据库写入锁超时(5分钟)，无法截断表 {table}")
             return False
+
+        try:
+            # 更新统计信息
+            with DB._stats_lock:
+                DB._lock_stats['acquire_count'] += 1
+                wait_time = time.time() - start_time
+                DB._lock_stats['total_wait_time'] += wait_time
+                if wait_time > 0.1:
+                    DB._lock_stats['contention_count'] += 1
+
+            adapter = DbAdapterFactory.get_adapter(connection)
+            try:
+                return adapter.truncate_table(table)
+            except Exception as e:
+                Log.logger.error(f"截断表异常: {str(e)}")
+                return False
+        finally:
+            DB._write_lock.release()
     
     @staticmethod
     def delete(sql: str, connection='default') -> None:
         """
-        执行删除操作
-        
+        执行删除操作（线程安全）
+
         Args:
             sql: SQL语句
             connection: 数据库连接名
         """
-        adapter = DbAdapterFactory.get_adapter(connection)
+        import time
+        start_time = time.time()
+
+        # 获取写入锁，确保线程安全
+        lock_acquired = DB._write_lock.acquire(timeout=300)
+        if not lock_acquired:
+            Log.logger.error(f"获取数据库写入锁超时(5分钟)，无法执行删除: {sql[:100]}...")
+            return
+
         try:
-            adapter.delete(sql)
-        except Exception as e:
-            Log.logger.error(f"执行删除异常: {str(e)}")
+            # 更新统计信息
+            with DB._stats_lock:
+                DB._lock_stats['acquire_count'] += 1
+                wait_time = time.time() - start_time
+                DB._lock_stats['total_wait_time'] += wait_time
+                if wait_time > 0.1:
+                    DB._lock_stats['contention_count'] += 1
+
+            adapter = DbAdapterFactory.get_adapter(connection)
+            try:
+                adapter.delete(sql)
+            except Exception as e:
+                Log.logger.error(f"执行删除异常: {str(e)}")
+        finally:
+            DB._write_lock.release()
     
     @staticmethod
     def safe_to_sql(df: pd.DataFrame, table_name: str, connection='default', **kwargs) -> int:
         """
-        安全地将DataFrame写入数据库，处理可能的列缺失问题
-        
+        安全地将DataFrame写入数据库，处理可能的列缺失问题（线程安全）
+
         Args:
             df: 待写入的DataFrame
             table_name: 表名
             connection: 数据库连接名
             **kwargs: 其他参数
-            
+
         Returns:
             写入的行数
         """
-        # 确保connection是字符串
-        if not isinstance(connection, str):
-            # 尝试从引擎对象中提取连接名称
-            if hasattr(connection, 'url') and 'sqlite' in str(connection.url):
-                # 从URL中提取连接名: sqlite:///data/db/tushare.sqlite -> tushare
-                url_str = str(connection.url)
-                if 'tushare' in url_str:
-                    Log.logger.warning(f"safe_to_sql收到非字符串连接名, 提取连接为: tushare")
-                    connection = 'tushare'
+        import time
+        start_time = time.time()
+
+        # 空DataFrame快速返回
+        if df.empty or len(df.columns) == 0:
+            return 0
+
+        # 获取写入锁，确保线程安全
+        lock_acquired = DB._write_lock.acquire(timeout=300)  # 5分钟超时
+        if not lock_acquired:
+            Log.logger.error(f"获取数据库写入锁超时(5分钟)，无法安全写入表 {table_name}")
+            return 0
+
+        try:
+            # 更新统计信息
+            with DB._stats_lock:
+                DB._lock_stats['acquire_count'] += 1
+                wait_time = time.time() - start_time
+                DB._lock_stats['total_wait_time'] += wait_time
+                if wait_time > 0.1:
+                    DB._lock_stats['contention_count'] += 1
+
+            # 确保connection是字符串
+            if not isinstance(connection, str):
+                # 尝试从引擎对象中提取连接名称
+                if hasattr(connection, 'url') and 'sqlite' in str(connection.url):
+                    # 从URL中提取连接名: sqlite:///data/db/tushare.sqlite -> tushare
+                    url_str = str(connection.url)
+                    if 'tushare' in url_str:
+                        Log.logger.warning(f"safe_to_sql收到非字符串连接名, 提取连接为: tushare")
+                        connection = 'tushare'
+                    else:
+                        Log.logger.warning(f"safe_to_sql收到非字符串连接名: {connection}，将使用'default'")
+                        connection = 'default'
                 else:
                     Log.logger.warning(f"safe_to_sql收到非字符串连接名: {connection}，将使用'default'")
                     connection = 'default'
-            else:
-                Log.logger.warning(f"safe_to_sql收到非字符串连接名: {connection}，将使用'default'")
-                connection = 'default'
-        
-        # 空DataFrame处理
-        if df.empty or len(df.columns) == 0:
-            #Log.logger.warning(f"尝试写入空DataFrame到表 {table_name}, 操作已跳过")
-            return 0
-        
-        adapter = DbAdapterFactory.get_adapter(connection)
-        try:
+
+            # 空DataFrame处理（内部检查，外部已检查但保留安全冗余）
+            if df.empty or len(df.columns) == 0:
+                return 0
+
+            adapter = DbAdapterFactory.get_adapter(connection)
+
             # 移除可能会导致问题的参数
             clean_kwargs = kwargs.copy()
             clean_kwargs.pop('con', None)
             clean_kwargs.pop('connection', None)
-            
+
             # 确保不重复传递if_exists参数
             if 'if_exists' not in clean_kwargs:
                 clean_kwargs['if_exists'] = 'append'
-            
+
             return adapter.safe_to_sql(df, table_name, **clean_kwargs)
         except Exception as e:
             Log.logger.error(f"安全写入DataFrame异常: {str(e)}")
             return 0
+        finally:
+            DB._write_lock.release()
     
     @staticmethod
     def table_exists(table_name: str, connection='default') -> bool:
@@ -385,35 +509,91 @@ class DB:
     @staticmethod
     def replace_table(target_table: str, source_table: str, connection='default') -> str:
         """
-        替换表（将source_table替换为target_table）
+        替换表（将source_table替换为target_table）（线程安全）
         处理不同数据库的表替换逻辑，返回最终使用的表名
-        
+
         Args:
             target_table: 目标表名
             source_table: 源表名（通常是临时表）
             connection: 数据库连接名
-            
+
         Returns:
             最终使用的表名
         """
-        adapter = DbAdapterFactory.get_adapter(connection)
-        try:
-            # replace_table方法应该返回(成功状态, 使用的表名)的元组
-            result = adapter.replace_table(target_table, source_table)
-            
-            # 处理不同类型的返回值
-            if isinstance(result, tuple) and len(result) == 2:
-                success, table_to_use = result
-                return table_to_use
-            elif isinstance(result, bool):
-                # 向后兼容：如果只返回成功状态，则根据成功状态返回表名
-                return target_table if result else source_table
-            elif isinstance(result, str):
-                # 向后兼容：如果直接返回表名
-                return result
-            else:
-                Log.logger.warning(f"replace_table返回值类型未知: {type(result)}")
-                return source_table
-        except Exception as e:
-            Log.logger.error(f"替换表异常: {str(e)}")
+        import time
+        start_time = time.time()
+
+        # 获取写入锁，确保线程安全
+        lock_acquired = DB._write_lock.acquire(timeout=300)
+        if not lock_acquired:
+            Log.logger.error(f"获取数据库写入锁超时(5分钟)，无法替换表 {target_table}")
             return source_table
+
+        try:
+            # 更新统计信息
+            with DB._stats_lock:
+                DB._lock_stats['acquire_count'] += 1
+                wait_time = time.time() - start_time
+                DB._lock_stats['total_wait_time'] += wait_time
+                if wait_time > 0.1:
+                    DB._lock_stats['contention_count'] += 1
+
+            adapter = DbAdapterFactory.get_adapter(connection)
+            try:
+                # replace_table方法应该返回(成功状态, 使用的表名)的元组
+                result = adapter.replace_table(target_table, source_table)
+
+                # 处理不同类型的返回值
+                if isinstance(result, tuple) and len(result) == 2:
+                    success, table_to_use = result
+                    return table_to_use
+                elif isinstance(result, bool):
+                    # 向后兼容：如果只返回成功状态，则根据成功状态返回表名
+                    return target_table if result else source_table
+                elif isinstance(result, str):
+                    # 向后兼容：如果直接返回表名
+                    return result
+                else:
+                    Log.logger.warning(f"replace_table返回值类型未知: {type(result)}")
+                    return source_table
+            except Exception as e:
+                Log.logger.error(f"替换表异常: {str(e)}")
+                return source_table
+        finally:
+            DB._write_lock.release()
+
+    @staticmethod
+    def get_lock_stats() -> dict:
+        """
+        获取数据库写入锁的统计信息
+
+        Returns:
+            包含锁统计信息的字典
+        """
+        with DB._stats_lock:
+            stats = DB._lock_stats.copy()
+
+        # 计算平均等待时间
+        if stats['acquire_count'] > 0:
+            stats['avg_wait_time'] = stats['total_wait_time'] / stats['acquire_count']
+        else:
+            stats['avg_wait_time'] = 0.0
+
+        # 计算竞争率
+        if stats['acquire_count'] > 0:
+            stats['contention_rate'] = stats['contention_count'] / stats['acquire_count']
+        else:
+            stats['contention_rate'] = 0.0
+
+        return stats
+
+    @staticmethod
+    def reset_lock_stats() -> None:
+        """重置锁统计信息"""
+        with DB._stats_lock:
+            DB._lock_stats = {
+                'acquire_count': 0,
+                'contention_count': 0,
+                'total_wait_time': 0.0
+            }
+        Log.logger.info("数据库写入锁统计信息已重置")

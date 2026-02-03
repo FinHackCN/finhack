@@ -5,6 +5,9 @@ import traceback
 import pandas as pd
 import os
 import json
+import threading
+import fcntl
+import gc
 
 from finhack.library.db import DB
 from finhack.library.alert import alert
@@ -16,7 +19,14 @@ from runtime.constant import *
 class tsAStockPrice:
     # 用于保存数据采集进度的路径
     CHECKPOINT_DIR = CHECKPOINT_DIR
-    
+
+    # 类级别的锁，用于保护检查点文件操作
+    _checkpoint_lock = threading.RLock()
+
+    # 每个检查点文件的文件锁字典
+    _file_locks = {}
+    _file_locks_lock = threading.Lock()
+
     # 确保目录存在
     try:
         if not os.path.exists(CHECKPOINT_DIR):
@@ -24,6 +34,14 @@ class tsAStockPrice:
             Log.logger.info(f"已创建检查点目录: {CHECKPOINT_DIR}")
     except Exception as e:
         Log.logger.error(f"创建检查点目录失败: {str(e)}")
+
+    @classmethod
+    def _get_file_lock(cls, checkpoint_path):
+        """获取指定检查点文件的文件锁"""
+        with cls._file_locks_lock:
+            if checkpoint_path not in cls._file_locks:
+                cls._file_locks[checkpoint_path] = threading.Lock()
+            return cls._file_locks[checkpoint_path]
     
     @staticmethod
     def _validate_data_completeness(df, trade_date):
@@ -82,53 +100,223 @@ class tsAStockPrice:
     
     @classmethod
     def save_checkpoint(cls, api, table, last_date, last_ts_code=None):
-        """保存检查点信息"""
+        """
+        保存检查点信息（线程安全，原子写入）
+
+        使用临时文件+重命名的方式确保原子性，配合文件锁防止多线程竞争。
+        """
         checkpoint_path = cls.get_checkpoint_path(api, table)
-        data = {
-            "last_date": last_date,
-            "last_ts_code": last_ts_code,
-            "update_time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        }
-        with open(checkpoint_path, "w") as f:
-            json.dump(data, f)
-        Log.logger.info(f"{api}: 已保存检查点 {last_date}")
+        temp_path = f"{checkpoint_path}.tmp"
+        backup_path = f"{checkpoint_path}.bak"
+
+        # 获取该检查点文件的专用锁
+        file_lock = cls._get_file_lock(checkpoint_path)
+
+        with file_lock:
+            try:
+                data = {
+                    "api": api,
+                    "table": table,
+                    "last_date": last_date,
+                    "last_ts_code": last_ts_code,
+                    "update_time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                }
+
+                # 步骤1: 写入临时文件（原子操作）
+                with open(temp_path, "w") as f:
+                    # 使用fcntl进行进程级文件锁（Linux/Mac）
+                    try:
+                        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                    except Exception:
+                        pass  # Windows不支持fcntl，忽略
+                    json.dump(data, f)
+                    try:
+                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                    except Exception:
+                        pass
+
+                # 步骤2: 如果原检查点存在，备份它
+                if os.path.exists(checkpoint_path):
+                    try:
+                        # 删除旧备份
+                        if os.path.exists(backup_path):
+                            os.remove(backup_path)
+                        # 重命名当前为备份
+                        os.rename(checkpoint_path, backup_path)
+                    except Exception as e:
+                        Log.logger.warning(f"{api}: 备份检查点失败: {str(e)}")
+
+                # 步骤3: 原子重命名临时文件为正式文件
+                os.rename(temp_path, checkpoint_path)
+
+                Log.logger.info(f"{api}: 已保存检查点 {last_date}")
+                return True
+
+            except Exception as e:
+                Log.logger.error(f"{api}: 保存检查点失败: {str(e)}")
+
+                # 清理临时文件
+                if os.path.exists(temp_path):
+                    try:
+                        os.remove(temp_path)
+                    except:
+                        pass
+
+                return False
     
     @classmethod
     def load_checkpoint(cls, api, table):
-        """加载检查点信息"""
+        """
+        加载检查点信息（线程安全，支持备份恢复）
+
+        如果主检查点文件损坏，尝试从备份恢复。
+        """
         checkpoint_path = cls.get_checkpoint_path(api, table)
-        if not os.path.exists(checkpoint_path):
+        backup_path = f"{checkpoint_path}.bak"
+
+        # 获取该检查点文件的专用锁
+        file_lock = cls._get_file_lock(checkpoint_path)
+
+        with file_lock:
+            # 尝试加载主检查点
+            if os.path.exists(checkpoint_path):
+                try:
+                    with open(checkpoint_path, "r") as f:
+                        # 尝试获取文件锁
+                        try:
+                            fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+                        except Exception:
+                            pass
+                        data = json.load(f)
+                        try:
+                            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                        except Exception:
+                            pass
+
+                    # 验证数据完整性
+                    if cls._validate_checkpoint_data(data):
+                        Log.logger.info(f"{api}: 从检查点恢复 {data['last_date']}")
+                        return data
+                    else:
+                        Log.logger.warning(f"{api}: 检查点数据无效，尝试从备份恢复")
+                except Exception as e:
+                    Log.logger.error(f"{api}: 加载检查点失败: {str(e)}，尝试从备份恢复")
+
+            # 尝试从备份恢复
+            if os.path.exists(backup_path):
+                try:
+                    with open(backup_path, "r") as f:
+                        data = json.load(f)
+
+                    if cls._validate_checkpoint_data(data):
+                        # 恢复备份到主文件
+                        os.rename(backup_path, checkpoint_path)
+                        Log.logger.info(f"{api}: 从备份恢复检查点 {data['last_date']}")
+                        return data
+                except Exception as e:
+                    Log.logger.error(f"{api}: 从备份恢复检查点失败: {str(e)}")
+
             return None
+
+    @classmethod
+    def _validate_checkpoint_data(cls, data):
+        """验证检查点数据的有效性"""
+        if not isinstance(data, dict):
+            return False
+        required_fields = ['last_date']
+        for field in required_fields:
+            if field not in data or data[field] is None:
+                return False
+        # 验证日期格式
         try:
-            with open(checkpoint_path, "r") as f:
-                data = json.load(f)
-            Log.logger.info(f"{api}: 从检查点恢复 {data['last_date']}")
-            return data
-        except Exception as e:
-            Log.logger.error(f"{api}: 加载检查点失败: {str(e)}")
-            return None
+            datetime.datetime.strptime(str(data['last_date']), '%Y%m%d')
+        except ValueError:
+            return False
+        return True
             
     @classmethod
     def reset_checkpoint(cls, api, table):
-        """重置检查点"""
+        """
+        重置检查点（线程安全）
+
+        删除检查点文件和备份文件。
+        """
         checkpoint_path = cls.get_checkpoint_path(api, table)
-        if os.path.exists(checkpoint_path):
-            try:
-                os.remove(checkpoint_path)
-                Log.logger.warning(f"{api}: 表 {table} 不存在，已重置检查点")
-                return True
-            except Exception as e:
-                Log.logger.error(f"{api}: 删除检查点文件失败: {str(e)}")
-                return False
-        return True
+        backup_path = f"{checkpoint_path}.bak"
+        temp_path = f"{checkpoint_path}.tmp"
+
+        # 获取该检查点文件的专用锁
+        file_lock = cls._get_file_lock(checkpoint_path)
+
+        with file_lock:
+            success = True
+
+            # 删除主检查点
+            if os.path.exists(checkpoint_path):
+                try:
+                    os.remove(checkpoint_path)
+                    Log.logger.warning(f"{api}: 已删除检查点文件")
+                except Exception as e:
+                    Log.logger.error(f"{api}: 删除检查点文件失败: {str(e)}")
+                    success = False
+
+            # 删除备份文件
+            if os.path.exists(backup_path):
+                try:
+                    os.remove(backup_path)
+                except Exception as e:
+                    Log.logger.warning(f"{api}: 删除备份文件失败: {str(e)}")
+
+            # 删除临时文件
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except Exception as e:
+                    Log.logger.warning(f"{api}: 删除临时文件失败: {str(e)}")
+
+            Log.logger.warning(f"{api}: 表 {table} 检查点已重置")
+            return success
     
     @classmethod
     def verify_checkpoint(cls, api, table, db):
-        """验证检查点，如果表不存在则重置检查点"""
+        """
+        验证检查点，确保检查点与数据库实际状态一致
+
+        检查内容包括：
+        1. 表是否存在
+        2. 检查点日期是否与实际数据匹配
+        3. 如果检查点无效则重置
+        """
+        checkpoint_path = cls.get_checkpoint_path(api, table)
+
         # 检查表是否存在
         if not DB.table_exists(table, db):
             Log.logger.warning(f"{api}: 表 {table} 不存在，将重置检查点")
             return cls.reset_checkpoint(api, table)
+
+        # 加载检查点
+        checkpoint = cls.load_checkpoint(api, table)
+        if not checkpoint:
+            return True  # 没有检查点，无需验证
+
+        # 验证检查点日期是否与实际数据一致
+        try:
+            last_date = checkpoint.get('last_date')
+            if last_date:
+                # 查询数据库中该日期的数据量
+                sql = f"SELECT COUNT(*) as count FROM {table} WHERE trade_date = '{last_date}'"
+                result = DB.select_to_list(sql, db)
+
+                if result and len(result) > 0:
+                    count = result[0].get('count', 0)
+                    if count == 0:
+                        Log.logger.warning(f"{api}: 检查点日期 {last_date} 在数据库中无数据，将重置检查点")
+                        return cls.reset_checkpoint(api, table)
+                    else:
+                        Log.logger.debug(f"{api}: 检查点验证通过，日期 {last_date} 有 {count} 条数据")
+        except Exception as e:
+            Log.logger.warning(f"{api}: 验证检查点时出错: {str(e)}")
+
         return True
 
     def getPrice(pro, api, table, db):
@@ -230,15 +418,34 @@ class tsAStockPrice:
                     # 如果数据量很大，分批写入数据库
                     chunk_size = 5000
                     total_chunks = (len(df) + chunk_size - 1) // chunk_size
-                    
+
                     for i in range(total_chunks):
+                        chunk_df = None  # 提前声明，确保在finally中可访问
                         start_idx = i * chunk_size
                         end_idx = min((i + 1) * chunk_size, len(df))
-                        chunk_df = df.iloc[start_idx:end_idx].copy()  # 创建明确的副本
-                        
-                        Log.logger.info(f"{api}: 写入第 {i+1}/{total_chunks} 批数据，{len(chunk_df)} 条到 {table} 表")
-                        DB.safe_to_sql(chunk_df, table, db, index=False, if_exists='append', chunksize=5000)
-                    
+
+                        try:
+                            chunk_df = df.iloc[start_idx:end_idx].copy()  # 创建明确的副本
+
+                            Log.logger.info(f"{api}: 写入第 {i+1}/{total_chunks} 批数据，{len(chunk_df)} 条到 {table} 表")
+                            DB.safe_to_sql(chunk_df, table, db, index=False, if_exists='append', chunksize=5000)
+
+                        except Exception as chunk_error:
+                            Log.logger.error(f"{api}: 写入第 {i+1}/{total_chunks} 批数据失败: {str(chunk_error)}")
+                            # 保存检查点记录失败位置
+                            if 'trade_date' in df.columns:
+                                failed_date = df['trade_date'].iloc[start_idx] if start_idx < len(df) else current_start_str
+                                tsAStockPrice.save_checkpoint(api, table, str(failed_date))
+                            raise  # 重新抛出异常，让上层处理
+
+                        finally:
+                            # 显式释放DataFrame内存
+                            if chunk_df is not None:
+                                del chunk_df
+                            # 每5批强制垃圾回收，避免内存持续增长
+                            if (i + 1) % 5 == 0:
+                                gc.collect()
+
                     # 批次写入完成后，保存检查点
                     if 'trade_date' in df.columns and not df.empty:
                         max_date = df['trade_date'].max()

@@ -6,7 +6,7 @@ import importlib
 import inspect
 import finhack.library.log as Log
 from finhack.library.utils import Utils
-from finhack.library.class_loader import ClassLoader
+from finhack.core.loader.class_loader import ClassLoader
 from finhack.core.version import get_version
 import sys
 

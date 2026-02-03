@@ -7,37 +7,58 @@ class tsMonitor:
     """
     Tushare API调用监视器
     处理限流、权限和异常重试
+
+    重试策略：
+    - 每分钟限流：指数退避重试，最大100次
+    - 每日/每小时配额用完：立即停止
+    - 权限不足：立即停止
+    - 其他异常：最多重试10次
     """
     def __init__(self, func):
         self.func = func
- 
+
     def __get__(self, instance, owner):
         def wrapper(*args, **kwargs):
             res = False
             try_times = 0
-            while True:
+            max_retries = 100  # 最大重试次数
+            base_delay = 15    # 基础延迟（秒）
+
+            while try_times <= max_retries:
                 try:
                     res = self.func(*args, **kwargs)
                     break
                 except Exception as e:
-                    if "每分钟最多访问" in str(e):
-                        Log.logger.warning(f"{self.func.__name__}:触发限流，等待重试。\n{str(e)}")
-                        time.sleep(15)
+                    error_msg = str(e)
+
+                    if "每分钟最多访问" in error_msg:
+                        # 限流错误：指数退避重试
+                        try_times += 1
+                        if try_times > max_retries:
+                            Log.logger.error(f"{self.func.__name__}:达到最大重试次数{max_retries}，停止重试。")
+                            alert.send(self.func.__name__, 'Tushare限流，重试次数超限', f'已重试{max_retries}次，请检查账户积分或稍后重试')
+                            break
+
+                        # 指数退避：15, 30, 60, 120... 秒
+                        delay = min(base_delay * (2 ** (try_times - 1)), 300)  # 最多等待5分钟
+                        Log.logger.warning(f"{self.func.__name__}:触发限流，第{try_times}/{max_retries}次重试，等待{delay}秒。\n{error_msg}")
+                        time.sleep(delay)
                         continue
-                    
-                    elif "每天最多访问" in str(e) or "每小时最多访问" in str(e):
-                        Log.logger.warning(f"{self.func.__name__}:今日权限用完。\n{str(e)}")
+
+                    elif "每天最多访问" in error_msg or "每小时最多访问" in error_msg:
+                        Log.logger.warning(f"{self.func.__name__}:今日/每小时权限已用完，停止重试。\n{error_msg}")
                         break
-                   
-                    elif "您没有访问该接口的权限" in str(e):
-                        Log.logger.warning(f"{self.func.__name__}:没有访问该接口的权限。\n{str(e)}")
+
+                    elif "您没有访问该接口的权限" in error_msg:
+                        Log.logger.warning(f"{self.func.__name__}:没有访问该接口的权限，停止重试。\n{error_msg}")
                         break
-                
+
                     else:
+                        # 其他异常：最多重试10次
                         if try_times < 10:
-                            try_times = try_times + 1
-                            Log.logger.error(f"{self.func.__name__}:未知异常，等待重试。\n{str(e)}")
-                            alert.send(self.func.__name__, '未知异常，等待重试。\n', str(e))
+                            try_times += 1
+                            Log.logger.error(f"{self.func.__name__}:未知异常，第{try_times}/10次重试。\n{error_msg}")
+                            alert.send(self.func.__name__, '未知异常，等待重试', str(error_msg))
                             time.sleep(15)
                             continue
                         else:
@@ -45,6 +66,7 @@ class tsMonitor:
                             Log.logger.error(f"{self.func.__name__}:同步异常，{str(info)}")
                             alert.send(self.func.__name__, '同步异常', str(info))
                             break
+
             Log.logger.info(f"{self.func.__name__}:同步完毕")
             return res
         return wrapper

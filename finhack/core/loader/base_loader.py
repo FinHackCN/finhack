@@ -5,29 +5,12 @@ import traceback
 from runtime.constant import *
 import runtime.global_var as global_var
 import finhack.library.log as Log
-from finhack.library.class_loader import ClassLoader
 import sys
 import importlib
-class ClassLoader:
-    @staticmethod
-    def get_module(module_path, user_module_path):
-        print(f"Attempting to load module: {module_path}")
-        try:
-            module = importlib.import_module(module_path)
-            print(f"Successfully loaded module: {module_path}")
-            return module
-        except ImportError as e:
-            print(f"Failed to load module {module_path}: {e}")
-            if os.path.exists(user_module_path):
-                print(f"Attempting to load user module: {user_module_path}")
-                spec = importlib.util.spec_from_file_location(module_path, user_module_path)
-                module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)
-                print(f"Successfully loaded user module: {user_module_path}")
-                return module
-            else:
-                print(f"User module path does not exist: {user_module_path}")
-                raise
+import importlib.util
+
+# 从独立文件导入 ClassLoader，避免循环导入
+from finhack.core.loader.class_loader import ClassLoader
 
 class BaseLoader():
     def __init__(self,args):
