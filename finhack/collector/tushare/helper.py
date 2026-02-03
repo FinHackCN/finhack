@@ -6,6 +6,7 @@ import traceback
 import pandas as pd
 import os
 import sqlite3
+import gc
 
 from finhack.library.db import DB
 from finhack.library.alert import alert
@@ -231,18 +232,20 @@ class tsSHelper:
         Returns:
             bool: 操作成功返回True，否则返回False
         """
+        data = None  # 提前声明，确保在finally中可访问
+
         try:
             # 首先检查数据库目录是否可用
             if not tsSHelper.check_database_directory(db):
                 Log.logger.error(f"{api}: 数据库目录检查失败，无法继续操作")
                 return False
-            
+
             # 检查数据库连接是否正常
             adapter = DB.get_adapter(db)
             if not adapter:
                 Log.logger.error(f"{api}: 无法获取数据库适配器")
                 return False
-                
+
             # 删除临时表(如果存在)
             Log.logger.info(f"{api}: 正在删除临时表 {table}_tmp...")
             try:
@@ -250,43 +253,43 @@ class tsSHelper:
             except Exception as drop_error:
                 Log.logger.warning(f"{api}: 删除临时表失败: {str(drop_error)}")
                 # 尝试继续执行，可能是临时表不存在
-            
+
             # 调用API获取数据
             Log.logger.info(f"{api}: 正在调用Tushare API获取数据...")
             f = getattr(pro, api)
-            
+
             try:
                 data = f()
-                
+
                 # 检查数据是否为空
                 if data is None or data.empty:
                     Log.logger.warning(f"{api}: 未获取到任何数据")
                     return False
-                
+
                 # 预处理数据，确保关键字段为字符串类型
                 Log.logger.info(f"{api}: 正在处理{len(data)}条数据...")
                 for col in data.columns:
                     if col in ['ts_code', 'symbol', 'code', 'ann_date', 'end_date', 'trade_date', 'pre_date', 'actual_date'] or \
                        'code' in col.lower() or 'symbol' in col.lower() or 'date' in col.lower():
                         data[col] = data[col].fillna('').astype(str)
-                
+
                 # 写入临时表
                 Log.logger.info(f"{api}: 正在将数据写入临时表 {table}_tmp...")
                 DB.safe_to_sql(data, f"{table}_tmp", db, index=False, if_exists='replace', chunksize=5000)
-                
+
                 # 检查临时表是否创建成功
                 if not DB.table_exists(f"{table}_tmp", db):
                     Log.logger.error(f"{api}: 临时表 {table}_tmp 创建失败")
                     return False
-                
+
                 # 使用统一的replace_table方法替换表
                 Log.logger.info(f"{api}: 正在将临时表替换为正式表...")
                 table_to_use = DB.replace_table(table, f"{table}_tmp", db)
-                
+
                 # 设置索引
                 Log.logger.info(f"{api}: 正在为表 {table_to_use} 创建索引...")
                 tsSHelper.setIndex(table_to_use, db)
-                
+
                 Log.logger.info(f"{api}: 数据同步完成，共{len(data)}条记录")
                 return True
             except Exception as api_error:
@@ -302,31 +305,31 @@ class tsSHelper:
                     if data is None or data.empty:
                         Log.logger.warning(f"{api}: 重试后仍未获取到任何数据")
                         return False
-                    
+
                     # 预处理数据
                     Log.logger.info(f"{api}: 正在处理{len(data)}条数据...")
                     for col in data.columns:
                         if col in ['ts_code', 'symbol', 'code', 'ann_date', 'end_date', 'trade_date', 'pre_date', 'actual_date'] or \
                            'code' in col.lower() or 'symbol' in col.lower() or 'date' in col.lower():
                             data[col] = data[col].fillna('').astype(str)
-                    
+
                     # 写入临时表
                     Log.logger.info(f"{api}: 正在将数据写入临时表 {table}_tmp...")
                     DB.safe_to_sql(data, f"{table}_tmp", db, index=False, if_exists='replace', chunksize=5000)
-                    
+
                     # 检查临时表是否创建成功
                     if not DB.table_exists(f"{table}_tmp", db):
                         Log.logger.error(f"{api}: 临时表 {table}_tmp 创建失败")
                         return False
-                    
+
                     # 替换表
                     Log.logger.info(f"{api}: 正在将临时表替换为正式表...")
                     table_to_use = DB.replace_table(table, f"{table}_tmp", db)
-                    
+
                     # 设置索引
                     Log.logger.info(f"{api}: 正在为表 {table_to_use} 创建索引...")
                     tsSHelper.setIndex(table_to_use, db)
-                    
+
                     Log.logger.info(f"{api}: 数据同步完成，共{len(data)}条记录")
                     return True
                 else:
@@ -337,6 +340,12 @@ class tsSHelper:
             Log.logger.error(f"{api}: 处理数据过程中出错: {str(e)}")
             Log.logger.error(traceback.format_exc())
             return False
+        finally:
+            # 显式释放DataFrame内存
+            if data is not None:
+                del data
+            # 强制垃圾回收，避免内存泄漏
+            gc.collect()
     
     
     # 根据最后日期获取数据

@@ -10,6 +10,7 @@ class collectThread(threading.Thread):
         self.pro = pro
         self.db = db
         self.max_runtime = None  # 默认无限制
+        self._error = None  # 存储异常信息，供主线程检查
         
     def set_max_runtime(self, seconds):
         """设置线程最大运行时间（秒）"""
@@ -50,6 +51,7 @@ class collectThread(threading.Thread):
             end_time = time.time()
             Log.logger.info(f"线程 {self.functionName} 完成，运行时间: {(end_time-start_time)/60:.2f} 分钟")
         except Exception as e:
+            self._error = e
             Log.logger.error(f"线程 {self.functionName} 执行出错: {str(e)}")
     
     def wrap_method_with_timeout(self, method):
@@ -66,6 +68,22 @@ class collectThread(threading.Thread):
                 else:
                     raise e
         return wrapped_method
+
+    def get_error(self):
+        """获取线程执行过程中的异常信息，供主线程检查
+
+        Returns:
+            Exception: 如果线程执行出错，返回异常对象；否则返回 None
+        """
+        return self._error
+
+    def has_error(self):
+        """检查线程是否执行出错
+
+        Returns:
+            bool: 如果线程执行出错返回 True，否则返回 False
+        """
+        return self._error is not None
         
         
 

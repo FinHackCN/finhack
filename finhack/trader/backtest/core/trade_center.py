@@ -156,6 +156,10 @@ class TradeCenter:
         # 性能优化：价格缓存
         self._price_cache = {}  # {symbol: price} 当前bar的价格缓存
         self._current_bar_time = None  # 当前bar时间戳
+
+        # 防重复处理：已处理的公司行为记录
+        # 格式: {(symbol, ex_date, action_type): True}
+        self._processed_corporate_actions: set = set()
     
     def initialize(self, context):
         """
@@ -1494,14 +1498,14 @@ class TradeCenter:
             unlock_quantity = 0
             updated_buy_dates = []
             
-            for buy_record in position.buy_dates:
+            for buy_date, buy_qty in position.buy_dates:
                 # 检查是否已经超过T+1限制（即买入日期早于当前日期）
-                if buy_record['date'] < current_date:
+                if buy_date.date() < current_date:
                     # 可以解冻
-                    unlock_quantity += buy_record['quantity']
+                    unlock_quantity += buy_qty
                 else:
                     # 仍需冻结
-                    updated_buy_dates.append(buy_record)
+                    updated_buy_dates.append((buy_date, buy_qty))
             
             # 更新buy_dates记录
             position.buy_dates = updated_buy_dates
@@ -2529,19 +2533,37 @@ class TradeCenter:
             return {} 
 
     def handle_corporate_action(self, event):
-        """处理公司行为事件（分红、送股等）"""
+        """处理公司行为事件（分红、送股等）
+
+        具有防重复处理机制，确保同一公司行为不会被重复处理。
+        """
         try:
             if not hasattr(event, 'action_type') or not hasattr(event, 'symbol'):
                 return
-            
+
             action_type = event.action_type.lower()
             symbol = event.symbol
-            
+
+            # 获取除权除息日期（用于防重复检查）
+            ex_date = None
+            if hasattr(event, 'ex_date'):
+                ex_date = event.ex_date
+            elif hasattr(event, 'event_time'):
+                ex_date = event.event_time.date() if event.event_time else None
+
+            # 创建唯一键进行防重复检查
+            if ex_date:
+                action_key = (symbol, str(ex_date), action_type)
+                if action_key in self._processed_corporate_actions:
+                    if self._context:
+                        self._context.logger.debug(f"公司行为已处理，跳过: {symbol} {action_type} {ex_date}")
+                    return
+
             # 获取当前持仓
             position = self.positions.get(symbol)
             if not position or position.volume <= 0:
                 return
-            
+
             # 处理不同类型的公司行为
             if action_type == 'dividend':
                 self._handle_dividend(event, position)
@@ -2551,46 +2573,82 @@ class TradeCenter:
                 self._handle_stock_split(event, position)
             elif action_type == 'rights':
                 self._handle_rights_issue(event, position)
-            
+
             # 更新持仓信息
             self._update_position_after_corporate_action(position, event)
-            
+
+            # 记录已处理的公司行为
+            if ex_date:
+                action_key = (symbol, str(ex_date), action_type)
+                self._processed_corporate_actions.add(action_key)
+
             if self._context:
                 self._context.logger.info(f"处理公司行为事件: {symbol} {action_type}")
-        
+
         except Exception as e:
             if self._context:
                 self._context.logger.error(f"处理公司行为事件失败: {e}")
     
     def _handle_dividend(self, event, position):
-        """处理分红事件"""
+        """处理分红事件（含除息处理）
+
+        除息处理：分红后股票成本价应相应降低，保持持仓盈亏计算正确。
+        例如：成本价10元，每股分红0.5元，除息后新成本价为9.5元。
+        """
         try:
             if not hasattr(event, 'dividend_per_share'):
                 return
-            
+
             dividend_per_share = event.dividend_per_share
+            if dividend_per_share <= 0:
+                return
+
             dividend_amount = position.volume * dividend_per_share
-            
+
             # 计算分红税（A股分红需要缴税）
-            tax_rate = 0.10  # A股分红税率10%
+            # 注意：这里使用简化税率，实际应根据持股期限确定
+            # - 持股 ≤ 1个月：税率 20%
+            # - 1个月 < 持股 ≤ 1年：税率 10%
+            # - 持股 > 1年：免税
+            tax_rate = 0.10  # 默认税率10%
             if hasattr(event, 'tax_rate'):
                 tax_rate = event.tax_rate
-            
+
             tax_amount = dividend_amount * tax_rate
             net_dividend = dividend_amount - tax_amount
-            
+
+            # 记录除息前成本
+            old_avg_cost = position.avg_cost
+            old_total_cost = old_avg_cost * position.volume
+
             # 更新账户现金
             if self._context and hasattr(self._context, 'account'):
                 self._context.account.cash += net_dividend
                 self._context.account.cash_available += net_dividend
-                
-                # 记录已实现收益
+
+                # 记录已实现收益（分红视为已实现收益）
                 self._context.account.realized_pnl += net_dividend
-            
+
+            # 除息处理：降低持仓成本价
+            # 每股分红导致每股成本降低
+            cost_reduction_per_share = dividend_per_share
+            new_avg_cost = max(0, old_avg_cost - cost_reduction_per_share)
+
+            # 更新持仓成本
+            position.avg_cost = new_avg_cost
+            position.cost_basis = new_avg_cost  # 同步兼容字段
+
+            # 同步到context中的position（如果存在）
+            if self._context and hasattr(self._context, 'portfolio') and self._context.portfolio:
+                ctx_position = self._context.portfolio.positions.get(position.symbol)
+                if ctx_position and hasattr(ctx_position, 'cost_price'):
+                    ctx_position.cost_price = new_avg_cost
+
             if self._context:
                 self._context.logger.info(f"分红处理: {position.symbol} 每股{dividend_per_share:.4f}, "
-                                       f"税后{net_dividend:.2f}, 税率{tax_rate:.2%}")
-        
+                                       f"税后{net_dividend:.2f}, 税率{tax_rate:.2%}, "
+                                       f"除息: 成本{old_avg_cost:.4f}→{new_avg_cost:.4f}")
+
         except Exception as e:
             if self._context:
                 self._context.logger.error(f"处理分红事件失败: {e}")

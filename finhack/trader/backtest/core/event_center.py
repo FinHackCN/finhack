@@ -166,18 +166,21 @@ class EventCenter:
             EventTypeEnum.AFTER_MARKET,
             EventTypeEnum.DAY_END,
         ]
-        
+
         for event_type in market_events:
             self.event_bus.register_handler(event_type, self._handle_market_event)
-        
+
         # 注册策略相关事件处理器
         self.event_bus.register_handler(EventTypeEnum.ON_TIME, self._handle_on_time)
-        
+
         # 注册交易相关事件处理器
         self.event_bus.register_handler(EventTypeEnum.ORDER_SUBMISSION, self._handle_trade_event)
         self.event_bus.register_handler(EventTypeEnum.ORDER_CANCELLATION, self._handle_trade_event)
         self.event_bus.register_handler(EventTypeEnum.TRY_MATCH, self._handle_try_match)
-        
+
+        # ✅ 新增：注册公司行为事件处理器
+        self.event_bus.register_handler(EventTypeEnum.CORPORATE_ACTION, self._handle_corporate_action_event)
+
         logger.debug("事件处理器注册完成")
     
     def generate_daily_events(self, trade_date: date) -> List[BaseEvent]:
@@ -428,16 +431,14 @@ class EventCenter:
 
                 # 创建公司行为事件（使用BaseEvent的data属性存储额外信息）
                 from ..events.event_types import BaseEvent, EventTypeEnum
+                from types import SimpleNamespace
 
-                event = BaseEvent(
-                    event_type=EventTypeEnum.CORPORATE_ACTION if hasattr(EventTypeEnum, 'CORPORATE_ACTION') else EventTypeEnum.DAY_START,
-                    event_time=datetime.combine(trade_date, datetime.min.time()),
-                    market=market,
-                    frequency=self.current_frequency,
-                    priority=EventPriorityEnum.NORMAL
-                )
-                # 将公司行为详细信息存储在data属性中
-                event.data = {
+                # ✅ 修复：使用开盘前时间（08:30）而非00:00:00
+                # 除权除息应在开盘前处理，确保当日交易使用正确的价格
+                event_time = datetime.combine(trade_date, time(8, 30, 0))
+
+                # 创建公司行为详细信息对象，支持属性访问
+                action_data = {
                     'symbol': action.get('symbol', ''),
                     'action_type': action.get('action_type', ''),
                     'dividend_per_share': action.get('dividend_per_share', 0),
@@ -445,8 +446,26 @@ class EventCenter:
                     'bonus_ratio': action.get('bonus_ratio', 0),
                     'split_ratio': action.get('split_ratio', 1),
                     'rights_ratio': action.get('rights_ratio', 0),
-                    'rights_price': action.get('rights_price', 0)
+                    'rights_price': action.get('rights_price', 0),
+                    'ex_date': trade_date  # 添加除权除息日期，用于防重复检查
                 }
+
+                # 使用SimpleNamespace使数据支持属性访问
+                corporate_action_data = SimpleNamespace(**action_data)
+
+                event = BaseEvent(
+                    event_type=EventTypeEnum.CORPORATE_ACTION,
+                    event_time=event_time,
+                    market=market,
+                    frequency=self.current_frequency,
+                    priority=EventPriorityEnum.HIGH
+                )
+                # 同时存储在data属性中（向后兼容）
+                event.data = action_data
+
+                # 将属性直接绑定到event对象，便于trade_center直接访问
+                for key, value in action_data.items():
+                    setattr(event, key, value)
 
                 events.append(event)
 
@@ -643,18 +662,100 @@ class EventCenter:
     
     def _handle_try_match(self, event: BaseEvent):
         """处理订单撮合事件
-        
+
         Args:
             event: 撮合事件
         """
         try:
             logger.debug(f"执行订单撮合: {event.event_time}")
-            
+
             # 通过交易中心执行订单撮合
             if self.trade_center:
                 self.trade_center.try_match_orders(event)
             else:
                 logger.warning("交易中心未设置，无法执行订单撮合")
-                
+
         except Exception as e:
-            logger.error(f"订单撮合失败: {e}") 
+            logger.error(f"订单撮合失败: {e}")
+
+    def _handle_corporate_action_event(self, event: BaseEvent):
+        """处理公司行为事件（分红、送股、配股等）
+
+        Args:
+            event: 公司行为事件
+        """
+        try:
+            if not hasattr(event, 'data'):
+                logger.warning("公司行为事件缺少data属性")
+                return
+
+            action_type = event.data.get('action_type', '')
+            symbol = event.data.get('symbol', '')
+
+            logger.info(f"[公司行为] 处理事件: {symbol} {action_type} at {event.event_time}")
+
+            # 委托给 trade_center 处理具体的公司行为
+            if self.trade_center:
+                # 检查 trade_center 是否有 handle_corporate_action 方法
+                if hasattr(self.trade_center, 'handle_corporate_action'):
+                    self.trade_center.handle_corporate_action(event)
+                else:
+                    logger.warning("trade_center 不支持 handle_corporate_action 方法")
+                    # 尝试直接处理分红
+                    self._process_dividend_event(event)
+            else:
+                logger.warning("trade_center未设置，无法处理公司行为")
+
+        except Exception as e:
+            logger.error(f"处理公司行为事件失败: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _process_dividend_event(self, event: BaseEvent):
+        """处理分红事件（备用方案）
+
+        Args:
+            event: 公司行为事件
+        """
+        try:
+            symbol = event.data.get('symbol', '')
+            dividend_per_share = event.data.get('dividend_per_share', 0)
+            tax_rate = event.data.get('tax_rate', 0.10)
+
+            if dividend_per_share <= 0:
+                logger.debug(f"[分红处理] {symbol} 每股分红为0，跳过")
+                return
+
+            # 获取持仓
+            if not self.context or 'positions' not in self.context:
+                logger.warning("[分红处理] context中无positions信息")
+                return
+
+            positions = self.context.get('positions', {})
+            if symbol not in positions:
+                logger.debug(f"[分红处理] 未持有 {symbol}，跳过分红处理")
+                return
+
+            position = positions[symbol]
+            volume = position.get('volume', 0) or position.get('quantity', 0)
+
+            if volume <= 0:
+                logger.debug(f"[分红处理] {symbol} 持仓为0，跳过")
+                return
+
+            # 计算分红金额（税后）
+            dividend_amount = volume * dividend_per_share
+            after_tax = dividend_amount * (1 - tax_rate)
+
+            # 更新现金
+            if 'account' in self.context:
+                account = self.context['account']
+                current_cash = account.get('cash_available', 0)
+                account['cash_available'] = current_cash + after_tax
+                logger.info(f"[分红处理] {symbol} 持仓{volume}股，每股{dividend_per_share:.4f}元，"
+                           f"税后分红{after_tax:.2f}元（税率{tax_rate:.0%}）")
+            else:
+                logger.warning("[分红处理] context中无account信息")
+
+        except Exception as e:
+            logger.error(f"处理分红事件失败: {e}") 

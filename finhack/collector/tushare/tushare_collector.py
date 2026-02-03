@@ -44,13 +44,25 @@ class TushareCollector:
             'hk_basic': True,              # 港股基本信息
             'fx_basic': True               # 外汇基本信息
         }
+        # 用于检测循环依赖：记录当前正在检查的依赖项
+        self._checking_dependencies = set()
 
 
     def check_dependency(self, table_name):
         """检查依赖表是否存在，如果不存在但是有创建该表的功能则尝试创建"""
+        # 循环依赖检测：如果当前依赖项正在检查中，说明存在循环调用
+        if table_name in self._checking_dependencies:
+            Log.logger.error(f"检测到循环依赖: {table_name}，避免死锁，返回失败")
+            return False
+
         if table_name in self.dependency_status:
             return self.dependency_status[table_name]
-        else:
+
+        # 标记当前依赖项为"正在检查"
+        self._checking_dependencies.add(table_name)
+        result = False  # 默认返回值
+
+        try:
             # 检查表是否存在
             try:
                 # 获取数据库适配器
@@ -59,8 +71,13 @@ class TushareCollector:
                 # 检查表是否存在
                 if adapter.table_exists(table_name):
                     # 表存在，尝试查询是否有数据
-                    result = DB.selectToList(f"SELECT 1 FROM {table_name} LIMIT 1", self.db)
-                    return len(result) > 0
+                    query_result = DB.selectToList(f"SELECT 1 FROM {table_name} LIMIT 1", self.db)
+                    # 安全校验：确保result是列表类型
+                    if not isinstance(query_result, list):
+                        Log.logger.warning(f"查询表 {table_name} 返回非列表类型: {type(query_result)}")
+                        result = False
+                    else:
+                        result = len(query_result) > 0
                 else:
                     # 表不存在，尝试创建基本表
                     if table_name == 'astock_basic':
@@ -69,20 +86,20 @@ class TushareCollector:
                         success = tsAStockBasic.stock_basic(self.pro, self.db)
                         if success:
                             self.dependency_status['astock_basic'] = True
-                            return True
+                            result = True
                         else:
                             Log.logger.error(f"创建表 {table_name} 失败")
-                            return False
+                            result = False
                     elif table_name == 'astock_trade_cal':
                         Log.logger.warning(f"表 {table_name} 不存在，尝试创建...")
                         # 创建交易日历表
                         success = tsAStockBasic.trade_cal(self.pro, self.db)
                         if success:
                             self.dependency_status['astock_trade_cal'] = True
-                            return True
+                            result = True
                         else:
                             Log.logger.error(f"创建表 {table_name} 失败")
-                            return False
+                            result = False
                     elif table_name == 'astock_finance_disclosure_date':
                         Log.logger.warning(f"表 {table_name} 不存在，尝试创建...")
                         from finhack.collector.tushare.astockfinance import tsAStockFinance
@@ -90,23 +107,33 @@ class TushareCollector:
                         success = tsAStockFinance.disclosure_date(self.pro, self.db)
                         if success:
                             self.dependency_status['astock_finance_disclosure_date'] = True
-                            return True
+                            result = True
                         else:
                             Log.logger.error(f"创建表 {table_name} 失败")
-                            return False
+                            result = False
                     else:
                         Log.logger.warning(f"表 {table_name} 不存在，无法自动创建")
-                        return False
+                        result = False
             except Exception as e:
                 Log.logger.error(f"检查表 {table_name} 失败: {str(e)}")
-                return False
-        
+                result = False
+        finally:
+            # 清理"正在检查"标记，无论成功或失败
+            self._checking_dependencies.discard(table_name)
+
+        return result
+
     def ensure_db_directory(self, db_name):
         """确保数据库目录存在"""
         try:
             # 获取数据库配置
             db_config = Config.get_config('db', db_name)
-            
+
+            # 检查配置是否存在
+            if db_config is None:
+                Log.logger.error(f"数据库配置 '{db_name}' 不存在，请检查配置文件")
+                return False
+
             # 检查是否为SQLite数据库
             if db_config.get('type', '') != 'sqlite':
                 return True
@@ -263,9 +290,22 @@ class TushareCollector:
             t.start()
 
         # 等待所有线程完成
+        failed_threads = []
         for t in self.thread_list:
             t.join()
-            
+            # 检查子线程是否出错
+            if hasattr(t, 'has_error') and t.has_error():
+                error = t.get_error()
+                Log.logger.error(f"线程 {t.functionName} 执行失败: {str(error)}")
+                failed_threads.append((t.functionName, error))
+
+        # 如果有线程失败，记录并返回失败状态
+        if failed_threads:
+            Log.logger.error(f"共 {len(failed_threads)} 个线程执行失败:")
+            for name, error in failed_threads:
+                Log.logger.error(f"  - {name}: {str(error)}")
+            return False
+
         Log.logger.info("所有数据采集线程已完成")
         
         return True
@@ -905,10 +945,14 @@ class TushareCollector:
             
             # 等待任意线程完成
             while active_threads >= max_concurrent_threads:
-                # 清理已完成的线程
+                # 清理已完成的线程，并检查错误
                 completed_threads = [t for t in self.thread_list if not t.is_alive()]
                 for t in completed_threads:
                     if t in self.thread_list:
+                        # 检查线程是否出错
+                        if hasattr(t, 'has_error') and t.has_error():
+                            error = t.get_error()
+                            Log.logger.error(f"线程 {t.functionName} 执行失败: {str(error)}")
                         self.thread_list.remove(t)
                 
                 # 重新计算活动线程数

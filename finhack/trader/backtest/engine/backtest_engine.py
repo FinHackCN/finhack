@@ -73,6 +73,10 @@ class TradeCenter:
             }
         self.partial_fill_config = partial_fill_config
 
+        # 防重复处理：已处理的公司行为记录
+        # 格式: {(symbol, ex_date, action_type): True}
+        self._processed_corporate_actions: set = set()
+
     def set_event_center(self, event_center):
         """设置事件中心
 
@@ -723,17 +727,35 @@ class TradeCenter:
         return 0
 
     def handle_corporate_action(self, event):
-        """处理公司行为事件（分红、送股等）"""
-        try:
-            # 从event.data中获取公司行为详细信息
-            if not hasattr(event, 'data') or not event.data:
-                return
+        """处理公司行为事件（分红、送股等）
 
-            action_type = event.data.get('action_type', '')
-            symbol = event.data.get('symbol', '')
+        具有防重复处理机制，确保同一公司行为不会被重复处理。
+        """
+        try:
+            # 获取公司行为信息（支持属性访问和字典访问）
+            if hasattr(event, 'data') and event.data:
+                action_type = event.data.get('action_type', '')
+                symbol = event.data.get('symbol', '')
+            else:
+                action_type = getattr(event, 'action_type', '')
+                symbol = getattr(event, 'symbol', '')
 
             if not symbol or not action_type:
                 return
+
+            # 获取除权除息日期（用于防重复检查）
+            ex_date = None
+            if hasattr(event, 'data') and event.data:
+                ex_date = event.data.get('ex_date')
+            if not ex_date and hasattr(event, 'event_time'):
+                ex_date = event.event_time.date() if event.event_time else None
+
+            # 创建唯一键进行防重复检查
+            if ex_date:
+                action_key = (symbol, str(ex_date), action_type)
+                if action_key in self._processed_corporate_actions:
+                    Log.logger.debug(f"公司行为已处理，跳过: {symbol} {action_type} {ex_date}")
+                    return
 
             # 处理除权除息
             if action_type in ['dividend', 'bonus', 'split', 'rights']:
@@ -744,46 +766,107 @@ class TradeCenter:
 
                 # 处理分红
                 if action_type == 'dividend':
-                    dividend_per_share = event.data.get('dividend_per_share', 0)
-                    if dividend_per_share > 0:
-                        dividend_amount = position.volume * dividend_per_share
-                        # 扣除所得税
-                        tax_rate = event.data.get('tax_rate', 0.10)
-                        after_tax = dividend_amount * (1 - tax_rate)
-                        self.account.cash_available += after_tax
-                        Log.logger.info(f"[公司行为] {symbol} 分红: 每股{dividend_per_share:.4f}元, 税率{tax_rate:.0%}, 实得{after_tax:.2f}元")
+                    self._handle_dividend(event, position, symbol)
 
                 # 处理送股
                 elif action_type == 'bonus':
-                    bonus_ratio = event.data.get('bonus_ratio', 0)
-                    if bonus_ratio > 0:
-                        bonus_shares = int(position.volume * bonus_ratio)
-                        if bonus_shares > 0:
-                            # 100股整数倍
-                            bonus_shares = (bonus_shares // 100) * 100
-                            position.volume += bonus_shares
-                            position.available_volume += bonus_shares
-                            Log.logger.info(f"[公司行为] {symbol} 送股: 每10股送{bonus_ratio*10:.2f}股, 获得{bonus_shares}股")
+                    self._handle_bonus(event, position, symbol)
 
                 # 处理拆股
                 elif action_type == 'split':
-                    split_ratio = event.data.get('split_ratio', 1)
-                    if split_ratio > 0 and split_ratio != 1:
-                        old_volume = position.volume
-                        new_volume = int(old_volume * split_ratio)
-                        actual_ratio = new_volume / old_volume if old_volume > 0 else 1
-                        position.volume = new_volume
-                        position.available_volume = new_volume
-                        position.cost_price = position.cost_price / actual_ratio
-                        Log.logger.info(f"[公司行为] {symbol} 拆股: 比例{split_ratio:.2f}, 持仓{old_volume}→{new_volume}股")
+                    self._handle_split(event, position, symbol)
 
                 # 更新持仓市值
                 self._update_account_value()
+
+                # 记录已处理的公司行为
+                if ex_date:
+                    action_key = (symbol, str(ex_date), action_type)
+                    self._processed_corporate_actions.add(action_key)
 
         except Exception as e:
             Log.logger.error(f"处理公司行为事件失败: {e}")
             import traceback
             traceback.print_exc()
+
+    def _handle_dividend(self, event, position, symbol):
+        """处理分红事件（含除息处理）"""
+        # 获取数据
+        if hasattr(event, 'data') and event.data:
+            dividend_per_share = event.data.get('dividend_per_share', 0)
+            tax_rate = event.data.get('tax_rate', 0.10)
+        else:
+            dividend_per_share = getattr(event, 'dividend_per_share', 0)
+            tax_rate = getattr(event, 'tax_rate', 0.10)
+
+        if dividend_per_share <= 0:
+            return
+
+        dividend_amount = position.volume * dividend_per_share
+        after_tax = dividend_amount * (1 - tax_rate)
+
+        # 记录除息前成本
+        old_cost_price = position.cost_price
+
+        # 增加现金
+        self.account.cash_available += after_tax
+
+        # 除息处理：降低持仓成本价
+        # 每股分红导致每股成本降低
+        new_cost_price = max(0, old_cost_price - dividend_per_share)
+        position.cost_price = new_cost_price
+
+        Log.logger.info(f"[公司行为] {symbol} 分红: 每股{dividend_per_share:.4f}元, "
+                       f"税率{tax_rate:.0%}, 实得{after_tax:.2f}元, "
+                       f"除息: 成本{old_cost_price:.4f}→{new_cost_price:.4f}")
+
+    def _handle_bonus(self, event, position, symbol):
+        """处理送股事件"""
+        if hasattr(event, 'data') and event.data:
+            bonus_ratio = event.data.get('bonus_ratio', 0)
+        else:
+            bonus_ratio = getattr(event, 'bonus_ratio', 0)
+
+        if bonus_ratio <= 0:
+            return
+
+        bonus_shares = int(position.volume * bonus_ratio)
+        if bonus_shares > 0:
+            # 100股整数倍
+            bonus_shares = (bonus_shares // 100) * 100
+            old_volume = position.volume
+            position.volume += bonus_shares
+            position.available_volume += bonus_shares
+
+            # 调整成本价（送股后成本降低）
+            if position.volume > 0:
+                position.cost_price = position.cost_price * old_volume / position.volume
+
+            Log.logger.info(f"[公司行为] {symbol} 送股: 比例{bonus_ratio:.2f}, "
+                           f"持仓{old_volume}→{position.volume}股, "
+                           f"新成本{position.cost_price:.4f}")
+
+    def _handle_split(self, event, position, symbol):
+        """处理拆股事件"""
+        if hasattr(event, 'data') and event.data:
+            split_ratio = event.data.get('split_ratio', 1)
+        else:
+            split_ratio = getattr(event, 'split_ratio', 1)
+
+        if split_ratio <= 0 or split_ratio == 1:
+            return
+
+        old_volume = position.volume
+        new_volume = int(old_volume * split_ratio)
+        actual_ratio = new_volume / old_volume if old_volume > 0 else 1
+
+        position.volume = new_volume
+        position.available_volume = new_volume
+        position.cost_price = position.cost_price / actual_ratio
+
+        Log.logger.info(f"[公司行为] {symbol} 拆股: 比例{split_ratio:.2f}, "
+                       f"持仓{old_volume}→{new_volume}股, "
+                       f"新成本{position.cost_price:.4f}")
 
 class BacktestEngine:
     """回测引擎主类"""
@@ -1908,77 +1991,27 @@ class BacktestEngine:
             Log.logger.error(f"处理日终事件失败: {e}")
             
     def _handle_before_market_sync(self, event):
-        """处理盘前事件 - 同步版本，处理分红送股"""
+        """处理盘前事件 - 同步版本
+
+        注意：分红送股等公司行为由 CORPORATE_ACTION 事件统一处理，
+        不在此处处理，以避免重复计算。
+        """
         try:
             current_time = self.context['current_dt']
             current_date = current_time.date()
 
-            # 获取当前市场所有持仓的股票代码
-            symbols = list(self.trade_center.positions.keys())
-            if not symbols:
-                return
+            Log.logger.debug(f"[盘前事件] {current_date} 盘前准备完成")
 
-            # 获取分红送股数据
-            market = self.context['settings']['market']
-            corporate_actions = self.data_center.get_corporate_actions(current_date, market)
-
-            if not corporate_actions:
-                Log.logger.debug(f"[分红送股] {current_date} 无分红送股事件")
-                return
-
-            # 处理分红送股事件
-            for action in corporate_actions:
-                symbol = action.get('symbol', '')
-                if symbol not in symbols:
-                    continue
-
-                position = self.trade_center.positions.get(symbol)
-                if not position:
-                    continue
-
-                # 处理送股
-                split_ratio = action.get('split_ratio', 0)  # 每10股送X股
-                if split_ratio > 0:
-                    bonus_shares = int(position.volume * split_ratio / 10)
-                    if bonus_shares > 0:
-                        position.volume += bonus_shares
-                        position.available_volume += bonus_shares
-                        Log.logger.info(f"[送股] {symbol} 每10股送{split_ratio}股, "
-                                       f"原持仓{position.volume-bonus_shares}股, 获得{bonus_shares}股, "
-                                       f"新持仓{position.volume}股")
-
-                # 处理分红
-                dividend_ratio = action.get('dividend_ratio', 0)  # 每10股派X元
-                if dividend_ratio > 0:
-                    dividend_amount = position.volume * dividend_ratio / 10
-                    # 分红直接增加现金
-                    self.trade_center.account.cash_available += dividend_amount
-                    Log.logger.info(f"[分红] {symbol} 每10股派{dividend_ratio}元, "
-                                   f"持仓{position.volume}股, 获得{dividend_amount:.2f}元")
-
-                # 处理转增（类似送股）
-                transfer_ratio = action.get('transfer_ratio', 0)
-                if transfer_ratio > 0:
-                    transfer_shares = int(position.volume * transfer_ratio / 10)
-                    if transfer_shares > 0:
-                        position.volume += transfer_shares
-                        position.available_volume += transfer_shares
-                        Log.logger.info(f"[转增] {symbol} 每10股转增{transfer_ratio}股, "
-                                       f"原持仓{position.volume-transfer_shares}股, 获得{transfer_shares}股, "
-                                       f"新持仓{position.volume}股")
-
-                # 更新持仓市值
-                if symbol in self.trade_center.positions:
-                    updated_position = self.trade_center.positions[symbol]
-                    # 获取当前价格
-                    try:
-                        quote = self.data_center.get_quotes([symbol], '1d', current_time)
-                        if not quote.empty and symbol in quote.index:
-                            current_price = quote.loc[symbol, 'close']
-                            updated_position.market_value = updated_position.volume * current_price
-                            updated_position.unrealized_pnl = (current_price - updated_position.cost_price) * updated_position.volume
-                    except Exception as e:
-                        Log.logger.warning(f"更新{symbol}持仓市值失败: {e}")
+            # 更新持仓市值
+            for symbol, position in self.trade_center.positions.items():
+                try:
+                    quote = self.data_center.get_quotes([symbol], '1d', current_time)
+                    if not quote.empty and symbol in quote.index:
+                        current_price = quote.loc[symbol, 'close']
+                        position.market_value = position.volume * current_price
+                        position.unrealized_pnl = (current_price - position.cost_price) * position.volume
+                except Exception as e:
+                    Log.logger.warning(f"更新{symbol}持仓市值失败: {e}")
 
             # 更新账户总资产
             self.trade_center._update_account_value()

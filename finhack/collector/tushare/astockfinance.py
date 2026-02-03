@@ -51,38 +51,84 @@ class TableStateManager:
                 status = self._table_status[db][table_key]
                 return status['exists']
     
-    def mark_table_creating(self, db, table_name):
-        """标记表正在创建中，返回是否成功获取创建权限"""
+    def mark_table_creating(self, db, table_name, max_create_time=600):
+        """
+        标记表正在创建中，返回是否成功获取创建权限
+
+        Args:
+            db: 数据库名
+            table_name: 表名
+            max_create_time: 最大创建时间（秒），超过此时间认为之前创建线程已死，可重新获取权限
+
+        Returns:
+            bool: 是否成功获取创建权限
+        """
         with self._lock:
             if db not in self._table_status:
                 self._table_status[db] = {}
-            
+
             table_key = table_name
-            
+
             # 检查是否已经在创建中
             if table_key in self._table_status[db]:
                 current_status = self._table_status[db][table_key]
+
                 if current_status.get('creating', False):
-                    Log.logger.debug(f"表 {table_name} 已由其他线程标记为创建中，当前线程等待")
-                    return False  # 其他线程已经在创建
+                    # 检查创建是否已经超时
+                    start_time = current_status.get('start_time', 0)
+                    if start_time > 0 and (time.time() - start_time) > max_create_time:
+                        Log.logger.warning(f"表 {table_name} 创建已超时 {(time.time() - start_time):.0f} 秒，强制重新获取创建权限")
+                        # 重置状态，允许当前线程创建
+                    else:
+                        Log.logger.debug(f"表 {table_name} 已由其他线程标记为创建中，当前线程等待")
+                        return False  # 其他线程已经在创建
+
                 elif current_status.get('exists', False):
                     Log.logger.debug(f"表 {table_name} 已存在，无需创建")
                     return False  # 表已存在
-            
-            # 设置创建中状态
-            self._table_status[db][table_key] = {'exists': False, 'creating': True}
+
+            # 设置创建中状态，并记录开始时间
+            self._table_status[db][table_key] = {
+                'exists': False,
+                'creating': True,
+                'start_time': time.time()
+            }
             Log.logger.debug(f"成功标记表 {table_name} 为创建中状态")
             return True  # 成功获取创建权限
     
-    def mark_table_created(self, db, table_name):
-        """标记表已创建完成"""
+    def mark_table_created(self, db, table_name, actual_exists=None):
+        """
+        标记表已创建完成
+
+        Args:
+            db: 数据库名
+            table_name: 表名
+            actual_exists: 实际存在状态（如果为None则查询数据库确认）
+        """
         with self._lock:
             if db not in self._table_status:
                 self._table_status[db] = {}
-            
+
             table_key = table_name
-            self._table_status[db][table_key] = {'exists': True, 'creating': False}
-            Log.logger.info(f"表 {table_name} 已创建完成")
+
+            # 如果提供了实际存在状态，使用它；否则查询数据库
+            if actual_exists is None:
+                try:
+                    adapter = DB.get_adapter(db)
+                    actual_exists = adapter.table_exists(table_name)
+                except Exception as e:
+                    Log.logger.warning(f"无法确认表 {table_name} 存在状态: {str(e)}")
+                    actual_exists = True  # 保守假设创建成功
+
+            self._table_status[db][table_key] = {
+                'exists': actual_exists,
+                'creating': False
+            }
+
+            if actual_exists:
+                Log.logger.info(f"表 {table_name} 已创建完成")
+            else:
+                Log.logger.warning(f"表 {table_name} 标记为已创建，但实际不存在")
     
     def is_table_creating(self, db, table_name):
         """检查表是否正在创建中"""
@@ -97,22 +143,81 @@ class TableStateManager:
             return self._table_status[db][table_key].get('creating', False)
     
     def wait_for_table_creation(self, db, table_name, timeout=300):
-        """等待表创建完成"""
+        """
+        等待表创建完成（线程安全，原子状态检查）
+
+        使用单次原子操作检查状态，避免两次检查之间的竞态条件。
+        超时后验证实际数据库状态，避免错误清除creating状态。
+        """
         start_time = time.time()
+        check_count = 0
+
         while time.time() - start_time < timeout:
-            if not self.is_table_creating(db, table_name):
-                return self.is_table_exists(db, table_name)
-            time.sleep(1)  # 等待1秒后重试
-        
-        Log.logger.warning(f"等待表 {table_name} 创建超时")
-        
-        # 超时后强制清除creating状态，防止死锁
-        with self._lock:
-            if db in self._table_status and table_name in self._table_status[db]:
-                self._table_status[db][table_name] = {'exists': False, 'creating': False}
-                Log.logger.warning(f"已清除表 {table_name} 的creating状态")
-        
-        return False
+            check_count += 1
+
+            # 在锁保护下原子获取当前状态
+            with self._lock:
+                if db not in self._table_status:
+                    self._table_status[db] = {}
+
+                table_key = table_name
+                status = self._table_status[db].get(table_key, {
+                    'exists': False,
+                    'creating': False
+                })
+
+                is_creating = status.get('creating', False)
+                exists = status.get('exists', False)
+
+                # 如果不在创建中，直接返回存在状态
+                if not is_creating:
+                    Log.logger.debug(f"表 {table_name} 不在创建中，当前状态: exists={exists}")
+                    return exists
+
+            # 表仍在创建中，等待后重试
+            if check_count % 10 == 0:  # 每10秒记录一次日志
+                elapsed = int(time.time() - start_time)
+                Log.logger.info(f"已等待表 {table_name} 创建 {elapsed} 秒...")
+
+            time.sleep(1)
+
+        # 超时处理：先查询实际数据库状态，再决定如何处理
+        Log.logger.warning(f"等待表 {table_name} 创建超时 ({timeout}秒)")
+
+        try:
+            # 查询实际数据库状态
+            adapter = DB.get_adapter(db)
+            actually_exists = adapter.table_exists(table_name)
+
+            with self._lock:
+                current_status = self._table_status.get(db, {}).get(table_name, {})
+
+                if actually_exists:
+                    # 表实际已存在，更新状态
+                    self._table_status[db][table_name] = {'exists': True, 'creating': False}
+                    Log.logger.info(f"表 {table_name} 实际已存在，更新状态为 exists=True")
+                    return True
+                elif current_status.get('creating', False):
+                    # 表不存在且仍在creating状态，可能是创建线程卡死
+                    # 查询数据库确认没有其他活跃线程在操作该表
+                    Log.logger.warning(f"表 {table_name} 创建超时且不存在，可能存在死锁，重置状态")
+                    self._table_status[db][table_name] = {'exists': False, 'creating': False}
+                    return False
+                else:
+                    # 状态已被其他线程更新
+                    return current_status.get('exists', False)
+
+        except Exception as e:
+            Log.logger.error(f"超时后检查表 {table_name} 状态失败: {str(e)}")
+
+            # 保守处理：如果无法确认状态，保留creating标记
+            with self._lock:
+                if db in self._table_status and table_name in self._table_status[db]:
+                    current = self._table_status[db][table_name]
+                    if current.get('creating', False):
+                        Log.logger.warning(f"无法确认表 {table_name} 状态，保守保留creating标记")
+
+            return False
     
 
     def clear_cache(self, db=None, table_name=None):
@@ -129,6 +234,63 @@ class TableStateManager:
                 if db in self._table_status and table_name in self._table_status[db]:
                     del self._table_status[db][table_name]
                     Log.logger.debug(f"清除表 {table_name} 的状态缓存")
+
+    def get_table_status(self, db, table_name):
+        """
+        原子获取表的当前状态
+
+        Returns:
+            dict: {'exists': bool, 'creating': bool}
+        """
+        with self._lock:
+            if db not in self._table_status:
+                return {'exists': False, 'creating': False}
+
+            status = self._table_status[db].get(table_name, {
+                'exists': False,
+                'creating': False
+            })
+            return status.copy()
+
+    def refresh_table_status(self, db, table_name):
+        """
+        从数据库刷新表状态，纠正可能不一致的缓存
+
+        Returns:
+            bool: 表是否实际存在
+        """
+        try:
+            adapter = DB.get_adapter(db)
+            actually_exists = adapter.table_exists(table_name)
+
+            with self._lock:
+                if db not in self._table_status:
+                    self._table_status[db] = {}
+
+                current = self._table_status[db].get(table_name, {})
+                is_creating = current.get('creating', False)
+
+                # 如果表实际存在，确保状态一致
+                if actually_exists:
+                    self._table_status[db][table_name] = {
+                        'exists': True,
+                        'creating': False
+                    }
+                    if is_creating:
+                        Log.logger.info(f"刷新状态: 表 {table_name} 已存在，纠正creating状态")
+                else:
+                    # 表不存在，保留creating状态（如果有）
+                    self._table_status[db][table_name] = {
+                        'exists': False,
+                        'creating': is_creating
+                    }
+
+                return actually_exists
+
+        except Exception as e:
+            Log.logger.error(f"刷新表 {table_name} 状态失败: {str(e)}")
+            # 出错时返回缓存状态
+            return self.get_table_status(db, table_name).get('exists', False)
 
 # 全局表状态管理器实例
 table_state_manager = TableStateManager()
@@ -353,25 +515,37 @@ class tsAStockFinance:
                 return None
         
         thread_count=3
-        Log.logger.info(f"开始使用{thread_count}个线程筛选{table}-{report_type}需要更新的股票，总数: {len(all_stock_list)}")
-        
+        batch_size = 100  # 每批处理的股票数量，控制内存使用
+        Log.logger.info(f"开始使用{thread_count}个线程分批筛选{table}-{report_type}需要更新的股票，总数: {len(all_stock_list)}，每批{batch_size}只")
+
         return_list = []
-        
-        # 使用多线程并行处理股票筛选
-        with ThreadPoolExecutor(max_workers=thread_count, thread_name_prefix="StockFilter") as executor:
-            # 提交所有股票检查任务
-            futures = {executor.submit(check_stock, ts_code): ts_code for ts_code in all_stock_list}
-            
-            # 收集结果
-            for future in as_completed(futures):
-                ts_code = futures[future]
-                try:
-                    result = future.result()
-                    if result is not None:  # 如果返回的不是None，说明需要处理
-                        return_list.append(result)
-                except Exception as e:
-                    Log.logger.error(f"处理股票{ts_code}时出现异常: {str(e)}")
-        
+
+        # 分批处理股票，避免一次性创建大量Future对象导致内存泄漏
+        for batch_start in range(0, len(all_stock_list), batch_size):
+            batch_end = min(batch_start + batch_size, len(all_stock_list))
+            batch = all_stock_list[batch_start:batch_end]
+
+            Log.logger.debug(f"处理第{batch_start//batch_size + 1}批股票 ({batch_start}-{batch_end-1})")
+
+            # 使用多线程并行处理当前批次
+            with ThreadPoolExecutor(max_workers=thread_count, thread_name_prefix="StockFilter") as executor:
+                # 提交当前批次的股票检查任务
+                futures = {executor.submit(check_stock, ts_code): ts_code for ts_code in batch}
+
+                # 收集结果
+                for future in as_completed(futures):
+                    ts_code = futures[future]
+                    try:
+                        result = future.result()
+                        if result is not None:  # 如果返回的不是None，说明需要处理
+                            return_list.append(result)
+                    except Exception as e:
+                        Log.logger.error(f"处理股票{ts_code}时出现异常: {str(e)}")
+
+            # 显式清理批次相关变量，帮助垃圾回收
+            del futures
+            del batch
+
         Log.logger.info(f"{table}-{report_type}筛选完成，需要更新的股票数量: {len(return_list)}/{len(all_stock_list)}")
         print(return_list)
 
