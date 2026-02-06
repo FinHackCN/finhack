@@ -368,7 +368,15 @@ class EventManager:
             delisting_date = event.data.get('delisting_date')
             
             self.logger.info(f"处理退市事件: {symbol}, 退市日期: {delisting_date}")
-            
+
+            # 更新股票状态为退市
+            if self.context and hasattr(self.context, 'data_center'):
+                data_center = self.context.data_center
+                if hasattr(data_center, 'update_trading_status'):
+                    delisting_reason = event.data.get('delisting_reason', '退市')
+                    data_center.update_trading_status(symbol, 'delisted', delisting_reason)
+                    self.logger.info(f"[退市处理] {symbol} 已标记为退市")
+
             # 强制清仓
             if self.context and hasattr(self.context, 'portfolio'):
                 portfolio = self.context.portfolio

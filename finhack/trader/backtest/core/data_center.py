@@ -77,6 +77,10 @@ class DataCenter:
         self._use_memory_map = False  # 默认不启用内存映射（对大文件可能更快）
         self._min_rows_for_dtype_opt = 500000  # 数据类型优化的最小行数
 
+        # 【新增】股票交易状态管理（停牌/退市）
+        self._trading_status = {}  # 格式: {symbol: {'status': 'active'/'suspended'/'delisted', 'reason': str, 'since': datetime}}
+        self._trading_status_lock = threading.Lock()
+
         logger.info(f"数据中心初始化完成: {market} {freq} (使用统一数据接口，支持按月预加载)")
 
     def _get_parquet_metadata(self, parquet_file: str):
@@ -139,7 +143,79 @@ class DataCenter:
         if parquet_meta_cache_ttl is not None:
             self._parquet_meta_cache_ttl = parquet_meta_cache_ttl
             logger.info(f"[性能配置] 元数据缓存TTL: {parquet_meta_cache_ttl}秒")
-    
+
+    def update_trading_status(self, symbol: str, status: str, reason: str = ""):
+        """更新股票交易状态（停牌/复牌/退市）
+
+        Args:
+            symbol: 股票代码
+            status: 交易状态 ('active':正常交易, 'suspended':停牌, 'delisted':退市)
+            reason: 状态变更原因
+        """
+        with self._trading_status_lock:
+            from datetime import datetime
+            self._trading_status[symbol] = {
+                'status': status,
+                'reason': reason,
+                'since': datetime.now()
+            }
+            logger.info(f"[交易状态] {symbol} 状态更新为: {status}, 原因: {reason}")
+
+    def get_trading_status(self, symbol: str) -> dict:
+        """获取股票交易状态
+
+        Args:
+            symbol: 股票代码
+
+        Returns:
+            交易状态字典，如果未记录则返回正常交易状态
+        """
+        with self._trading_status_lock:
+            return self._trading_status.get(symbol, {
+                'status': 'active',
+                'reason': '',
+                'since': None
+            })
+
+    def is_tradable(self, symbol: str) -> bool:
+        """检查股票是否可交易
+
+        Args:
+            symbol: 股票代码
+
+        Returns:
+            True: 可交易, False: 停牌或退市
+        """
+        status_info = self.get_trading_status(symbol)
+        return status_info['status'] == 'active'
+
+    def get_suspended_stocks(self) -> list:
+        """获取当前停牌的股票列表
+
+        Returns:
+            停牌股票代码列表
+        """
+        with self._trading_status_lock:
+            return [symbol for symbol, info in self._trading_status.items()
+                    if info['status'] == 'suspended']
+
+    def get_delisted_stocks(self) -> list:
+        """获取已退市的股票列表
+
+        Returns:
+            退市股票代码列表
+        """
+        with self._trading_status_lock:
+            return [symbol for symbol, info in self._trading_status.items()
+                    if info['status'] == 'delisted']
+
+    def clear_trading_status(self):
+        """清除所有交易状态记录"""
+        with self._trading_status_lock:
+            count = len(self._trading_status)
+            self._trading_status.clear()
+            logger.info(f"[交易状态] 已清除 {count} 条状态记录")
+
     def set_context(self, context: Dict[str, Any]):
         """设置上下文
         

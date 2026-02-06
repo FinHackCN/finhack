@@ -663,7 +663,18 @@ class TradeCenter:
                 if self._context:
                     self._context.logger.error(f"无效的股票代码: {order.symbol}")
                 return False
-            
+
+            # 【新增】检查股票是否停牌或退市
+            if not self._is_tradable(order.symbol):
+                status_info = self._get_trading_status(order.symbol)
+                status = status_info.get('status', 'unknown')
+                reason = status_info.get('reason', '')
+                if self._context:
+                    self._context.logger.error(f"股票不可交易: {order.symbol}, 状态: {status}, 原因: {reason}")
+                order.status = OrderStatus.REJECTED
+                order.rejected_reason = f"股票不可交易: {status} - {reason}"
+                return False
+
             # 检查限价单价格
             if order.order_type == OrderType.LIMIT and (not order.price or order.price <= 0):
                 if self._context:
@@ -1009,7 +1020,41 @@ class TradeCenter:
                 return False
         
         return True
-    
+
+    def _is_tradable(self, symbol: str) -> bool:
+        """检查股票是否可交易
+
+        Args:
+            symbol: 股票代码
+
+        Returns:
+            True: 可交易, False: 停牌或退市
+        """
+        # 如果 data_center 可用，从 data_center 获取状态
+        if self._context and hasattr(self._context, 'data_center'):
+            data_center = self._context.data_center
+            if hasattr(data_center, 'is_tradable'):
+                return data_center.is_tradable(symbol)
+        # 默认允许交易（兼容旧代码）
+        return True
+
+    def _get_trading_status(self, symbol: str) -> dict:
+        """获取股票交易状态
+
+        Args:
+            symbol: 股票代码
+
+        Returns:
+            交易状态字典
+        """
+        # 如果 data_center 可用，从 data_center 获取状态
+        if self._context and hasattr(self._context, 'data_center'):
+            data_center = self._context.data_center
+            if hasattr(data_center, 'get_trading_status'):
+                return data_center.get_trading_status(symbol)
+        # 默认返回正常交易状态
+        return {'status': 'active', 'reason': '', 'since': None}
+
     def _fill_order(self, order: Order, fill_quantity: float, fill_price: float):
         """成交订单"""
         try:
