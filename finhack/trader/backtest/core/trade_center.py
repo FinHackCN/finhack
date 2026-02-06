@@ -14,8 +14,10 @@ from finhack.trader.backtest.models.enums import (
     OrderType,
     AssetTypeEnum,
     ExchangeEnum,
+    PositionSide,
 )
 from finhack.trader.backtest.models.instrument import Instrument
+from finhack.trader.backtest.models.position import Position
 from finhack.trader.backtest.events.event_types import EventTypeEnum
 
 
@@ -69,63 +71,6 @@ class Trade:
             self.timestamp = datetime.now()
 
 
-@dataclass
-class Position:
-    """持仓对象"""
-    symbol: str
-    quantity: float = 0.0
-    available_quantity: float = 0.0  # 可用数量（考虑T+1等规则）
-    avg_cost: float = 0.0
-    market_value: float = 0.0
-    unrealized_pnl: float = 0.0
-    realized_pnl: float = 0.0
-    last_price: float = 0.0
-    updated_at: datetime = None
-
-    # 新增字段以兼容旧接口
-    frozen_quantity: float = 0.0      # 冻结数量（T+1规则：当日买入的持仓）
-    total_cost: float = 0.0           # 总成本
-    total_value: float = 0.0          # 总价值
-    amount: float = 0.0               # 兼容字段：总数量
-    enable_amount: float = 0.0        # 兼容字段：可用数量
-    last_sale_price: float = 0.0      # 兼容字段：最新价格
-    cost_basis: float = 0.0           # 兼容字段：成本基础
-
-    # T+1 规则相关字段
-    buy_dates: list = None            # 记录每批买入的日期和数量 [(date, quantity), ...]
-                                    # 用于判断哪些持仓是当日买入的（不可卖）
-
-    def __post_init__(self):
-        if self.updated_at is None:
-            self.updated_at = datetime.now()
-
-        # 初始化 T+1 规则相关字段
-        if self.buy_dates is None:
-            self.buy_dates = []
-
-        # 设置兼容字段
-        self.amount = self.quantity
-        self.enable_amount = self.available_quantity
-        self.last_sale_price = self.last_price
-        self.cost_basis = self.avg_cost
-        self.total_value = self.market_value
-
-    def get_sellable_quantity(self, current_date: datetime) -> float:
-        """
-        获取可卖出数量（考虑T+1规则）
-
-        Args:
-            current_date: 当前日期
-
-        Returns:
-            可卖出数量
-        """
-        sellable = 0.0
-        for buy_date, qty in self.buy_dates:
-            # 判断是否是昨日及之前买入的（T+1：当日买入不可卖）
-            if buy_date and buy_date.date() < current_date.date():
-                sellable += qty
-        return sellable
 
 
 class TradeCenter:
@@ -702,15 +647,15 @@ class TradeCenter:
             
             # 检查最小交易单位
             min_quantity = self.trading_rules.get("min_order_quantity", 1)
-            if order.quantity < min_quantity:
+            if order.volume < min_quantity:
                 if self._context:
-                    self._context.logger.error(f"订单数量低于最小交易单位: {order.quantity} < {min_quantity}")
+                    self._context.logger.error(f"订单数量低于最小交易单位: {order.volume} < {min_quantity}")
                 return False
             
             # 检查交易数量是否为最小单位的整数倍
-            if order.quantity % min_quantity != 0:
+            if order.volume % min_quantity != 0:
                 if self._context:
-                    self._context.logger.error(f"订单数量必须是{min_quantity}的整数倍: {order.quantity}")
+                    self._context.logger.error(f"订单数量必须是{min_quantity}的整数倍: {order.volume}")
                 return False
             
             # 检查股票代码格式
@@ -737,10 +682,10 @@ class TradeCenter:
             # 检查持仓是否足够（卖出时）
             elif order.side == OrderSide.SELL:
                 position = self.positions.get(order.symbol)
-                available_quantity = position.available_quantity if position else 0
-                if available_quantity < order.quantity:
+                available_quantity = position.available_volume if position else 0
+                if available_quantity < order.volume:
                     if self._context:
-                        self._context.logger.error(f"持仓不足: 需要{order.quantity}, 可用{available_quantity}")
+                        self._context.logger.error(f"持仓不足: 需要{order.volume}, 可用{available_quantity}")
                     return False
             
             return True
@@ -761,7 +706,7 @@ class TradeCenter:
         price = current_price if order.order_type == OrderType.MARKET else (order.price or current_price)
         
         # 计算成本（包含手续费）
-        trade_value = price * order.quantity
+        trade_value = price * order.volume
         commission = self._calculate_commission(trade_value, order.side)
         
         return trade_value + commission
@@ -869,7 +814,7 @@ class TradeCenter:
             # 增强的撮合逻辑
             can_fill = False
             fill_price = current_price
-            fill_quantity = order.quantity - order.filled_quantity
+            fill_quantity = order.volume - order.filled_quantity
 
             if order.order_type == OrderType.MARKET:
                 # 市价单：立即成交，但增加滑点（基于固定价格）
@@ -910,15 +855,15 @@ class TradeCenter:
                     self._fill_order(order, actual_fill_quantity, fill_price)
 
                     # 如果还有剩余未成交，设置为部分成交状态，将在下次事件中继续尝试
-                    if order.filled_quantity < order.quantity:
+                    if order.filled_quantity < order.volume:
                         order.status = OrderStatus.PARTIALLY_FILLED
                         if self._context:
-                            remaining = order.quantity - order.filled_quantity
-                            self._context.logger.info(f"订单部分成交: {order.symbol} 已成交{order.filled_quantity}/{order.quantity}, 剩余{remaining}")
+                            remaining = order.volume - order.filled_quantity
+                            self._context.logger.info(f"订单部分成交: {order.symbol} 已成交{order.filled_quantity}/{order.volume}, 剩余{remaining}")
                     else:
                         order.status = OrderStatus.FILLED
                         if self._context:
-                            self._context.logger.info(f"订单完全成交: {order.symbol} {order.side.value} {order.quantity}")
+                            self._context.logger.info(f"订单完全成交: {order.symbol} {order.side.value} {order.volume}")
                 else:
                     if self._context:
                         self._context.logger.debug(f"订单暂未成交: {order.symbol} {order.side.value} - 成交量不足最小单位({min_lot}股)")
@@ -988,11 +933,11 @@ class TradeCenter:
         
         # 根据订单大小调整滑点
         volume_adjustment = 1.0
-        if order.quantity > 10000:
+        if order.volume > 10000:
             volume_adjustment = 1.2  # 大额订单增加20%滑点
-        elif order.quantity > 50000:
+        elif order.volume > 50000:
             volume_adjustment = 1.5  # 超大额订单增加50%滑点
-        elif order.quantity > 100000:
+        elif order.volume > 100000:
             volume_adjustment = 2.0  # 巨额订单增加100%滑点
         
         # 根据订单类型调整滑点
@@ -1016,10 +961,10 @@ class TradeCenter:
         # 模拟市场流动性限制
         if order.order_type == OrderType.MARKET:
             # 市价单可以成交更多
-            return min(order.quantity, 100000)
+            return min(order.volume, 100000)
         else:
             # 限价单成交量相对较小
-            return min(order.quantity, 50000)
+            return min(order.volume, 50000)
     
     def _schedule_next_fill_attempt(self, order: Order):
         """安排下次撮合尝试"""
@@ -1068,10 +1013,40 @@ class TradeCenter:
     def _fill_order(self, order: Order, fill_quantity: float, fill_price: float):
         """成交订单"""
         try:
-            # 计算手续费
+            # 计算成交金额和手续费
             trade_value = fill_quantity * fill_price
             commission = self._calculate_commission(trade_value, order.side)
-            
+            total_cost = trade_value + commission
+
+            # 买入订单：检查资金是否充足（防止超额交易）
+            if order.side == OrderSide.BUY:
+                if self._context and hasattr(self._context, 'account'):
+                    available_cash = self._context.account.cash_available
+                    if available_cash < total_cost:
+                        if self._context:
+                            self._context.logger.error(
+                                f"资金不足，订单无法成交: {order.symbol} 需要{total_cost:.2f}元，"
+                                f"可用{available_cash:.2f}元"
+                            )
+                        # 将订单标记为拒绝
+                        order.status = OrderStatus.REJECTED
+                        order.rejected_reason = f"资金不足: 需要{total_cost:.2f}, 可用{available_cash:.2f}"
+                        return
+
+            # 卖出订单：检查持仓是否充足
+            elif order.side == OrderSide.SELL:
+                position = self.positions.get(order.symbol)
+                available_qty = position.available_volume if position else 0
+                if available_qty < fill_quantity:
+                    if self._context:
+                        self._context.logger.error(
+                            f"持仓不足，订单无法成交: {order.symbol} 需要{fill_quantity}股，"
+                            f"可用{available_qty}股"
+                        )
+                    order.status = OrderStatus.REJECTED
+                    order.rejected_reason = f"持仓不足: 需要{fill_quantity}, 可用{available_qty}"
+                    return
+
             # 生成成交记录
             trade_id = str(uuid.uuid4())
             trade = Trade(
@@ -1094,7 +1069,7 @@ class TradeCenter:
             order.commission += commission
             order.updated_at = self._get_backtest_time()
             
-            if order.filled_quantity >= order.quantity:
+            if order.filled_quantity >= order.volume:
                 order.status = OrderStatus.FILLED
             else:
                 order.status = OrderStatus.PARTIALLY_FILLED
@@ -1130,50 +1105,54 @@ class TradeCenter:
                         price: float, commission: float):
         """更新持仓（增强版，正确实现T+1规则）"""
         if symbol not in self.positions:
-            self.positions[symbol] = Position(symbol=symbol)
+            self.positions[symbol] = Position(
+                account_id="default",
+                symbol=symbol,
+                position_side=PositionSide.LONG
+            )
 
         position = self.positions[symbol]
         current_time = self._get_backtest_time()
 
         if side == OrderSide.BUY:
-            # 买入：增加持仓
-            if position.quantity > 0:
-                # 已有持仓，计算新的平均成本
-                total_cost = position.quantity * position.avg_cost + quantity * price + commission
-                position.quantity += quantity
-                position.avg_cost = total_cost / position.quantity
+            # 买入：增加持仓（成本价计算包含交易费用）
+            if position.volume > 0:
+                # 已有持仓，计算新的加权平均成本
+                # 旧总成本 = 旧持仓量 * 旧成本价
+                old_total_cost = position.volume * position.cost_price
+                # 新成本 = 成交金额 + 交易费用（费用分摊到每股）
+                new_total_cost = quantity * price + commission
+
+                position.volume += quantity
+                # 新的加权平均成本价 = (旧总成本 + 新总成本) / 总持仓量
+                position.cost_price = (old_total_cost + new_total_cost) / position.volume
             else:
                 # 新建持仓
-                position.quantity = quantity
-                position.avg_cost = price + commission / quantity
+                position.volume = quantity
+                # 成本价包含交易费用分摊（每股成本 = 成交价 + 每股费用）
+                position.cost_price = price + commission / quantity if quantity > 0 else price
 
             # T+1规则处理
             if self.trading_rules.get("t1_rule", False):
-                # 当日买入的股票不能卖出，冻结数量增加
-                position.frozen_quantity += quantity
-
                 # 记录买入日期，用于T+1解锁（使用元组列表）
                 if position.buy_dates is None:
                     position.buy_dates = []
                 position.buy_dates.append((current_time, quantity))
-
-                # 计算可用数量：总持仓 - 冻结数量
-                position.available_quantity = position.quantity - position.frozen_quantity
+                # 注意：T+1规则下，新买入的股票不可用，available_volume 保持不变
+                # frozen_volume 是计算属性 (volume - available_volume)，不需要直接设置
             else:
-                position.available_quantity = position.quantity
+                position.available_volume = position.volume
 
         else:
             # 卖出：减少持仓
-            if position.quantity >= quantity:
-                position.quantity -= quantity
+            if position.volume >= quantity:
+                position.volume -= quantity
 
                 # T+1规则处理：检查可用数量
                 if self.trading_rules.get("t1_rule", False):
                     # 从可用数量中扣除
-                    position.available_quantity = max(0, position.available_quantity - quantity)
-
-                    # 更新冻结数量
-                    position.frozen_quantity = position.quantity - position.available_quantity
+                    position.available_volume = max(0, position.available_volume - quantity)
+                    # 注意：frozen_volume 是计算属性 (volume - available_volume)，不需要直接设置
 
                     # 如果卖出了今日买入的股票，需要更新buy_dates记录
                     if position.buy_dates:
@@ -1202,10 +1181,10 @@ class TradeCenter:
 
                         position.buy_dates = updated_buy_dates
                 else:
-                    position.available_quantity = max(0, position.available_quantity - quantity)
+                    position.available_volume = max(0, position.available_volume - quantity)
 
                 # 计算已实现盈亏
-                realized_pnl = (price - position.avg_cost) * quantity - commission
+                realized_pnl = (price - position.cost_price) * quantity - commission
                 position.realized_pnl += realized_pnl
 
                 # 更新账户的已实现盈亏
@@ -1214,23 +1193,26 @@ class TradeCenter:
 
         # 更新市值和未实现盈亏
         current_price = self.get_price(symbol=symbol)
-        if current_price and position.quantity > 0:
+        if current_price and current_price > 0 and position.volume > 0:
             position.last_price = current_price
-            position.market_value = position.quantity * current_price
-            position.unrealized_pnl = (current_price - position.avg_cost) * position.quantity
+            position.market_value = position.volume * current_price
+            position.unrealized_pnl = (current_price - position.cost_price) * position.volume
+        elif position.volume > 0 and position.last_price > 0:
+            # 如果get_price失败，使用last_price保持市值
+            position.market_value = position.volume * position.last_price
+            position.unrealized_pnl = (position.last_price - position.cost_price) * position.volume
+        elif position.volume > 0:
+            # 两者都失败，记录警告但不改变市值（保持之前的值）
+            if self._context:
+                self._context.logger.warning(
+                    f"无法更新{symbol}市值: 价格无效(current_price={current_price}, last_price={position.last_price}), "
+                    f"保持原市值={position.market_value:.2f}"
+                )
 
-        position.updated_at = current_time
-
-        # 同步兼容字段
-        position.amount = position.quantity
-        position.enable_amount = position.available_quantity
-        position.last_sale_price = position.last_price
-        position.cost_basis = position.avg_cost
-        position.total_value = position.market_value
-        position.total_cost = position.avg_cost * position.quantity
+        position.timestamp_updated = current_time
 
         # 如果持仓为0，移除持仓记录
-        if position.quantity <= 0:
+        if position.volume <= 0:
             if symbol in self.positions:
                 del self.positions[symbol]
     
@@ -1265,7 +1247,14 @@ class TradeCenter:
         
         # 更新组合现金
         self._context.portfolio.cash = self._context.account.cash
-        
+
+        # 同步更新 context['account'] 字典（保持数据一致性）
+        if 'account' in self._context:
+            self._context['account']['cash_available'] = self._context.account.available_cash
+            self._context['account']['total_assets'] = (
+                self._context.account.cash + sum(pos.market_value for pos in self.positions.values())
+            )
+
         # 更新总资产
         self._context.update_portfolio_value()
     
@@ -1418,8 +1407,8 @@ class TradeCenter:
             current_price = self.get_price(symbol=symbol)
             if current_price:
                 position.last_price = current_price
-                position.market_value = position.quantity * current_price
-                position.unrealized_pnl = (current_price - position.avg_cost) * position.quantity
+                position.market_value = position.volume * current_price
+                position.unrealized_pnl = (current_price - position.cost_price) * position.volume
         
         # 更新账户总价值
         context.update_portfolio_value()
@@ -1512,9 +1501,9 @@ class TradeCenter:
             
             # 解冻股票
             if unlock_quantity > 0:
-                position.available_quantity += unlock_quantity
-                position.frozen_quantity = max(0, position.frozen_quantity - unlock_quantity)
-                position.enable_amount = position.available_quantity
+                position.available_volume += unlock_quantity
+                position.frozen_volume = max(0, position.frozen_volume - unlock_quantity)
+                position.available_volume = position.available_volume
                 
                 if self._context:
                     self._context.logger.debug(f"T+1解冻: {symbol} 解冻数量 {unlock_quantity}")
@@ -1538,12 +1527,12 @@ class TradeCenter:
             current_price = self.get_price(symbol=symbol)
             if current_price:
                 position.last_price = current_price
-                position.market_value = position.quantity * current_price
-                position.unrealized_pnl = (current_price - position.avg_cost) * position.quantity
+                position.market_value = position.volume * current_price
+                position.unrealized_pnl = (current_price - position.cost_price) * position.volume
                 
                 # 更新兼容字段
-                position.last_sale_price = current_price
-                position.total_value = position.market_value
+                position.last_price = current_price
+                position.market_value = position.market_value
     
     def _validate_pending_orders(self):
         """验证所有待处理订单"""
@@ -1568,10 +1557,10 @@ class TradeCenter:
             current_price = self.get_price(symbol=symbol)
             if current_price and current_price != position.last_price:
                 position.last_price = current_price
-                position.market_value = position.quantity * current_price
-                position.unrealized_pnl = (current_price - position.avg_cost) * position.quantity
-                position.last_sale_price = current_price
-                position.total_value = position.market_value
+                position.market_value = position.volume * current_price
+                position.unrealized_pnl = (current_price - position.cost_price) * position.volume
+                position.last_price = current_price
+                position.market_value = position.market_value
                 updated_count += 1
         
         if self._context and updated_count > 0:
@@ -1703,10 +1692,10 @@ class TradeCenter:
             'total_trades': len(all_trades),
             'buy_trades': len(buy_trades),
             'sell_trades': len(sell_trades),
-            'buy_volume': sum(t.quantity for t in buy_trades),
-            'sell_volume': sum(t.quantity for t in sell_trades),
-            'buy_value': sum(t.quantity * t.price for t in buy_trades),
-            'sell_value': sum(t.quantity * t.price for t in sell_trades),
+            'buy_volume': sum(t.volume for t in buy_trades),
+            'sell_volume': sum(t.volume for t in sell_trades),
+            'buy_value': sum(t.volume * t.price for t in buy_trades),
+            'sell_value': sum(t.volume * t.price for t in sell_trades),
             'total_commission': sum(t.commission for t in all_trades)
         }
     
@@ -1718,8 +1707,8 @@ class TradeCenter:
             current_price = self.get_price(symbol=symbol)
             if current_price:
                 position.last_price = current_price
-                position.market_value = position.quantity * current_price
-                position.unrealized_pnl = (current_price - position.avg_cost) * position.quantity
+                position.market_value = position.volume * current_price
+                position.unrealized_pnl = (current_price - position.cost_price) * position.volume
                 total_unrealized_pnl += position.unrealized_pnl
         
         if self._context:
@@ -1763,14 +1752,17 @@ class TradeCenter:
             position = self.positions[symbol]
             
             # 计算分红金额
-            dividend_amount = position.quantity * dividend_per_share
+            dividend_amount = position.volume * dividend_per_share
             
             if dividend_amount > 0:
                 # 增加现金
                 if self._context:
                     self._context.account.cash += dividend_amount
                     self._context.account.available_cash += dividend_amount
-                
+                    # 同步更新 context['account'] 字典
+                    if 'account' in self._context:
+                        self._context['account']['cash_available'] = self._context.account.available_cash
+
                 # 更新持仓的已实现盈亏
                 position.realized_pnl += dividend_amount
                 
@@ -1778,7 +1770,7 @@ class TradeCenter:
                 if self._context:
                     self._context.logger.info(
                         f"现金分红: {symbol} 分红金额 {dividend_amount:.2f} "
-                        f"(持仓 {position.quantity} 股, 每股分红 {dividend_per_share:.4f})"
+                        f"(持仓 {position.volume} 股, 每股分红 {dividend_per_share:.4f})"
                     )
                 
                 # 记录分红事件
@@ -1806,28 +1798,25 @@ class TradeCenter:
             position = self.positions[symbol]
             
             # 计算新的股数
-            old_quantity = position.quantity
+            old_quantity = position.volume
             new_quantity = old_quantity * split_ratio
             
             # 计算新的平均成本
-            new_avg_cost = position.avg_cost / split_ratio
+            new_avg_cost = position.cost_price / split_ratio
             
             # 更新持仓信息
-            position.quantity = new_quantity
-            position.amount = new_quantity  # 兼容字段
-            position.avg_cost = new_avg_cost
-            position.cost_basis = new_avg_cost  # 兼容字段
+            position.volume = new_quantity
+            position.volume = new_quantity  # 兼容字段
+            position.cost_price = new_avg_cost
+            position.cost_price = new_avg_cost  # 兼容字段
             
             # 更新可用数量
-            position.available_quantity = position.available_quantity * split_ratio
-            position.enable_amount = position.available_quantity  # 兼容字段
+            position.available_volume = position.available_volume * split_ratio
+            position.available_volume = position.available_volume  # 兼容字段
             
             # 更新冻结数量
-            position.frozen_quantity = position.frozen_quantity * split_ratio
+            position.frozen_volume = position.frozen_volume * split_ratio
             
-            # 更新总成本保持不变
-            position.total_cost = position.quantity * position.avg_cost
-
             # 更新时间戳
             position.updated_at = self._get_backtest_time()
             
@@ -1836,7 +1825,7 @@ class TradeCenter:
                 self._context.logger.info(
                     f"股票分拆: {symbol} 分拆比例 {split_ratio:.2f} "
                     f"(原持仓 {old_quantity} 股 -> 新持仓 {new_quantity} 股, "
-                    f"原成本 {position.avg_cost * split_ratio:.4f} -> 新成本 {new_avg_cost:.4f})"
+                    f"原成本 {position.cost_price * split_ratio:.4f} -> 新成本 {new_avg_cost:.4f})"
                 )
             
             # 记录分拆事件
@@ -1864,21 +1853,21 @@ class TradeCenter:
             position = self.positions[symbol]
             
             # 计算送股数量
-            dividend_shares = position.quantity * dividend_ratio
+            dividend_shares = position.volume * dividend_ratio
             
             if dividend_shares > 0:
                 # 增加股票数量
-                position.quantity += dividend_shares
-                position.amount = position.quantity  # 兼容字段
+                position.volume += dividend_shares
+                position.volume = position.volume  # 兼容字段
                 
                 # 调整平均成本（保持总成本不变）
-                total_cost = position.quantity * position.avg_cost
-                position.avg_cost = total_cost / (position.quantity + dividend_shares)
-                position.cost_basis = position.avg_cost  # 兼容字段
+                total_cost = position.volume * position.cost_price
+                position.cost_price = total_cost / (position.volume + dividend_shares)
+                position.cost_price = position.cost_price  # 兼容字段
                 
                 # 更新可用数量（送股通常立即可用）
-                position.available_quantity += dividend_shares
-                position.enable_amount = position.available_quantity  # 兼容字段
+                position.available_volume += dividend_shares
+                position.available_volume = position.available_volume  # 兼容字段
 
                 # 更新时间戳
                 position.updated_at = self._get_backtest_time()
@@ -1887,7 +1876,7 @@ class TradeCenter:
                 if self._context:
                     self._context.logger.info(
                         f"股票送股: {symbol} 送股比例 {dividend_ratio:.4f} "
-                        f"(获得 {dividend_shares} 股送股, 总持仓 {position.quantity} 股)"
+                        f"(获得 {dividend_shares} 股送股, 总持仓 {position.volume} 股)"
                     )
                 
                 # 记录送股事件
@@ -1916,7 +1905,7 @@ class TradeCenter:
             position = self.positions[symbol]
             
             # 计算配股数量
-            rights_shares = position.quantity * rights_ratio
+            rights_shares = position.volume * rights_ratio
             
             if rights_shares > 0:
                 # 计算配股所需资金
@@ -1927,21 +1916,20 @@ class TradeCenter:
                     # 扣减现金
                     self._context.account.cash -= rights_cost
                     self._context.account.available_cash -= rights_cost
-                    
+                    # 同步更新 context['account'] 字典
+                    if 'account' in self._context:
+                        self._context['account']['cash_available'] = self._context.account.available_cash
+
                     # 增加股票数量
-                    old_quantity = position.quantity
-                    position.quantity += rights_shares
-                    position.amount = position.quantity  # 兼容字段
-                    
+                    old_quantity = position.volume
+                    position.volume += rights_shares
+
                     # 重新计算平均成本
-                    total_cost = old_quantity * position.avg_cost + rights_cost
-                    position.avg_cost = total_cost / position.quantity
-                    position.cost_basis = position.avg_cost  # 兼容字段
-                    position.total_cost = total_cost
-                    
+                    total_cost = old_quantity * position.cost_price + rights_cost
+                    position.cost_price = total_cost / position.volume
+
                     # 更新可用数量
-                    position.available_quantity += rights_shares
-                    position.enable_amount = position.available_quantity  # 兼容字段
+                    position.available_volume += rights_shares
 
                     # 更新时间戳
                     position.updated_at = self._get_backtest_time()
@@ -1951,7 +1939,7 @@ class TradeCenter:
                         self._context.logger.info(
                             f"配股: {symbol} 配股比例 {rights_ratio:.4f} "
                             f"(获得 {rights_shares} 股配股, 配股价 {rights_price:.4f}, "
-                            f"总成本 {rights_cost:.2f}, 总持仓 {position.quantity} 股)"
+                            f"总成本 {rights_cost:.2f}, 总持仓 {position.volume} 股)"
                         )
                     
                     # 记录配股事件
@@ -1986,21 +1974,21 @@ class TradeCenter:
             position = self.positions[symbol]
             
             # 计算转增数量
-            bonus_shares = position.quantity * bonus_ratio
+            bonus_shares = position.volume * bonus_ratio
             
             if bonus_shares > 0:
                 # 增加股票数量
-                old_quantity = position.quantity
-                position.quantity += bonus_shares
-                position.amount = position.quantity  # 兼容字段
+                old_quantity = position.volume
+                position.volume += bonus_shares
+                position.volume = position.volume  # 兼容字段
                 
                 # 调整平均成本（保持总成本不变）
-                position.avg_cost = position.avg_cost * old_quantity / position.quantity
-                position.cost_basis = position.avg_cost  # 兼容字段
+                position.cost_price = position.cost_price * old_quantity / position.volume
+                position.cost_price = position.cost_price  # 兼容字段
                 
                 # 更新可用数量
-                position.available_quantity += bonus_shares
-                position.enable_amount = position.available_quantity  # 兼容字段
+                position.available_volume += bonus_shares
+                position.available_volume = position.available_volume  # 兼容字段
 
                 # 更新时间戳
                 position.updated_at = self._get_backtest_time()
@@ -2009,7 +1997,7 @@ class TradeCenter:
                 if self._context:
                     self._context.logger.info(
                         f"转增股本: {symbol} 转增比例 {bonus_ratio:.4f} "
-                        f"(获得 {bonus_shares} 股转增, 总持仓 {position.quantity} 股)"
+                        f"(获得 {bonus_shares} 股转增, 总持仓 {position.volume} 股)"
                     )
                 
                 # 记录转增事件
@@ -2231,7 +2219,7 @@ class TradeCenter:
                 
                 if not klines_df.empty:
                     # 获取最接近当前时间的数据
-                    symbol_klines = klines_df[klines_df.index.get_level_values('symbol') == symbol]
+                    symbol_klines = klines_df[klines_df.index.get_level_values('code') == symbol]
                     if not symbol_klines.empty:
                         price = float(symbol_klines['close'].iloc[-1])
             
@@ -2323,13 +2311,13 @@ class TradeCenter:
                 if current_price and current_price > 0:
                     # 更新持仓价格和市值
                     position.last_price = current_price
-                    position.last_sale_price = current_price  # 兼容字段
-                    position.market_value = position.quantity * current_price
-                    position.total_value = position.market_value  # 兼容字段
+                    position.last_price = current_price  # 兼容字段
+                    position.market_value = position.volume * current_price
+                    position.market_value = position.market_value  # 兼容字段
                     
                     # 计算未实现盈亏
-                    if position.avg_cost > 0:
-                        position.unrealized_pnl = (current_price - position.avg_cost) * position.quantity
+                    if position.cost_price > 0:
+                        position.unrealized_pnl = (current_price - position.cost_price) * position.volume
 
                     position.updated_at = self._get_backtest_time()
             
@@ -2384,7 +2372,7 @@ class TradeCenter:
 
             # 检查是否有需要解冻的持仓
             for symbol, position in self.positions.items():
-                if position.frozen_quantity > 0 and position.buy_dates:
+                if position.frozen_volume > 0 and position.buy_dates:
                     # 计算应该解冻的数量（昨日及之前买入的）
                     unlock_quantity = 0.0
                     updated_buy_dates = []
@@ -2401,18 +2389,18 @@ class TradeCenter:
 
                     # 更新持仓状态
                     if unlock_quantity > 0:
-                        position.frozen_quantity -= unlock_quantity
-                        position.available_quantity += unlock_quantity
+                        position.frozen_volume -= unlock_quantity
+                        position.available_volume += unlock_quantity
                         position.buy_dates = updated_buy_dates
 
                         # 同步兼容字段
-                        position.enable_amount = position.available_quantity
+                        position.available_volume = position.available_volume
 
                         if self._context:
                             self._context.logger.debug(
                                 f"T+1解冻: {symbol} 解冻数量 {unlock_quantity}, "
-                                f"剩余冻结 {position.frozen_quantity}, "
-                                f"可用数量 {position.available_quantity}"
+                                f"剩余冻结 {position.frozen_volume}, "
+                                f"可用数量 {position.available_volume}"
                             )
 
         except Exception as e:
@@ -2498,7 +2486,7 @@ class TradeCenter:
             total_return = (current_value - initial_cash) / initial_cash if initial_cash > 0 else 0
             
             # 计算持仓统计
-            position_count = len([p for p in self.positions.values() if p.quantity > 0])
+            position_count = len([p for p in self.positions.values() if p.volume > 0])
             total_unrealized_pnl = sum(p.unrealized_pnl for p in self.positions.values())
             total_realized_pnl = sum(p.realized_pnl for p in self.positions.values())
             
@@ -2510,8 +2498,8 @@ class TradeCenter:
             today = datetime.now().date()
             today_trades = [t for t in self.trades.values() if t.timestamp.date() == today]
             today_trade_count = len(today_trades)
-            today_volume = sum(t.quantity for t in today_trades)
-            today_amount = sum(t.quantity * t.price for t in today_trades)
+            today_volume = sum(t.volume for t in today_trades)
+            today_amount = sum(t.volume * t.price for t in today_trades)
             
             return {
                 'account_value': current_value,
@@ -2582,8 +2570,42 @@ class TradeCenter:
                 action_key = (symbol, str(ex_date), action_type)
                 self._processed_corporate_actions.add(action_key)
 
+            # 构建详细的日志信息
+            log_parts = [f"{symbol}"]
+
+            if action_type == 'dividend':
+                dividend = getattr(event, 'dividend_per_share', 0)
+                log_parts.append(f"现金分红 每股{dividend:.4f}元")
+            elif action_type == 'bonus':
+                ratio = getattr(event, 'bonus_ratio', 0)
+                log_parts.append(f"送股 每10股送{ratio*10:.0f}股")
+            elif action_type == 'dividend_bonus':
+                dividend = getattr(event, 'dividend_per_share', 0)
+                ratio = getattr(event, 'bonus_ratio', 0)
+                parts = []
+                if dividend:
+                    parts.append(f"分红{dividend:.4f}元")
+                if ratio:
+                    parts.append(f"送{ratio*10:.0f}股")
+                if parts:
+                    log_parts.append(f"10股: {' '.join(parts)}")
+            elif action_type == 'transfer':
+                ratio = getattr(event, 'transfer_ratio', 0)
+                log_parts.append(f"转增 每10股转增{ratio*10:.0f}股")
+            elif action_type == 'split':
+                ratio = getattr(event, 'split_ratio', 0)
+                log_parts.append(f"拆股 1拆{ratio:.0f}")
+            elif action_type == 'rights':
+                ratio = getattr(event, 'rights_ratio', 0)
+                price = getattr(event, 'rights_price', 0)
+                log_parts.append(f"配股 每10股配{ratio*10:.0f}股 配股价{price:.2f}元")
+            else:
+                log_parts.append(f"{action_type}")
+
+            log_parts.append(f"除权除息日{ex_date}")
+
             if self._context:
-                self._context.logger.info(f"处理公司行为事件: {symbol} {action_type}")
+                self._context.logger.info(f"公司行为: {' | '.join(log_parts)}")
 
         except Exception as e:
             if self._context:
@@ -2618,13 +2640,17 @@ class TradeCenter:
             net_dividend = dividend_amount - tax_amount
 
             # 记录除息前成本
-            old_avg_cost = position.avg_cost
+            old_avg_cost = position.cost_price
             old_total_cost = old_avg_cost * position.volume
 
             # 更新账户现金
             if self._context and hasattr(self._context, 'account'):
                 self._context.account.cash += net_dividend
                 self._context.account.cash_available += net_dividend
+
+                # 同步更新 context['account'] 字典
+                if 'account' in self._context:
+                    self._context['account']['cash_available'] = self._context.account.cash_available
 
                 # 记录已实现收益（分红视为已实现收益）
                 self._context.account.realized_pnl += net_dividend
@@ -2635,8 +2661,8 @@ class TradeCenter:
             new_avg_cost = max(0, old_avg_cost - cost_reduction_per_share)
 
             # 更新持仓成本
-            position.avg_cost = new_avg_cost
-            position.cost_basis = new_avg_cost  # 同步兼容字段
+            position.cost_price = new_avg_cost
+            position.cost_price = new_avg_cost  # 同步兼容字段
 
             # 同步到context中的position（如果存在）
             if self._context and hasattr(self._context, 'portfolio') and self._context.portfolio:
@@ -2661,15 +2687,15 @@ class TradeCenter:
             
             bonus_ratio = event.bonus_ratio  # 送股比例，如0.1表示每10股送1股
             bonus_shares = position.volume * bonus_ratio
-            
+
             # 更新持仓数量
             position.volume += bonus_shares
-            position.available_quantity += bonus_shares
-            
+            position.available_volume += bonus_shares
+
             # 调整成本价
             if position.volume > 0:
-                position.avg_cost = position.avg_cost * (position.volume - bonus_shares) / position.volume
-            
+                position.cost_price = position.cost_price * (position.volume - bonus_shares) / position.volume
+
             if self._context:
                 self._context.logger.info(f"送股处理: {position.symbol} 送股比例{bonus_ratio:.2f}, "
                                        f"送股数量{bonus_shares:.2f}, 新持仓{position.volume:.2f}")
@@ -2685,18 +2711,18 @@ class TradeCenter:
                 return
             
             split_ratio = event.split_ratio  # 拆股比例，如2表示1拆2
-            old_volume = position.volume
-            old_cost = position.avg_cost
-            
+            old_quantity = position.volume
+            old_cost = position.cost_price
+
             # 更新持仓数量和成本价
             position.volume *= split_ratio
-            position.available_quantity *= split_ratio
-            position.avg_cost /= split_ratio
-            
+            position.available_volume *= split_ratio
+            position.cost_price /= split_ratio
+
             if self._context:
                 self._context.logger.info(f"拆股处理: {position.symbol} 拆股比例{split_ratio:.2f}, "
-                                       f"原持仓{old_volume:.2f}@{old_cost:.2f}, "
-                                       f"新持仓{position.volume:.2f}@{position.avg_cost:.2f}")
+                                       f"原持仓{old_quantity:.2f}@{old_cost:.2f}, "
+                                       f"新持仓{position.volume:.2f}@{position.cost_price:.2f}")
         
         except Exception as e:
             if self._context:
@@ -2713,7 +2739,7 @@ class TradeCenter:
             
             # 计算可配股数量
             rights_shares = position.volume * rights_ratio
-            
+
             # 检查是否有足够资金认购
             total_cost = rights_shares * rights_price
             if self._context and hasattr(self._context, 'account'):
@@ -2721,25 +2747,28 @@ class TradeCenter:
                     if self._context:
                         self._context.logger.warning(f"资金不足，无法认购配股: {position.symbol}")
                     return
-                
+
                 # 扣除资金
                 self._context.account.cash -= total_cost
                 self._context.account.cash_available -= total_cost
-                
+                # 同步更新 context['account'] 字典
+                if 'account' in self._context:
+                    self._context['account']['cash_available'] = self._context.account.cash_available
+
                 # 更新持仓
-                old_volume = position.volume
-                old_cost_basis = position.avg_cost * position.volume
-                
+                old_quantity = position.volume
+                old_cost_basis = position.cost_price * position.volume
+
                 position.volume += rights_shares
-                position.available_quantity += rights_shares
-                
+                position.available_volume += rights_shares
+
                 # 重新计算平均成本
-                position.avg_cost = (old_cost_basis + total_cost) / position.volume
-                
+                position.cost_price = (old_cost_basis + total_cost) / position.volume
+
                 if self._context:
                     self._context.logger.info(f"配股处理: {position.symbol} 配股比例{rights_ratio:.2f}, "
                                            f"配股价格{rights_price:.2f}, 配股数量{rights_shares:.2f}, "
-                                           f"原持仓{old_volume:.2f}, 新持仓{position.volume:.2f}@{position.avg_cost:.2f}")
+                                           f"原持仓{old_quantity:.2f}, 新持仓{position.volume:.2f}@{position.cost_price:.2f}")
         
         except Exception as e:
             if self._context:
@@ -2753,18 +2782,10 @@ class TradeCenter:
             if current_price and position.volume > 0:
                 position.last_price = current_price
                 position.market_value = position.volume * current_price
-                position.unrealized_pnl = (current_price - position.avg_cost) * position.volume
-            
+                position.unrealized_pnl = (current_price - position.cost_price) * position.volume
+
             # 更新时间戳
-            position.updated_at = self._get_backtest_time()
-            
-            # 同步兼容字段
-            position.amount = position.volume
-            position.enable_amount = position.available_quantity
-            position.last_sale_price = position.last_price
-            position.cost_basis = position.avg_cost
-            position.total_value = position.market_value
-            position.total_cost = position.avg_cost * position.volume
+            position.timestamp_updated = self._get_backtest_time()
         
         except Exception as e:
             if self._context:
@@ -2960,9 +2981,23 @@ class TradeCenter:
             current_time = self._context.current_dt if self._context and hasattr(self._context, 'current_dt') else datetime.now()
 
             for position in self.positions.values():
-                if position.last_price > 0:
-                    position.market_value = position.quantity * position.last_price
+                # 优先使用get_price获取最新价格，避免last_price过时或为0
+                current_price = self.get_price(symbol=position.symbol)
+                if current_price and current_price > 0:
+                    position.last_price = current_price
+                    position.market_value = position.volume * current_price
                     position.updated_at = current_time
+                elif position.last_price > 0:
+                    # 如果get_price失败，使用last_price作为备选
+                    position.market_value = position.volume * position.last_price
+                    position.updated_at = current_time
+                else:
+                    # 两者都无效，记录警告
+                    if self._context:
+                        self._context.logger.warning(
+                            f"无法更新{position.symbol}的市值: 价格为0或无效, "
+                            f"数量={position.volume}, last_price={position.last_price}"
+                        )
 
             # 计算账户总值
             if self._context:

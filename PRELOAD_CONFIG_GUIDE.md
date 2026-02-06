@@ -13,37 +13,50 @@
   - `false`: 禁用预加载，使用按需加载策略（启动更快，但可能缺少历史数据）
 
 ### `preload_extra_months` (int)
-- **默认值**: `3`
+- **默认值**: `1`（减少内存占用）
 - **说明**: 额外预加载前几个月的数据
-  - 设置为 `0`: 只预加载当前月的数据
-  - 设置为 `1`: 预加载当前月 + 前1个月的数据
-  - 设置为 `3`: 预加载当前月 + 前3个月的数据（默认，约90个交易日）
-  - 设置为 `6`: 预加载当前月 + 前6个月的数据（约180个交易日）
+  - 设置为 `0`: 只预加载当前月的数据（约25GB内存）
+  - 设置为 `1`: 预加载当前月 + 前1个月的数据（约50GB内存）
+  - 设置为 `3`: 预加载当前月 + 前3个月的数据（约100GB内存）
+  - 设置为 `6`: 预加载当前月 + 前6个月的数据（约175GB内存）
+
+**⚠️ 内存警告**: 1分钟数据占用内存巨大，全市场（5000+股票）每月约25GB。
+建议根据可用内存调整：
+- 32GB内存：设置 `preload_extra_months: 0`
+- 64GB内存：设置 `preload_extra_months: 1`
+- 128GB内存：设置 `preload_extra_months: 3`
+- 256GB+内存：可设置 `preload_extra_months: 6`
 
 ## 推荐配置
 
 根据策略使用的技术指标类型，推荐不同的配置：
 
-### 短期策略（MA5, MA10, MA20, MACD等）
+### 低内存配置（32GB内存）
 ```yaml
 data:
   preload_data: true
-  preload_extra_months: 1  # 1个月足够（约20个交易日）
+  preload_extra_months: 0  # 只加载当前月，约25GB内存
 ```
 
-### 中期策略（MA60, MA90, MACD+KDJ等）
+### 中等内存配置（64GB内存）
 ```yaml
 data:
   preload_data: true
-  preload_extra_months: 3  # 3个月推荐（约90个交易日）
+  preload_extra_months: 1  # 加载2个月，约50GB内存
 ```
 
-### 长期策略（MA120, MA250, 布林带等）
+### 高内存配置（128GB内存）
 ```yaml
 data:
   preload_data: true
-  preload_extra_months: 6  # 6个月推荐（约180个交易日）
-  # 或者设置为12个月（约250个交易日）
+  preload_extra_months: 3  # 加载4个月，约100GB内存
+```
+
+### 超高内存配置（256GB+内存）
+```yaml
+data:
+  preload_data: true
+  preload_extra_months: 6  # 加载7个月，约175GB内存
 ```
 
 ### 快速测试（不关心历史数据准确性）
@@ -63,7 +76,7 @@ data:
   data_source: "file"
   cache_enabled: true
   preload_data: true
-  preload_extra_months: 3  # 根据策略需求调整
+  preload_extra_months: 1  # 根据内存容量调整（0-3）
 
 trade:
   market: "cn_stock"
@@ -108,17 +121,16 @@ context.data_config.preload_extra_months = 6
 
 ## 使用示例
 
-### 示例1：使用默认配置（预加载前3个月）
+### 示例1：使用默认配置（预加载前1个月）
 
 ```python
-# 默认配置：preload_extra_months = 3
+# 默认配置：preload_extra_months = 1
 # 这意味着在回测开始时，系统会自动加载：
 # - 当前月的数据
 # - 前1个月的数据
-# - 前2个月的数据
-# - 前3个月的数据
 #
-# 总共4个月的数据，足以计算大多数常用的技术指标
+# 总共2个月的数据，约50GB内存
+# 如需更多历史数据，可手动增加配置（需确保内存充足）
 ```
 
 ### 示例2：禁用预加载（快速启动）
@@ -179,15 +191,19 @@ context = Context(config)
 
 ### 2. 内存占用
 
-额外的预加载会增加内存占用：
-- 1个月数据（1分钟频率）：约500-1000MB（取决于股票数量）
-- 3个月数据：约1.5-3GB
-- 6个月数据：约3-6GB
+额外的预加载会显著增加内存占用（全市场5000+股票，1分钟频率）：
+- 1个月数据：约25GB内存
+- 2个月数据：约50GB内存
+- 4个月数据：约100GB内存
+- 7个月数据：约175GB内存
+
+**注意**：系统已优化数据类型（float64→float32），以上数字为优化后的估算。
 
 如果内存有限，建议：
-- 减少预加载的月数
-- 或者使用按需加载策略
-- 或者减少股票池的大小
+1. **减少预加载月数**：设置 `preload_extra_months: 0` 或 `1`
+2. **使用按需加载**：设置 `preload_data: false`
+3. **减少股票池**：只加载关注的股票，而非全市场
+4. **增加物理内存**：或使用内存更大的服务器
 
 ### 3. 磁盘I/O
 
@@ -223,9 +239,13 @@ context = Context(config)
 
 ## 总结
 
-通过合理配置 `preload_data` 和 `preload_extra_months`，可以在启动速度和数据完整性之间找到平衡：
+通过合理配置 `preload_data` 和 `preload_extra_months`，可以在内存占用和数据完整性之间找到平衡：
 
-- **快速测试**：设置 `preload_data: false`
-- **短期策略**：设置 `preload_extra_months: 1`
-- **中期策略**：设置 `preload_extra_months: 3`（默认）
-- **长期策略**：设置 `preload_extra_months: 6` 或更高
+| 内存容量 | 推荐配置 | 加载月数 | 估算内存占用 |
+|---------|---------|---------|------------|
+| 32GB | `preload_extra_months: 0` | 1个月 | ~25GB |
+| 64GB | `preload_extra_months: 1` | 2个月 | ~50GB |
+| 128GB | `preload_extra_months: 3` | 4个月 | ~100GB |
+| 256GB+ | `preload_extra_months: 6` | 7个月 | ~175GB |
+
+**注意**：系统会根据可用内存自动调整预加载策略。如果检测到可用内存不足，会自动减少预加载月数。

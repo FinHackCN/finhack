@@ -433,10 +433,21 @@ class DataCenter:
         current_year = current_date.year
         current_month = current_date.month
 
-        # 获取额外预加载月数的配置（默认3个月）
-        extra_months = 3
+        # 获取额外预加载月数的配置（默认1个月，减少内存占用）
+        extra_months = 1
         if self.context and hasattr(self.context, 'data_config'):
-            extra_months = getattr(self.context.data_config, 'preload_extra_months', 3)
+            extra_months = getattr(self.context.data_config, 'preload_extra_months', 1)
+
+        # 【内存保护】检查当前内存使用情况，如果内存不足则减少预加载月数
+        import psutil
+        mem = psutil.virtual_memory()
+        available_gb = mem.available / (1024**3)
+        if available_gb < 20:  # 如果可用内存小于20GB
+            logger.warning(f"[内存警告] 可用内存仅 {available_gb:.1f}GB，减少预加载月数")
+            extra_months = max(0, extra_months - 1)
+        if available_gb < 10:  # 如果可用内存小于10GB
+            logger.warning(f"[内存警告] 可用内存仅 {available_gb:.1f}GB，只加载当前月")
+            extra_months = 0
 
         # 构建要预加载的月份列表（当前月 + 前N个月）
         months_to_load = [
@@ -510,6 +521,132 @@ class DataCenter:
                 import traceback
                 traceback.print_exc()
 
+        # 【内存优化】清理不再需要的旧月份数据
+        self._cleanup_old_months(market, months_to_load, frequency)
+
+        # 打印加载完成后的内存状态
+        self._log_memory_status()
+
+    def _cleanup_old_months(self, market: str, keep_months: list, frequency: str = '1m'):
+        """清理不再需要的旧月份数据，释放内存
+
+        Args:
+            market: 市场名称
+            keep_months: 需要保留的月份列表 [(year, month), ...]
+            frequency: 数据频率
+        """
+        import gc
+
+        # 构建需要保留的月份key集合
+        keep_keys = set()
+        for year, month in keep_months:
+            month_key = f"{market}_{frequency}_{year}-{month:02d}"
+            keep_keys.add(month_key)
+            # 同时保留日线数据
+            daily_key = f"{market}_1d_{year}-{month:02d}"
+            keep_keys.add(daily_key)
+
+        # 找出需要删除的缓存key
+        keys_to_delete = []
+        for cache_key in list(self.kline_cache.keys()):
+            # 检查是否属于当前市场且不在保留列表中
+            if cache_key.startswith(f"{market}_{frequency}_") or cache_key.startswith(f"{market}_1d_"):
+                if cache_key not in keep_keys:
+                    keys_to_delete.append(cache_key)
+
+        # 删除旧数据
+        freed_count = 0
+        freed_memory_mb = 0
+        for key in keys_to_delete:
+            try:
+                df = self.kline_cache.pop(key, None)
+                if df is not None:
+                    freed_count += 1
+                    # 估算释放的内存 (MB)
+                    freed_memory_mb += df.memory_usage(deep=True).sum() / (1024 * 1024)
+                    del df
+            except Exception as e:
+                logger.debug(f"清理缓存 {key} 失败: {e}")
+
+        # 同时清理 preloaded_months 记录
+        if market in self.preloaded_months:
+            keys_to_remove = []
+            for month_key in list(self.preloaded_months[market].keys()):
+                # 检查是否是月份key (格式: YYYY-MM 或 market_1d_YYYY-MM)
+                if frequency in month_key or '1d' in month_key:
+                    # 提取年月信息
+                    try:
+                        # 尝试匹配 market_freq_YYYY-MM 格式
+                        parts = month_key.split('_')
+                        if len(parts) >= 3:
+                            year_month = parts[-1]
+                            year, month = map(int, year_month.split('-'))
+                            if (year, month) not in keep_months:
+                                keys_to_remove.append(month_key)
+                    except:
+                        pass
+
+            for key in keys_to_remove:
+                self.preloaded_months[market].pop(key, None)
+
+        # 强制垃圾回收
+        if freed_count > 0:
+            gc.collect()
+            logger.info(f"[内存清理] 释放 {freed_count} 个月份缓存，估算内存 {freed_memory_mb:.2f}MB")
+            print(f"[内存清理] ✓ 释放 {freed_count} 个月份缓存，估算内存 {freed_memory_mb:.2f}MB", flush=True)
+
+        # 打印当前内存状态
+        self._log_memory_status()
+
+    def _log_memory_status(self):
+        """打印当前内存使用状态"""
+        try:
+            import psutil
+            mem = psutil.virtual_memory()
+            # 计算缓存占用
+            cache_mb = 0
+            for key, df in self.kline_cache.items():
+                cache_mb += df.memory_usage(deep=True).sum() / (1024 * 1024)
+            logger.info(f"[内存状态] 已用: {mem.used/1024**3:.1f}GB / {mem.total/1024**3:.0f}GB "
+                       f"({mem.percent}%), 缓存: {cache_mb:.0f}MB, 可用: {mem.available/1024**3:.1f}GB")
+        except Exception as e:
+            logger.debug(f"获取内存状态失败: {e}")
+
+    def _optimize_dtypes(self, df: pd.DataFrame) -> pd.DataFrame:
+        """优化DataFrame的数据类型以减少内存占用
+
+        Args:
+            df: 原始DataFrame
+
+        Returns:
+            优化后的DataFrame
+        """
+        try:
+            original_memory = df.memory_usage(deep=True).sum()
+
+            # 优化价格列 (float64 -> float32)
+            price_columns = ['open', 'high', 'low', 'close']
+            for col in price_columns:
+                if col in df.columns:
+                    df[col] = df[col].astype('float32')
+
+            # 优化成交量 (int64 -> int32, 或使用uint32如果数据都是正数)
+            if 'volume' in df.columns:
+                df['volume'] = df['volume'].astype('int32')
+
+            # 优化成交额 (float64 -> float32)
+            if 'amount' in df.columns:
+                df['amount'] = df['amount'].astype('float32')
+
+            new_memory = df.memory_usage(deep=True).sum()
+            saved_pct = (original_memory - new_memory) / original_memory * 100
+            logger.info(f"[内存优化] 数据类型优化节省 {saved_pct:.1f}% 内存 ({original_memory/1024**2:.1f}MB -> {new_memory/1024**2:.1f}MB)")
+
+        except Exception as e:
+            logger.warning(f"[内存优化] 数据类型优化失败: {e}")
+
+        return df
+
     def _load_year_daily_data(self, market: str, year: int, universe: List[str]):
         """加载指定年份的日线数据（用于技术指标计算）
 
@@ -521,7 +658,25 @@ class DataCenter:
         import time
         start_time = time.time()
 
-        logger.info(f"[预加载] 开始加载 {year} 年日线数据，共{len(universe)}只股票")
+        # 如果未提供universe，尝试获取全市场股票列表
+        if not universe:
+            logger.info(f"[预加载] 未提供股票池，尝试加载 {market} 全市场日线数据")
+            try:
+                stock_list_df = self.data_interface.get_stock_list(market, use_cache=True)
+                if stock_list_df is not None and not stock_list_df.empty:
+                    if 'code' in stock_list_df.columns:
+                        universe = stock_list_df['code'].tolist()
+                    else:
+                        universe = stock_list_df.index.tolist()
+                    logger.info(f"[预加载] 成功获取 {market} 全市场股票列表: {len(universe)} 只")
+                else:
+                    logger.warning(f"[预加载] 无法获取 {market} 股票列表，将加载所有可用数据")
+                    universe = None
+            except Exception as e:
+                logger.error(f"[预加载] 获取 {market} 股票列表失败: {e}")
+                universe = None
+
+        logger.info(f"[预加载] 开始加载 {year} 年日线数据，共{len(universe) if universe else '全市场'}只股票")
         print(f"[预加载] 加载 {year} 年日线数据（技术指标用）...", flush=True)
 
         # Parquet文件路径
@@ -551,21 +706,24 @@ class DataCenter:
             if hasattr(df['time'].dt, 'tz') and df['time'].dt.tz is not None:
                 df['time'] = df['time'].dt.tz_localize(None)
 
-            # 检查parquet包含的股票数量
-            parquet_codes = set(df['code'].unique())
-            universe_set = set(universe)
-            missing_codes = universe_set - parquet_codes
+            # 如果指定了universe，检查parquet包含的股票数量
+            if universe:
+                parquet_codes = set(df['code'].unique())
+                universe_set = set(universe)
+                missing_codes = universe_set - parquet_codes
 
-            # 如果parquet缺少超过50%的股票，回退到CSV加载
-            if len(missing_codes) > len(universe) * 0.5:
-                logger.warning(f"[预加载] {year}年日线Parquet数据不完整（{len(parquet_codes)}/{len(universe)}只股票），回退到CSV加载")
-                print(f"[预加载] Parquet数据不完整，使用CSV加载...", flush=True)
-                self._load_year_daily_from_csv(market, year, universe, start_time)
-                return
+                # 如果parquet缺少超过50%的股票，回退到CSV加载
+                if len(missing_codes) > len(universe) * 0.5:
+                    logger.warning(f"[预加载] {year}年日线Parquet数据不完整（{len(parquet_codes)}/{len(universe)}只股票），回退到CSV加载")
+                    print(f"[预加载] Parquet数据不完整，使用CSV加载...", flush=True)
+                    self._load_year_daily_from_csv(market, year, universe, start_time)
+                    return
 
-            # 先按代码过滤
-            df = df[df['code'].isin(universe)]
-            logger.info(f"[预加载] 日线代码过滤后: {len(df):,}行")
+                # 按代码过滤
+                df = df[df['code'].isin(universe)]
+                logger.info(f"[预加载] 日线代码过滤后: {len(df):,}行")
+            else:
+                logger.info(f"[预加载] 未指定universe，加载全市场日线数据: {len(df):,}行")
 
             # 设置索引
             df = df.set_index(['time', 'code'])
@@ -604,6 +762,26 @@ class DataCenter:
             universe: 股票池
             start_time: 开始时间戳
         """
+        import time
+
+        # 如果未提供universe，尝试获取全市场股票列表
+        if not universe:
+            logger.info(f"[预加载] CSV日线方式未提供股票池，尝试获取 {market} 全市场数据")
+            try:
+                stock_list_df = self.data_interface.get_stock_list(market, use_cache=True)
+                if stock_list_df is not None and not stock_list_df.empty:
+                    if 'code' in stock_list_df.columns:
+                        universe = stock_list_df['code'].tolist()
+                    else:
+                        universe = stock_list_df.index.tolist()
+                    logger.info(f"[预加载] CSV日线方式成功获取 {market} 全市场股票列表: {len(universe)} 只")
+                else:
+                    logger.warning(f"[预加载] CSV日线方式无法获取 {market} 股票列表")
+                    return
+            except Exception as e:
+                logger.error(f"[预加载] CSV日线方式获取 {market} 股票列表失败: {e}")
+                return
+
         logger.info(f"[预加载] 从CSV加载 {year} 年日线数据，共{len(universe)}只股票")
 
         # CSV目录路径（按年组织）
@@ -698,9 +876,27 @@ class DataCenter:
         import time
         start_time = time.time()
 
+        # 如果未提供universe，尝试获取全市场股票列表
+        if not universe:
+            logger.info(f"[预加载] 未提供股票池，尝试加载 {market} 全市场数据")
+            try:
+                stock_list_df = self.data_interface.get_stock_list(market, use_cache=True)
+                if stock_list_df is not None and not stock_list_df.empty:
+                    if 'code' in stock_list_df.columns:
+                        universe = stock_list_df['code'].tolist()
+                    else:
+                        universe = stock_list_df.index.tolist()
+                    logger.info(f"[预加载] 成功获取 {market} 全市场股票列表: {len(universe)} 只")
+                else:
+                    logger.warning(f"[预加载] 无法获取 {market} 股票列表，将加载所有可用数据")
+                    universe = None  # 设置为None，后续不过滤
+            except Exception as e:
+                logger.error(f"[预加载] 获取 {market} 股票列表失败: {e}")
+                universe = None  # 设置为None，后续不过滤
+
         month_strs = [f"{m:02d}" for _, m in months_to_load]
-        logger.info(f"[预加载] 开始加载 {year} 年份: {month_strs}，共{len(universe)}只股票")
-        print(f"[预加载] 开始加载 {year} ({','.join(month_strs)})，共{len(universe)}只股票", flush=True)
+        logger.info(f"[预加载] 开始加载 {year} 年份: {month_strs}，共{len(universe) if universe else '全市场'}只股票")
+        print(f"[预加载] 开始加载 {year} ({','.join(month_strs)})，共{len(universe) if universe else '全市场'}只股票", flush=True)
 
         # Parquet文件路径
         parquet_file = os.path.join(
@@ -730,13 +926,19 @@ class DataCenter:
 
         logger.info(f"[预加载] {year}年Parquet原始数据: {len(df):,}行")
 
+        # 【内存优化】优化数据类型以减少内存占用
+        df = self._optimize_dtypes(df)
+
         # 移除时区信息
         if hasattr(df['time'].dt, 'tz') and df['time'].dt.tz is not None:
             df['time'] = df['time'].dt.tz_localize(None)
 
-        # 先按代码过滤
-        df = df[df['code'].isin(universe)]
-        logger.info(f"[预加载] 代码过滤后: {len(df):,}行")
+        # 先按代码过滤（如果指定了universe）
+        if universe:
+            df = df[df['code'].isin(universe)]
+            logger.info(f"[预加载] 代码过滤后: {len(df):,}行")
+        else:
+            logger.info(f"[预加载] 未指定universe，加载全市场数据: {len(df):,}行")
 
         # 设置索引方便后续操作
         df = df.set_index(['time', 'code'])
@@ -809,9 +1011,27 @@ class DataCenter:
             end_date = datetime(year, month + 1, 1) - timedelta(days=1)
             end_date = end_date.replace(hour=23, minute=59, second=59)
 
+        # 如果未提供universe，尝试获取全市场股票列表
+        if not universe:
+            logger.info(f"[预加载] CSV方式未提供股票池，尝试获取 {market} 全市场数据")
+            try:
+                stock_list_df = self.data_interface.get_stock_list(market, use_cache=True)
+                if stock_list_df is not None and not stock_list_df.empty:
+                    if 'code' in stock_list_df.columns:
+                        universe = stock_list_df['code'].tolist()
+                    else:
+                        universe = stock_list_df.index.tolist()
+                    logger.info(f"[预加载] CSV方式成功获取 {market} 全市场股票列表: {len(universe)} 只")
+                else:
+                    logger.warning(f"[预加载] CSV方式无法获取 {market} 股票列表")
+                    return
+            except Exception as e:
+                logger.error(f"[预加载] CSV方式获取 {market} 股票列表失败: {e}")
+                return
+
         # 使用分批加载CSV
-        batch_size = min(500, len(universe))
-        batches = [universe[i:i + batch_size] for i in range(0, len(universe), batch_size)]
+        batch_size = min(500, len(universe)) if universe else 500
+        batches = [universe[i:i + batch_size] for i in range(0, len(universe), batch_size)] if universe else []
 
         total_records = 0
         for idx, batch in enumerate(batches):
@@ -1064,7 +1284,7 @@ class DataCenter:
             adj_type: 复权类型 ('none': 不复权, 'front': 前复权, 'back': 后复权)
 
         Returns:
-            pd.DataFrame: K线数据，MultiIndex(time, symbol)
+            pd.DataFrame: K线数据，MultiIndex(time, code)
 
         Note:
             会自动限制end_time不超过回测当前时间，防止未来函数
@@ -1205,7 +1425,7 @@ class DataCenter:
             end_date: 结束日期
         
         Returns:
-            pd.DataFrame: 因子数据，MultiIndex(date, symbol)
+            pd.DataFrame: 因子数据，MultiIndex(date, code)
         """
         market = self._get_market_from_context()
         
@@ -1499,7 +1719,7 @@ class DataCenter:
                 continue
 
         if results:
-            return pd.concat(results, names=['symbol'])
+            return pd.concat(results, names=['code'])
         return pd.DataFrame()
 
     # 保留旧方法以兼容

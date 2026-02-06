@@ -76,7 +76,7 @@ def _process_dividend_stock_split(context, current_date: datetime):
         processed_count = 0
         
         for symbol, position in positions.items():
-            if position.quantity <= 0:
+            if position.volume <= 0:
                 continue
             
             # 检查是否有分红送股
@@ -159,7 +159,7 @@ def _apply_dividend_stock_split(context, symbol: str, position, div_info: Dict[s
         
         # 现金分红
         if cash_dividend > 0:
-            dividend_amount = position.quantity * cash_dividend
+            dividend_amount = position.volume * cash_dividend
             
             # 更新账户现金
             context.account.cash += dividend_amount
@@ -174,7 +174,7 @@ def _apply_dividend_stock_split(context, symbol: str, position, div_info: Dict[s
                 'type': 'cash_dividend',
                 'amount': dividend_amount,
                 'per_share': cash_dividend,
-                'quantity': position.quantity,
+                'quantity': position.volume,
                 'date': context.current_dt.strftime('%Y-%m-%d'),
                 'timestamp': context.current_dt.isoformat()
             })
@@ -184,19 +184,19 @@ def _apply_dividend_stock_split(context, symbol: str, position, div_info: Dict[s
         
         # 送股
         if stock_dividend > 0:
-            bonus_shares = int(position.quantity * stock_dividend)
+            bonus_shares = int(position.volume * stock_dividend)
             if bonus_shares > 0:
                 # 增加持仓数量
-                old_quantity = position.quantity
-                position.quantity += bonus_shares
-                position.available_quantity += bonus_shares
+                old_quantity = position.volume
+                position.volume += bonus_shares
+                position.available_volume += bonus_shares
                 
                 # 调整成本价（送股后成本价下降）
-                position.avg_cost = (position.avg_cost * old_quantity) / position.quantity
+                position.cost_price = (position.cost_price * old_quantity) / position.volume
                 
                 # 更新兼容字段
-                position.amount = position.quantity
-                position.enable_amount = position.available_quantity
+                position.volume = position.volume
+                position.available_volume = position.available_volume
                 
                 # 记录送股记录
                 if not hasattr(context, 'logs'):
@@ -208,7 +208,7 @@ def _apply_dividend_stock_split(context, symbol: str, position, div_info: Dict[s
                     'bonus_shares': bonus_shares,
                     'per_share_ratio': stock_dividend,
                     'old_quantity': old_quantity,
-                    'new_quantity': position.quantity,
+                    'new_quantity': position.volume,
                     'date': context.current_dt.strftime('%Y-%m-%d'),
                     'timestamp': context.current_dt.isoformat()
                 })
@@ -239,7 +239,7 @@ def _process_t1_unlock(context):
         current_date = context.current_dt.date()
         
         for symbol, position in positions.items():
-            if position.frozen_quantity > 0:
+            if position.frozen_volume > 0:
                 # 检查是否有T+1解冻的股票
                 if hasattr(position, 't1_unlock_date'):
                     unlock_date = position.t1_unlock_date
@@ -248,10 +248,10 @@ def _process_t1_unlock(context):
                     
                     if current_date >= unlock_date:
                         # 解冻股票
-                        unlock_quantity = position.frozen_quantity
-                        position.available_quantity += unlock_quantity
-                        position.frozen_quantity = 0
-                        position.enable_amount = position.available_quantity
+                        unlock_quantity = position.frozen_volume
+                        position.available_volume += unlock_quantity
+                        position.frozen_volume = 0
+                        position.available_volume = position.available_volume
                         
                         # 移除解冻日期
                         delattr(position, 't1_unlock_date')
@@ -546,19 +546,19 @@ def _update_positions_market_value(context):
         total_market_value = 0.0
         
         for symbol, position in positions.items():
-            if position.quantity > 0:
+            if position.volume > 0:
                 # 获取当前价格
                 current_price = context.data_center.get_price(symbol)
                 
                 if current_price and current_price > 0:
                     # 更新市值
                     position.last_price = current_price
-                    position.market_value = position.quantity * current_price
+                    position.market_value = position.volume * current_price
                     position.last_sale_price = current_price
                     position.total_value = position.market_value
                     
                     # 更新未实现盈亏
-                    position.unrealized_pnl = position.market_value - (position.quantity * position.avg_cost)
+                    position.unrealized_pnl = position.market_value - (position.volume * position.cost_price)
                     
                     total_market_value += position.market_value
         
@@ -593,7 +593,7 @@ def _check_risk_control(context):
             if total_value > 0:
                 max_position_ratio = 0.0
                 for symbol, position in positions.items():
-                    if position.quantity > 0:
+                    if position.volume > 0:
                         position_ratio = position.market_value / total_value
                         if position_ratio > max_position_ratio:
                             max_position_ratio = position_ratio
@@ -694,7 +694,7 @@ def _check_positions_status(context):
             current_price = context.data_center.get_current_price(symbol)
             if current_price and current_price > 0:
                 position.last_price = current_price
-                position.market_value = position.quantity * current_price
+                position.market_value = position.volume * current_price
         
     except Exception as e:
         if context.logger:
@@ -870,8 +870,8 @@ def _update_positions_market_value(context):
             current_price = context.data_center.get_current_price(symbol)
             if current_price and current_price > 0:
                 position.last_price = current_price
-                position.market_value = position.quantity * current_price
-                position.unrealized_pnl = (current_price - position.avg_cost) * position.quantity
+                position.market_value = position.volume * current_price
+                position.unrealized_pnl = (current_price - position.cost_price) * position.volume
         
     except Exception as e:
         if context.logger:
