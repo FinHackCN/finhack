@@ -76,7 +76,7 @@ class factorManager:
                         return result
                     
                     # 获取基本统计信息
-                    result["code_count"] = len(factor_df.index.get_level_values('symbol').unique())
+                    result["code_count"] = len(factor_df.index.get_level_values('code').unique())
                     
                     # 获取时间范围
                     times = factor_df.index.get_level_values('date')

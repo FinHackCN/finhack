@@ -14,7 +14,7 @@ from .enums import PositionSide
 @dataclasses.dataclass
 class Position:
     """持仓信息模型"""
-    
+
     # 必需字段
     account_id: str                 # 持仓所属账户
     symbol: str                     # 统一标的代码
@@ -26,6 +26,7 @@ class Position:
     cost_price: float = 0.0         # 持仓成本价
     market_value: float = 0.0       # 当前市值
     unrealized_pnl: float = 0.0     # 浮动盈亏
+    realized_pnl: float = 0.0       # 已实现盈亏
     margin_used: float = 0.0        # 占用保证金
     open_time: Optional[datetime] = None # 建仓时间
     close_today_volume: float = 0.0 # 今仓数量 (期货)
@@ -33,6 +34,9 @@ class Position:
     last_price: float = 0.0         # 当前最新市场价格
     contract_multiplier: float = 1.0 # 合约乘数
     timestamp_updated: Optional[datetime] = None # 更新时间
+
+    # T+1 规则相关字段
+    buy_dates: list = None          # 记录每批买入的日期和数量 [(datetime, volume), ...]
     
     def __post_init__(self):
         """初始化后处理"""
@@ -40,8 +44,11 @@ class Position:
             self.open_time = datetime.now()
         if self.timestamp_updated is None:
             self.timestamp_updated = datetime.now()
-        if self.available_volume == 0.0:
+        if self.available_volume == 0.0 and self.volume > 0:
             self.available_volume = self.volume
+        # 初始化 T+1 规则相关字段
+        if self.buy_dates is None:
+            self.buy_dates = []
     
     @property
     def is_long(self) -> bool:
@@ -135,14 +142,103 @@ class Position:
             self.available_volume = 0.0
             self.market_value = 0.0
             self.unrealized_pnl = 0.0
-        else:
-            # 更新市值和盈亏
-            if self.last_price > 0:
-                self.update_market_price(self.last_price)
-        
-        self.timestamp_updated = datetime.now()
+
         return True
-    
+
+    # ========== 兼容属性（兼容 core/trade_center.py 的字段名） ==========
+
+    @property
+    def quantity(self) -> float:
+        """兼容字段：总持仓量（同 volume）"""
+        return self.volume
+
+    @quantity.setter
+    def quantity(self, value: float):
+        """设置持仓量（同时更新兼容字段）"""
+        self.volume = value
+
+    @property
+    def available_quantity(self) -> float:
+        """兼容字段：可用持仓量（同 available_volume）"""
+        return self.available_volume
+
+    @available_quantity.setter
+    def available_quantity(self, value: float):
+        """设置可用持仓量（同时更新兼容字段）"""
+        self.available_volume = value
+
+    @property
+    def avg_cost(self) -> float:
+        """兼容字段：平均成本（同 cost_price）"""
+        return self.cost_price
+
+    @avg_cost.setter
+    def avg_cost(self, value: float):
+        """设置平均成本（同时更新兼容字段）"""
+        self.cost_price = value
+
+    @property
+    def amount(self) -> float:
+        """兼容字段：总数量（同 volume）"""
+        return self.volume
+
+    @property
+    def enable_amount(self) -> float:
+        """兼容字段：可用数量（同 available_volume）"""
+        return self.available_volume
+
+    @property
+    def cost_basis(self) -> float:
+        """兼容字段：成本基础（同 cost_price）"""
+        return self.cost_price
+
+    @property
+    def last_sale_price(self) -> float:
+        """兼容字段：最新售价（同 last_price）"""
+        return self.last_price
+
+    @last_sale_price.setter
+    def last_sale_price(self, value: float):
+        """设置最新售价（同时更新 last_price）"""
+        self.last_price = value
+
+    @property
+    def total_value(self) -> float:
+        """兼容字段：总市值（同 market_value）"""
+        return self.market_value
+
+    @property
+    def total_cost(self) -> float:
+        """兼容字段：总成本"""
+        return self.cost_price * self.volume
+
+    @property
+    def updated_at(self) -> Optional[datetime]:
+        """兼容字段：更新时间（同 timestamp_updated）"""
+        return self.timestamp_updated
+
+    @updated_at.setter
+    def updated_at(self, value: Optional[datetime]):
+        """设置更新时间"""
+        self.timestamp_updated = value
+
+    def get_sellable_quantity(self, current_date: datetime) -> float:
+        """
+        获取可卖出数量（考虑T+1规则）
+
+        Args:
+            current_date: 当前日期
+
+        Returns:
+            可卖出数量
+        """
+        sellable = 0.0
+        for buy_time, qty in self.buy_dates:
+            # 判断是否是昨日及之前买入的（T+1：当日买入不可卖）
+            if buy_time and buy_time.date() < current_date.date():
+                sellable += qty
+        return sellable
+
     def freeze_volume(self, volume: float) -> bool:
         """冻结持仓
         

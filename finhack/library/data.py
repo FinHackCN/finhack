@@ -323,7 +323,7 @@ class DataInterface:
             use_cache: 是否使用缓存
             
         Returns:
-            DataFrame: K线数据，索引为MultiIndex(datetime, symbol)
+            DataFrame: K线数据，索引为MultiIndex(datetime, code)
         """
         # 参数标准化
         if isinstance(codes, str):
@@ -421,11 +421,14 @@ class DataInterface:
                 else:
                     logger.warning(f"[Cache] 数据为空，不缓存")
 
+            # 【内存优化】优化数据类型
+            data = self._optimize_dtypes(data)
+
             logger.info(f"[DataInterface] 最终返回: {len(codes)}只股票, {len(data)}条记录")
 
             if data.empty:
                 logger.warning(f"[DataInterface] ⚠️ 返回空DataFrame！codes数量={len(codes)}, market={market}, freq={freq}, start={start_date}, end={end_date}")
-            
+
             return data
             
         except Exception as e:
@@ -523,8 +526,8 @@ class DataInterface:
                 if os.path.exists(file_path):
                     files_found += 1
                     # 读取文件
-                    df = pd.read_csv(file_path, header=None, 
-                                   names=['time', 'symbol', 'open', 'high', 'low', 'close', 'volume', 'amount'])
+                    df = pd.read_csv(file_path, header=None,
+                                   names=['time', 'code', 'open', 'high', 'low', 'close', 'volume', 'amount'])
                     
                     # 转换时间格式（修复：清理时间字符串，保持本地时间）
                     # 清除可能的多余空格
@@ -550,7 +553,7 @@ class DataInterface:
                             df['time'] = pd.to_datetime(df['time'], errors='coerce')
                     
                     # 设置多级索引
-                    df.set_index(['time', 'symbol'], inplace=True)
+                    df.set_index(['time', 'code'], inplace=True)
                     
                     # 选择需要的字段
                     available_fields = [f for f in fields if f in df.columns]
@@ -635,15 +638,15 @@ class DataInterface:
                     klines = future.result()
                     if not klines.empty:
                         # 设置股票代码
-                        klines['symbol'] = code
+                        klines['code'] = code
                         all_data.append(klines)
                 except Exception as e:
                     logger.warning(f"获取{code}的K线数据失败: {e}")
                     continue
-            
+
             if all_data:
                 result = pd.concat(all_data, ignore_index=True)
-                result.set_index(['time', 'symbol'], inplace=True)
+                result.set_index(['time', 'code'], inplace=True)
                 return result
             else:
                 return pd.DataFrame()
@@ -761,11 +764,8 @@ class DataInterface:
             df = pd.concat(all_data, ignore_index=True)
             logger.info(f"[Parquet] 合并后共 {len(df)} 条数据")
 
-            # 重命名code列为symbol
-            df = df.rename(columns={'code': 'symbol'})
-
             # 设置MultiIndex
-            df = df.set_index(['time', 'symbol'])
+            df = df.set_index(['time', 'code'])
 
             # 确保只包含请求的字段
             available_fields = [f for f in fields if f in df.columns]
@@ -986,8 +986,8 @@ class DataInterface:
                     # 只保留小于等于目标时间的数据
                     before_or_at_target = klines_df[time_index <= target_time]
                     if not before_or_at_target.empty:
-                        # 按symbol分组，取每个symbol最新的数据
-                        matching_data = before_or_at_target.groupby(level='symbol').tail(1)
+                        # 按code分组，取每个code最新的数据
+                        matching_data = before_or_at_target.groupby(level='code').tail(1)
                     else:
                         matching_data = before_or_at_target
 
@@ -1030,7 +1030,7 @@ class DataInterface:
                         closest_data = []
 
                         for code in codes:
-                            code_data = klines_df[klines_df.index.get_level_values('symbol') == code]
+                            code_data = klines_df[klines_df.index.get_level_values('code') == code]
                             if not code_data.empty:
                                 # 计算时间差，找到最近的数据
                                 time_values = code_data.index.get_level_values('time')
@@ -1093,7 +1093,7 @@ class DataInterface:
             use_cache: 是否使用缓存
         
         Returns:
-            pd.DataFrame: 因子数据，MultiIndex(date, symbol)
+            pd.DataFrame: 因子数据，MultiIndex(date, code)
         """
         if isinstance(factor_names, str):
             factor_names = [factor_names]
@@ -1204,8 +1204,8 @@ class DataInterface:
                             if not filtered_series.empty:
                                 logger.debug(f"Filtered series for {factor_name} has {len(filtered_series)} records.")
                                 df = filtered_series.to_frame(name=factor_name)
-                                df['symbol'] = code
-                                df = df.reset_index().set_index(['time', 'symbol'])
+                                df['code'] = code
+                                df = df.reset_index().set_index(['time', 'code'])
                                 all_factor_data.append(df)
 
                     except Exception as e:
@@ -1213,7 +1213,7 @@ class DataInterface:
 
         if not all_factor_data:
             logger.debug("No factor data loaded.")
-            index = pd.MultiIndex.from_arrays([[], []], names=['time', 'symbol'])
+            index = pd.MultiIndex.from_arrays([[], []], names=['time', 'code'])
             return pd.DataFrame(columns=factor_names, index=index)
         
         # 合并所有DataFrame
@@ -1279,7 +1279,7 @@ class DataInterface:
                     continue
         
         if not all_factors:
-            index = pd.MultiIndex.from_arrays([[], []], names=['date', 'symbol'])
+            index = pd.MultiIndex.from_arrays([[], []], names=['time', 'code'])
             return pd.DataFrame(columns=factor_names, index=index)
         
         # 合并所有因子
@@ -1291,8 +1291,8 @@ class DataInterface:
         if 'code' in result_df.columns and 'time' in result_df.columns:
             result_df['time'] = pd.to_datetime(result_df['time'])
             result_df = result_df.set_index(['time', 'code'])
-            result_df.index.names = ['date', 'symbol']
-        
+            result_df.index.names = ['time', 'code']
+
         return result_df
     
     # ==================== 参考数据接口 ====================
@@ -1681,7 +1681,7 @@ class DataInterface:
         
         try:
             # 获取复权因子
-            symbols = df.index.get_level_values('symbol').unique().tolist()
+            symbols = df.index.get_level_values('code').unique().tolist()
             adj_factors = self.get_adj_factors(
                 market=market,
                 codes=symbols,
@@ -1709,7 +1709,7 @@ class DataInterface:
             
             # 按股票分组处理复权
             for symbol in symbols:
-                if symbol not in df.index.get_level_values('symbol'):
+                if symbol not in df.index.get_level_values('code'):
                     continue
                 
                 # 获取该股票的复权因子
@@ -1718,7 +1718,7 @@ class DataInterface:
                     continue
                 
                 # 获取该股票的K线数据
-                symbol_data = result_df.xs(symbol, level='symbol').reset_index()
+                symbol_data = result_df.xs(symbol, level='code').reset_index()
 
                 if symbol_data.empty:
                     continue
@@ -1777,8 +1777,8 @@ class DataInterface:
                 
                 # 更新结果数据
                 merged_data = merged_data.set_index(['time'])
-                merged_data['symbol'] = symbol
-                merged_data = merged_data.set_index(['symbol'], append=True).reorder_levels(['time', 'symbol'])
+                merged_data['code'] = symbol
+                merged_data = merged_data.set_index(['code'], append=True).reorder_levels(['time', 'code'])
 
                 # 更新result_df中对应股票的数据
                 result_df.update(merged_data[available_price_fields])
@@ -1789,7 +1789,47 @@ class DataInterface:
         except Exception as e:
             logger.warning(f"应用复权失败: {e}，返回原始数据")
             return df
-    
+
+    def _optimize_dtypes(self, df: pd.DataFrame) -> pd.DataFrame:
+        """优化DataFrame的数据类型以减少内存占用
+
+        Args:
+            df: 原始DataFrame
+
+        Returns:
+            优化后的DataFrame
+        """
+        if df.empty:
+            return df
+
+        try:
+            original_memory = df.memory_usage(deep=True).sum()
+
+            # 优化价格列 (float64 -> float32)
+            price_columns = ['open', 'high', 'low', 'close']
+            for col in price_columns:
+                if col in df.columns and df[col].dtype == 'float64':
+                    df[col] = df[col].astype('float32')
+
+            # 优化成交量 (int64 -> int32)
+            if 'volume' in df.columns and df['volume'].dtype == 'int64':
+                df['volume'] = df['volume'].astype('int32')
+
+            # 优化成交额 (float64 -> float32)
+            if 'amount' in df.columns and df['amount'].dtype == 'float64':
+                df['amount'] = df['amount'].astype('float32')
+
+            new_memory = df.memory_usage(deep=True).sum()
+            if original_memory > 0:
+                saved_pct = (original_memory - new_memory) / original_memory * 100
+                if saved_pct > 1:  # 只记录显著的节省
+                    logger.debug(f"[内存优化] 数据类型优化节省 {saved_pct:.1f}% 内存 ({original_memory/1024**2:.1f}MB -> {new_memory/1024**2:.1f}MB)")
+
+        except Exception as e:
+            logger.debug(f"[内存优化] 数据类型优化失败: {e}")
+
+        return df
+
     def clear_cache(self, cache_type: str = None):
         """清空缓存"""
         if cache_type is None or cache_type == 'all':

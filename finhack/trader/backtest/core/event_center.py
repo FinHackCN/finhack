@@ -437,17 +437,41 @@ class EventCenter:
                 # 除权除息应在开盘前处理，确保当日交易使用正确的价格
                 event_time = datetime.combine(trade_date, time(8, 30, 0))
 
+                # 根据分红/送股数据推断action_type
+                dividend_ratio = action.get('dividend_ratio', 0) or 0
+                split_ratio = action.get('split_ratio', 0) or 0
+                transfer_ratio = action.get('transfer_ratio', 0) or 0
+
+                # 转换为每股比例（数据中通常是每10股的比例）
+                dividend_per_share = float(dividend_ratio) / 10 if dividend_ratio else 0
+                bonus_ratio = float(split_ratio) / 10 if split_ratio else 0
+                transfer_per_share = float(transfer_ratio) / 10 if transfer_ratio else 0
+
+                # 判断事件类型
+                if dividend_per_share > 0 and bonus_ratio > 0:
+                    action_type = 'dividend_bonus'  # 分红送股
+                elif dividend_per_share > 0:
+                    action_type = 'dividend'  # 仅分红
+                elif bonus_ratio > 0:
+                    action_type = 'bonus'  # 仅送股
+                elif transfer_per_share > 0:
+                    action_type = 'transfer'  # 转增
+                else:
+                    action_type = 'corporate_action'  # 其他
+
                 # 创建公司行为详细信息对象，支持属性访问
                 action_data = {
                     'symbol': action.get('symbol', ''),
-                    'action_type': action.get('action_type', ''),
-                    'dividend_per_share': action.get('dividend_per_share', 0),
+                    'action_type': action_type,
+                    'dividend_per_share': dividend_per_share,
                     'tax_rate': action.get('tax_rate', 0.10),
-                    'bonus_ratio': action.get('bonus_ratio', 0),
+                    'bonus_ratio': bonus_ratio,
                     'split_ratio': action.get('split_ratio', 1),
+                    'transfer_ratio': transfer_per_share,
                     'rights_ratio': action.get('rights_ratio', 0),
                     'rights_price': action.get('rights_price', 0),
-                    'ex_date': trade_date  # 添加除权除息日期，用于防重复检查
+                    'ex_date': trade_date,  # 添加除权除息日期，用于防重复检查
+                    'record_date': action.get('record_date', '')
                 }
 
                 # 使用SimpleNamespace使数据支持属性访问

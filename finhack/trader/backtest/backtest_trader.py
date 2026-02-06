@@ -329,6 +329,9 @@ class BacktestTrader:
         self.event_center.set_trade_center(self.engine.trade_center)
         self.engine.trade_center.set_event_center(self.event_center)
 
+        # 将trade_center设置到context中，供策略使用
+        self.context['trade_center'] = self.engine.trade_center
+
         Log.logger.info("回测组件初始化完成")
         
     def load_strategy(self):
@@ -599,7 +602,15 @@ class PriceRelatedSlippage:
                 # 创建订单对象并添加到TradeCenter
                 from datetime import datetime
                 order_id = f"order_{symbol}_{int(datetime.now().timestamp())}"
-                
+
+                # 对于市价单，获取并固定当前价格
+                market_price = None
+                if order_type == OrderType.MARKET:
+                    current_price = self.engine.trade_center._get_price_from_datacenter(symbol)
+                    if current_price and current_price > 0:
+                        market_price = current_price
+                        Log.logger.debug(f"市价单固定价格: {symbol} = {market_price:.2f}")
+
                 # 创建订单
                 order = Order(
                     account_id=self.context['account']['account_id'],
@@ -610,7 +621,8 @@ class PriceRelatedSlippage:
                     order_id=order_id,
                     price=price,
                     status=OrderStatus.PENDING_NEW,
-                    created_time=self.context.get('current_dt', datetime.now())
+                    created_time=self.context.get('current_dt', datetime.now()),
+                    market_price=market_price  # 市价单的固定成交价
                 )
                 
                 # 添加到订单列表
