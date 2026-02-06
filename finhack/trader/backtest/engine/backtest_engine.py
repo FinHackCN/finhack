@@ -246,7 +246,7 @@ class TradeCenter:
                     freq=freq,
                     start_time=start_time.strftime('%Y-%m-%d %H:%M:%S'),
                     end_time=end_time.strftime('%Y-%m-%d %H:%M:%S'),
-                    fields=['close']
+                    fields=['close', 'volume']  # 【修复】获取成交量数据
                 )
 
                 if not klines_df.empty:
@@ -254,7 +254,10 @@ class TradeCenter:
                         try:
                             symbol_klines = klines_df[klines_df.index.get_level_values('code') == symbol]
                             if not symbol_klines.empty:
-                                market_data[symbol] = {'close': symbol_klines['close'].iloc[-1]}
+                                market_data[symbol] = {
+                                    'close': symbol_klines['close'].iloc[-1],
+                                    'volume': symbol_klines['volume'].iloc[-1] if 'volume' in symbol_klines.columns else 0
+                                }
                         except Exception:
                             pass
             except Exception:
@@ -596,22 +599,31 @@ class TradeCenter:
 
             quote = market_data[symbol]
             current_price = quote.get('close', 0)
-            Log.logger.info(f"[{time_str}] 订单 {order_id} 当前价格: {current_price}")
+            market_volume = quote.get('volume', 0)  # 【修复】获取市场成交量
+            Log.logger.info(f"[{time_str}] 订单 {order_id} 当前价格: {current_price}, 市场成交量: {market_volume}")
 
             if current_price <= 0:
                 Log.logger.info(f"[{time_str}] 跳过订单 {order_id}: 价格无效 {current_price}")
                 continue
+
+            # 【修复】基于市场成交量的成交限制配置
+            max_fill_ratio = 0.15  # 单笔成交不超过市场成交量的15%
+            min_fill_volume = 100   # 最小成交100股（A股规则）
+
+            # 计算基于市场成交量的最大可成交数量
+            if market_volume > 0:
+                max_fill_by_market = max(min_fill_volume, int(market_volume * max_fill_ratio))
+            else:
+                # 如果市场成交量数据缺失，使用默认限制
+                max_fill_by_market = 10000
 
             # 判断是否可以成交
             can_fill = False
             fill_price = current_price
             fill_volume = order.remaining_volume  # 默认全部成交
 
-            # 判断是否可以成交
-            can_fill = False
-
             if order.order_type == OrderType.MARKET:
-                # 市价单部分成交：每次撮合只成交剩余量的30%-80%，模拟真实成交
+                # 市价单部分成交：每次撮合只成交剩余量的30%-80%，但受市场成交量限制
                 # 分钟级回测中每分钟都会撮合，所以可以部分成交
                 import random
                 # 从配置获取成交比例
@@ -631,16 +643,16 @@ class TradeCenter:
                         self.partial_fill_config['small_order_max']
                     )  # 小订单更容易全部成交
 
-                fill_volume = max(100, int(order.remaining_volume * fill_ratio))
+                fill_volume = max(min_fill_volume, int(order.remaining_volume * fill_ratio))
                 # 确保是100的整数倍（A股规则）
                 fill_volume = (fill_volume // 100) * 100
-                # 不超过剩余量
-                fill_volume = min(fill_volume, order.remaining_volume)
+                # 【修复】不超过剩余量，且不超过市场成交量限制
+                fill_volume = min(fill_volume, order.remaining_volume, max_fill_by_market)
 
                 can_fill = True
                 fill_price = self._apply_slippage(current_price, order.side)
                 if fill_volume < order.remaining_volume:
-                    Log.logger.info(f"[{time_str}] [撮合] {order_id} {symbol} 市价单部分成交: {order.remaining_volume}->{fill_volume}股 @{fill_price:.4f}")
+                    Log.logger.info(f"[{time_str}] [撮合] {order_id} {symbol} 市价单部分成交: {order.remaining_volume}->{fill_volume}股 @{fill_price:.4f} (市场成交量限制: {max_fill_by_market})")
                 else:
                     Log.logger.info(f"[{time_str}] [撮合] {order_id} {symbol} 市价单成交: {fill_volume}股 @{fill_price:.4f}")
             elif order.order_type == OrderType.LIMIT:
@@ -648,18 +660,19 @@ class TradeCenter:
                 if order.side == Side.BUY and order.price >= current_price:
                     can_fill = True
                     fill_price = min(order.price, current_price)
-                    # 限价单也可能部分成交
-                    fill_volume = min(order.remaining_volume, int(current_price * 1000))  # 模拟流动性
+                    # 【修复】限价单也受市场成交量限制，移除不合理的按价格计算
+                    fill_volume = min(order.remaining_volume, max_fill_by_market)
                     fill_volume = (fill_volume // 100) * 100
-                    fill_volume = max(100, fill_volume)
-                    Log.logger.info(f"[{time_str}] [撮合] {order_id} {symbol} 限价买单可成交: {order.price}>={current_price}, 成交{fill_volume}股")
+                    fill_volume = max(min_fill_volume, fill_volume)
+                    Log.logger.info(f"[{time_str}] [撮合] {order_id} {symbol} 限价买单可成交: {order.price}>={current_price}, 成交{fill_volume}股 (市场成交量限制: {max_fill_by_market})")
                 elif order.side == Side.SELL and order.price <= current_price:
                     can_fill = True
                     fill_price = max(order.price, current_price)
-                    fill_volume = min(order.remaining_volume, int(current_price * 1000))
+                    # 【修复】限价单也受市场成交量限制
+                    fill_volume = min(order.remaining_volume, max_fill_by_market)
                     fill_volume = (fill_volume // 100) * 100
-                    fill_volume = max(100, fill_volume)
-                    Log.logger.info(f"[{time_str}] [撮合] {order_id} {symbol} 限价卖单可成交: {order.price}<={current_price}, 成交{fill_volume}股")
+                    fill_volume = max(min_fill_volume, fill_volume)
+                    Log.logger.info(f"[{time_str}] [撮合] {order_id} {symbol} 限价卖单可成交: {order.price}<={current_price}, 成交{fill_volume}股 (市场成交量限制: {max_fill_by_market})")
                 else:
                     Log.logger.debug(f"[{time_str}] 订单 {order_id} 限价单价格不匹配: {order.price} vs {current_price}")
 
@@ -1196,7 +1209,7 @@ class BacktestEngine:
                     freq=freq,
                     start_time=start_time.strftime('%Y-%m-%d %H:%M:%S'),
                     end_time=(current_time + timedelta(minutes=1)).strftime('%Y-%m-%d %H:%M:%S'),
-                    fields=['close']
+                    fields=['close', 'volume']  # 【修复】获取成交量数据
                 )
 
                 if not klines_df.empty:
@@ -1206,7 +1219,8 @@ class BacktestEngine:
                             symbol_klines = klines_df[klines_df.index.get_level_values('code') == symbol]
                             if not symbol_klines.empty:
                                 latest_close = symbol_klines['close'].iloc[-1]
-                                market_data[symbol] = {'close': latest_close}
+                                latest_volume = symbol_klines['volume'].iloc[-1] if 'volume' in symbol_klines.columns else 0
+                                market_data[symbol] = {'close': latest_close, 'volume': latest_volume}
                         except Exception as e:
                             Log.logger.warning(f"提取 {symbol} 行情数据失败: {e}")
             else:
@@ -1299,7 +1313,7 @@ class BacktestEngine:
                         freq=freq,
                         start_time=start_time.strftime('%Y-%m-%d %H:%M:%S'),
                         end_time=(current_time + timedelta(minutes=1)).strftime('%Y-%m-%d %H:%M:%S'),
-                        fields=['close']
+                        fields=['close', 'volume']  # 【修复】获取成交量数据
                     )
 
                     if not klines_df.empty:
@@ -1308,7 +1322,8 @@ class BacktestEngine:
                                 symbol_klines = klines_df[klines_df.index.get_level_values('code') == symbol]
                                 if not symbol_klines.empty:
                                     latest_close = symbol_klines['close'].iloc[-1]
-                                    market_data[symbol] = {'close': latest_close}
+                                    latest_volume = symbol_klines['volume'].iloc[-1] if 'volume' in symbol_klines.columns else 0
+                                    market_data[symbol] = {'close': latest_close, 'volume': latest_volume}
                             except Exception:
                                 pass
 
@@ -2044,7 +2059,7 @@ class BacktestEngine:
                         freq=freq,
                         start_time=start_time.strftime('%Y-%m-%d %H:%M:%S'),
                         end_time=(current_time + timedelta(minutes=1)).strftime('%Y-%m-%d %H:%M:%S'),
-                        fields=['close']
+                        fields=['close', 'volume']  # 【修复】获取成交量数据
                     )
 
                     if not klines_df.empty:
@@ -2053,7 +2068,8 @@ class BacktestEngine:
                                 symbol_klines = klines_df[klines_df.index.get_level_values('code') == symbol]
                                 if not symbol_klines.empty:
                                     latest_close = symbol_klines['close'].iloc[-1]
-                                    market_data[symbol] = {'close': latest_close}
+                                    latest_volume = symbol_klines['volume'].iloc[-1] if 'volume' in symbol_klines.columns else 0
+                                    market_data[symbol] = {'close': latest_close, 'volume': latest_volume}
                             except Exception:
                                 pass
 
@@ -2120,7 +2136,7 @@ class BacktestEngine:
                     freq=freq,
                     start_time=start_time_str,
                     end_time=end_time_str,
-                    fields=['close']
+                    fields=['close', 'volume']  # 【修复】获取成交量数据
                 )
 
                 Log.logger.info(f"[{time_str}] [TRY_MATCH] get_klines返回: empty={klines_df.empty}, shape={klines_df.shape if not klines_df.empty else 'N/A'}, cols={list(klines_df.columns) if not klines_df.empty else 'N/A'}")
@@ -2135,10 +2151,11 @@ class BacktestEngine:
                             symbol_klines = klines_df[klines_df.index.get_level_values('code') == symbol]
                             if not symbol_klines.empty:
                                 latest_close = symbol_klines['close'].iloc[-1]
-                                market_data[symbol] = {'close': latest_close}
+                                latest_volume = symbol_klines['volume'].iloc[-1] if 'volume' in symbol_klines.columns else 0
+                                market_data[symbol] = {'close': latest_close, 'volume': latest_volume}
                                 found_count += 1
                                 if found_count <= 3:
-                                    Log.logger.info(f"[{time_str}] [TRY_MATCH] 找到{symbol}价格: {latest_close}")
+                                    Log.logger.info(f"[{time_str}] [TRY_MATCH] 找到{symbol}价格: {latest_close}, 成交量: {latest_volume}")
                         except Exception as e:
                             Log.logger.warning(f"[{time_str}] [TRY_MATCH] 提取{symbol}价格失败: {e}")
                     Log.logger.info(f"[{time_str}] [TRY_MATCH] 共找到{found_count}个标的的价格")
