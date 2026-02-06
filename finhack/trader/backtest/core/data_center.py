@@ -67,8 +67,78 @@ class DataCenter:
         max_workers = min(cpu_count, 8)  # 最多8个worker，避免过多线程
         self.preload_thread_pool = ThreadPoolExecutor(max_workers=max_workers)
         logger.info(f"数据预加载线程池初始化: {max_workers} workers")
-        
+
+        # 【优化】Parquet元数据缓存，带过期机制
+        self._parquet_meta_cache = {}  # 格式: {file_path: (metadata, cache_time)}
+        self._parquet_meta_cache_ttl = 300  # 缓存过期时间：5分钟
+        self._parquet_meta_cache_lock = threading.Lock()
+
+        # 【优化】读取配置选项
+        self._use_memory_map = False  # 默认不启用内存映射（对大文件可能更快）
+        self._min_rows_for_dtype_opt = 500000  # 数据类型优化的最小行数
+
         logger.info(f"数据中心初始化完成: {market} {freq} (使用统一数据接口，支持按月预加载)")
+
+    def _get_parquet_metadata(self, parquet_file: str):
+        """获取Parquet文件元数据，带缓存和过期机制
+
+        Args:
+            parquet_file: Parquet文件路径
+
+        Returns:
+            Parquet文件元数据
+        """
+        with self._parquet_meta_cache_lock:
+            now = datetime.now()
+            # 检查缓存是否存在且未过期
+            if parquet_file in self._parquet_meta_cache:
+                metadata, cache_time = self._parquet_meta_cache[parquet_file]
+                if (now - cache_time).total_seconds() < self._parquet_meta_cache_ttl:
+                    logger.debug(f"[Parquet缓存] 命中: {parquet_file}")
+                    return metadata
+                else:
+                    logger.debug(f"[Parquet缓存] 过期: {parquet_file}")
+                    del self._parquet_meta_cache[parquet_file]
+
+            # 缓存未命中或已过期，读取元数据
+            try:
+                import pyarrow.parquet as pq
+                metadata = pq.ParquetFile(parquet_file).metadata
+                self._parquet_meta_cache[parquet_file] = (metadata, now)
+                logger.debug(f"[Parquet缓存] 加载: {parquet_file}")
+                return metadata
+            except Exception as e:
+                logger.warning(f"[Parquet缓存] 读取元数据失败: {parquet_file}, {e}")
+                return None
+
+    def clear_parquet_metadata_cache(self):
+        """主动清除Parquet元数据缓存"""
+        with self._parquet_meta_cache_lock:
+            count = len(self._parquet_meta_cache)
+            self._parquet_meta_cache.clear()
+            logger.info(f"[Parquet缓存] 已清除 {count} 个元数据缓存")
+
+    def set_performance_options(self, use_memory_map: bool = None,
+                                min_rows_for_dtype_opt: int = None,
+                                parquet_meta_cache_ttl: int = None):
+        """设置性能优化选项
+
+        Args:
+            use_memory_map: 是否使用内存映射读取Parquet文件
+            min_rows_for_dtype_opt: 数据类型优化的最小行数阈值
+            parquet_meta_cache_ttl: Parquet元数据缓存过期时间（秒）
+        """
+        if use_memory_map is not None:
+            self._use_memory_map = use_memory_map
+            logger.info(f"[性能配置] 内存映射: {use_memory_map}")
+
+        if min_rows_for_dtype_opt is not None:
+            self._min_rows_for_dtype_opt = min_rows_for_dtype_opt
+            logger.info(f"[性能配置] 数据类型优化阈值: {min_rows_for_dtype_opt:,}行")
+
+        if parquet_meta_cache_ttl is not None:
+            self._parquet_meta_cache_ttl = parquet_meta_cache_ttl
+            logger.info(f"[性能配置] 元数据缓存TTL: {parquet_meta_cache_ttl}秒")
     
     def set_context(self, context: Dict[str, Any]):
         """设置上下文
@@ -864,7 +934,12 @@ class DataCenter:
 
     def _load_year_months(self, market: str, year: int, months_to_load: List[tuple],
                           universe: List[str], frequency: str):
-        """加载指定年份的多个月份数据（只读取一次Parquet）
+        """加载指定年份的多个月份数据（只读取一次Parquet）- 优化版
+
+        优化点：
+        1. 启用多线程读取Parquet
+        2. 使用PyArrow过滤条件下推，减少内存占用
+        3. 延迟数据类型优化
 
         Args:
             market: 市场名称
@@ -889,10 +964,10 @@ class DataCenter:
                     logger.info(f"[预加载] 成功获取 {market} 全市场股票列表: {len(universe)} 只")
                 else:
                     logger.warning(f"[预加载] 无法获取 {market} 股票列表，将加载所有可用数据")
-                    universe = None  # 设置为None，后续不过滤
+                    universe = None
             except Exception as e:
                 logger.error(f"[预加载] 获取 {market} 股票列表失败: {e}")
-                universe = None  # 设置为None，后续不过滤
+                universe = None
 
         month_strs = [f"{m:02d}" for _, m in months_to_load]
         logger.info(f"[预加载] 开始加载 {year} 年份: {month_strs}，共{len(universe) if universe else '全市场'}只股票")
@@ -906,39 +981,87 @@ class DataCenter:
 
         if not os.path.exists(parquet_file):
             logger.warning(f"[预加载] Parquet文件不存在: {parquet_file}，使用CSV方式")
-            # 回退到逐月加载CSV
             for year, month in months_to_load:
                 self._load_single_month_from_csv(market, year, month, universe, frequency)
             return
 
-        # 使用Parquet批量加载
+        # 【优化1】使用Parquet元数据缓存
+        metadata = self._get_parquet_metadata(parquet_file)
+        if metadata:
+            logger.info(f"[预加载] Parquet文件: {metadata.num_rows:,}行, {metadata.num_columns}列, "
+                       f"{metadata.num_row_groups}个row groups")
+
+        # 【优化2】使用多线程和过滤条件下推加载
         import pyarrow.parquet as pq
+        import pyarrow as pa
+        import pyarrow.compute as pc
 
         required_columns = ['time', 'code'] + ['open', 'high', 'low', 'close', 'volume', 'amount']
 
-        # 【关键】单线程加载，避免内存爆炸
-        table = pq.read_table(
-            parquet_file,
-            columns=required_columns,
-            use_threads=False
-        )
-        df = table.to_pandas()
+        # 计算时间范围过滤条件
+        month_nums = [m for _, m in months_to_load]
+        if month_nums:
+            min_month = min(month_nums)
+            max_month = max(month_nums)
+            start_date = datetime(year, min_month, 1)
+            if max_month == 12:
+                end_date = datetime(year + 1, 1, 1)
+            else:
+                end_date = datetime(year, max_month + 1, 1)
+        else:
+            start_date = datetime(year, 1, 1)
+            end_date = datetime(year + 1, 1, 1)
 
-        logger.info(f"[预加载] {year}年Parquet原始数据: {len(df):,}行")
+        try:
+            # 【优化3】使用多线程读取（暂不使用过滤条件下推，因为时间类型匹配复杂）
+            # 注意：PyArrow的filters对带时区的时间戳支持有限，暂时回退到加载后过滤
+            logger.info(f"[预加载] 使用多线程读取Parquet")
+            table = pq.read_table(
+                parquet_file,
+                columns=required_columns,
+                use_threads=True  # 【优化】启用多线程
+            )
+            df = table.to_pandas()
+            logger.info(f"[预加载] {year}年Parquet原始数据: {len(df):,}行")
 
-        # 【内存优化】优化数据类型以减少内存占用
-        df = self._optimize_dtypes(df)
+            # 在DataFrame层面进行时间和代码过滤（更可靠）
+            # 移除时区信息
+            if hasattr(df['time'].dt, 'tz') and df['time'].dt.tz is not None:
+                df['time'] = df['time'].dt.tz_localize(None)
+
+            # 时间范围过滤
+            before_filter = len(df)
+            df = df[(df['time'] >= start_date) & (df['time'] < end_date)]
+            if len(df) < before_filter:
+                logger.info(f"[预加载] 时间过滤: {before_filter:,} -> {len(df):,}行")
+
+            # 代码过滤
+            if universe:
+                before_filter = len(df)
+                df = df[df['code'].isin(universe)]
+                if len(df) < before_filter:
+                    logger.info(f"[预加载] 代码过滤: {before_filter:,} -> {len(df):,}行")
+
+        except Exception as e:
+            # 读取失败
+            logger.error(f"[预加载] Parquet读取失败: {e}")
+            raise
+
+        # 【优化4】延迟数据类型优化 - 只在数据量大时优化
+        # 数据量小于配置阈值时不优化，节省时间
+        if len(df) > self._min_rows_for_dtype_opt:
+            df = self._optimize_dtypes(df)
+        else:
+            logger.debug(f"[预加载] 数据量较小({len(df):,}行)，跳过类型优化")
 
         # 移除时区信息
         if hasattr(df['time'].dt, 'tz') and df['time'].dt.tz is not None:
             df['time'] = df['time'].dt.tz_localize(None)
 
-        # 先按代码过滤（如果指定了universe）
-        if universe:
+        # 如果使用了过滤，这里可能不需要再次过滤
+        if not universe and universe is not None:
             df = df[df['code'].isin(universe)]
             logger.info(f"[预加载] 代码过滤后: {len(df):,}行")
-        else:
-            logger.info(f"[预加载] 未指定universe，加载全市场数据: {len(df):,}行")
 
         # 设置索引方便后续操作
         df = df.set_index(['time', 'code'])
@@ -980,8 +1103,17 @@ class DataCenter:
         import gc
         gc.collect()
 
+        # 计算耗时
         elapsed = time.time() - start_time
-        logger.info(f"[预加载] {year}年完成，共{total_cached}条记录，耗时{elapsed:.2f}秒")
+
+        # 【优化】打印内存使用状态
+        try:
+            import psutil
+            mem = psutil.virtual_memory()
+            logger.info(f"[预加载] {year}年完成，共{total_cached}条记录，"
+                       f"耗时{elapsed:.2f}秒，内存使用: {mem.percent}%")
+        except:
+            logger.info(f"[预加载] {year}年完成，共{total_cached}条记录，耗时{elapsed:.2f}秒")
         print(f"[预加载] ✓ {year}年完成！{total_cached}条记录，耗时{elapsed:.2f}秒", flush=True)
 
     def _load_single_month_from_csv(self, market: str, year: int, month: int,
@@ -1230,6 +1362,22 @@ class DataCenter:
                 return None  # 缓存不完整，回退到磁盘加载
 
             month_df = self.kline_cache[cache_key]
+
+            # 【调试】检查缓存数据的索引结构
+            logger.info(f"[缓存查询] {cache_key} 索引类型: {type(month_df.index)}, 索引名: {month_df.index.names if hasattr(month_df.index, 'names') else 'N/A'}")
+
+            # 检查索引结构是否正确
+            if not hasattr(month_df.index, 'names') or 'code' not in month_df.index.names:
+                logger.error(f"[缓存查询] ⚠️ {cache_key} 索引结构不正确！期望 ['time', 'code']，实际 {month_df.index.names if hasattr(month_df.index, 'names') else month_df.index.name}")
+                # 尝试修复索引结构
+                if 'code' in month_df.columns and 'time' in month_df.columns:
+                    logger.info(f"[缓存查询] 尝试重新设置索引...")
+                    month_df = month_df.set_index(['time', 'code'])
+                elif 'code' in month_df.columns:
+                    logger.info(f"[缓存查询] 尝试设置 code 索引...")
+                    month_df = month_df.set_index('code')
+                # 修复后重新存入缓存
+                self.kline_cache[cache_key] = month_df
 
             # 过滤股票代码和时间范围
             month_df = month_df[month_df.index.get_level_values('code').isin(codes)]

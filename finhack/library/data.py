@@ -424,6 +424,19 @@ class DataInterface:
             # 【内存优化】优化数据类型
             data = self._optimize_dtypes(data)
 
+            # 【调试】检查返回数据的索引结构
+            if not data.empty:
+                logger.info(f"[DataInterface] 返回数据索引类型: {type(data.index)}, 索引名: {data.index.names if hasattr(data.index, 'names') else data.index.name}")
+                if not hasattr(data.index, 'names') or 'code' not in data.index.names:
+                    logger.error(f"[DataInterface] ⚠️ 返回数据索引结构不正确！期望 ['time', 'code']，实际 {data.index.names if hasattr(data.index, 'names') else data.index.name}")
+                    # 尝试修复
+                    if 'code' in data.columns and 'time' in data.columns:
+                        logger.info(f"[DataInterface] 尝试重新设置索引...")
+                        data = data.set_index(['time', 'code'])
+                    elif 'code' in data.columns:
+                        logger.info(f"[DataInterface] 尝试设置 code 索引...")
+                        data = data.set_index('code')
+
             logger.info(f"[DataInterface] 最终返回: {len(codes)}只股票, {len(data)}条记录")
 
             if data.empty:
@@ -646,6 +659,19 @@ class DataInterface:
 
             if all_data:
                 result = pd.concat(all_data, ignore_index=True)
+                # 确保有 code 列再设置索引
+                if 'code' not in result.columns:
+                    logger.error(f"[CodeBased] ⚠️ 合并后的数据缺少 'code' 列！当前列: {list(result.columns)}")
+                    # 尝试从索引中获取 code
+                    if result.index.name == 'code' or (hasattr(result.index, 'names') and 'code' in result.index.names):
+                        logger.info(f"[CodeBased] 从索引中恢复 'code'")
+                        result = result.reset_index()
+                    else:
+                        logger.error(f"[CodeBased] 无法恢复 'code' 列，返回空DataFrame")
+                        return pd.DataFrame()
+                if 'time' not in result.columns:
+                    logger.error(f"[CodeBased] ⚠️ 合并后的数据缺少 'time' 列！当前列: {list(result.columns)}")
+                    return pd.DataFrame()
                 result.set_index(['time', 'code'], inplace=True)
                 return result
             else:
@@ -712,45 +738,46 @@ class DataInterface:
 
                     logger.info(f"[Parquet] [{year}] 使用时间过滤: {filter_start}~{filter_end}")
 
-                    # 使用pyarrow.read_table读取数据
-                    # 注意：parquet文件中的时间列带有时区信息，不能直接用数值filter
-                    # 先加载全部数据，然后过滤
-                    table = pq.read_table(
-                        parquet_file,
-                        columns=required_columns,
-                        use_threads=max_workers
-                    )
+                    # 【优化】使用多线程读取 + DataFrame层面过滤
+                    # 注意：PyArrow的filters对带时区的时间戳支持有限，使用DataFrame过滤更可靠
+                    try:
+                        table = pq.read_table(
+                            parquet_file,
+                            columns=required_columns,
+                            use_threads=True  # 【优化】启用多线程
+                        )
+                        df = table.to_pandas()
 
-                    df = table.to_pandas()
+                        # 移除时区信息
+                        if hasattr(df['time'].dt, 'tz') and df['time'].dt.tz is not None:
+                            df['time'] = df['time'].dt.tz_localize(None)
 
-                    # 移除时区信息
-                    if hasattr(df['time'].dt, 'tz') and df['time'].dt.tz is not None:
-                        df['time'] = df['time'].dt.tz_localize(None)
+                        # 过滤时间范围
+                        before_time_filter = len(df)
+                        df = df[(df['time'] >= filter_start) & (df['time'] <= filter_end)]
+                        if len(df) < before_time_filter:
+                            logger.info(f"[Parquet] [{year}] 时间过滤: {before_time_filter:,} -> {len(df):,}")
 
-                    # 过滤时间范围
-                    before_time_filter = len(df)
-                    df = df[(df['time'] >= filter_start) & (df['time'] <= filter_end)]
-                    logger.info(f"[Parquet] [{year}] 时间过滤: {before_time_filter:,} -> {len(df):,}")
+                        if df.empty:
+                            logger.warning(f"[Parquet] [{year}] 时间过滤后结果为空")
+                            continue
 
-                    if df.empty:
-                        logger.warning(f"[Parquet] [{year}] 时间过滤后结果为空")
+                        # 过滤代码
+                        before_filter = len(df)
+                        df = df[df['code'].isin(codes)]
+                        if len(df) < before_filter:
+                            logger.info(f"[Parquet] [{year}] 代码过滤: {before_filter:,} -> {len(df):,}")
+
+                        if len(df) == 0:
+                            logger.warning(f"[Parquet] [{year}] 代码过滤后结果为空，跳过此年")
+                            continue
+
+                        # 数据已过滤，直接添加
+                        all_data.append(df)
+
+                    except Exception as e:
+                        logger.warning(f"[Parquet] [{year}] 读取失败: {e}")
                         continue
-
-                    # 移除时区信息（如果有）
-                    if hasattr(df['time'].dt, 'tz') and df['time'].dt.tz is not None:
-                        df['time'] = df['time'].dt.tz_localize(None)
-
-                    # 过滤代码
-                    before_filter = len(df)
-                    df = df[df['code'].isin(codes)]
-                    logger.info(f"[Parquet] [{year}] 代码过滤: {before_filter:,} -> {len(df):,}")
-
-                    if len(df) == 0:
-                        logger.warning(f"[Parquet] [{year}] 代码过滤后结果为空，跳过此年")
-                        continue
-
-                    # 数据已通过filter过滤，直接添加
-                    all_data.append(df)
 
                 except Exception as e:
                     logger.warning(f"加载 {year}.parquet 失败: {e}")
