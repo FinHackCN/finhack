@@ -2297,21 +2297,28 @@ class BacktestEngine:
             traceback.print_exc()
             
     def _handle_corporate_action_sync(self, event):
-        """处理公司行为事件 - 同步版本"""
+        """处理公司行为事件 - 同步版本
+
+        只处理与持仓相关的公司行为，非持仓股票的公司行为不会输出日志。
+        """
         try:
-            # 调用TradeCenter处理公司行为事件
-            self.trade_center.handle_corporate_action(event)
-
-            # 记录事件 - 构建详细的日志信息
-            log_parts = []
-
-            # 获取基本信息
+            # 获取基本信息（需要先获取symbol来检查持仓）
             if hasattr(event, 'data') and event.data:
                 symbol = event.data.get('symbol', '')
                 action_type = event.data.get('action_type', '')
             else:
                 symbol = getattr(event, 'symbol', '')
                 action_type = getattr(event, 'action_type', '')
+
+            # 先检查是否在持仓中，不在持仓中则直接返回（不处理也不输出日志）
+            if not symbol or symbol not in self.trade_center.positions:
+                return
+
+            # 调用TradeCenter处理公司行为事件
+            self.trade_center.handle_corporate_action(event)
+
+            # 记录事件 - 构建详细的日志信息
+            log_parts = []
 
             log_parts.append(f"{symbol}")
 
