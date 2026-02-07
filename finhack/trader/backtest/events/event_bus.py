@@ -8,28 +8,50 @@ import asyncio
 import inspect
 import logging
 import threading
-from queue import PriorityQueue
-from typing import Dict, List, Callable, Any
+from queue import PriorityQueue, Empty
+from typing import Dict, List, Callable, Any, Optional, Tuple
 from datetime import datetime
+from enum import Enum
 
 from .event_types import BaseEvent, EventTypeEnum, EventPriorityEnum
 
 logger = logging.getLogger(__name__)
 
 
+class ExceptionSeverity(Enum):
+    """异常严重级别"""
+    RECOVERABLE = "recoverable"  # 可恢复异常，继续处理
+    CRITICAL = "critical"        # 严重异常，需要中断
+
+
 class EventBus:
     """事件总线
-    
+
     负责事件的注册、分发和处理
     """
-    
-    def __init__(self):
-        """初始化事件总线"""
+
+    # 定义严重异常类型（需要中断处理）
+    CRITICAL_EXCEPTIONS = (
+        MemoryError,
+        SystemError,
+        KeyboardInterrupt,
+        SystemExit,
+    )
+
+    def __init__(self, max_queue_size: Optional[int] = None):
+        """初始化事件总线
+
+        Args:
+            max_queue_size: 事件队列最大大小，None表示无限制
+        """
         # 事件处理器映射：事件类型 -> 处理器列表
         self._handlers: Dict[EventTypeEnum, List[Callable]] = {}
 
+        # 事件处理器线程锁（使用RLock支持同一线程重入）
+        self._handlers_lock = threading.RLock()
+
         # 事件队列（按优先级和时间排序）
-        self._event_queue = PriorityQueue()
+        self._event_queue = PriorityQueue(maxsize=max_queue_size or 0)
 
         # 事件序列号计数器（确保同时间戳事件的稳定排序）
         self._event_counter = 0
@@ -38,39 +60,56 @@ class EventBus:
         # 处理统计
         self._processed_count = 0
         self._error_count = 0
+        self._critical_error_count = 0
 
-        logger.info("事件总线初始化完成")
+        # 事件队列最大大小
+        self._max_queue_size = max_queue_size
+
+        logger.info(f"事件总线初始化完成 (max_queue_size={max_queue_size})")
     
     def register_handler(self, event_type: EventTypeEnum, handler: Callable):
-        """注册事件处理器
-        
+        """注册事件处理器（线程安全）
+
         Args:
             event_type: 事件类型
             handler: 处理器函数
         """
-        if event_type not in self._handlers:
-            self._handlers[event_type] = []
-        
-        self._handlers[event_type].append(handler)
-        logger.debug(f"注册事件处理器: {event_type.value} -> {handler.__name__}")
-    
+        with self._handlers_lock:
+            if event_type not in self._handlers:
+                self._handlers[event_type] = []
+
+            # 防止重复注册同一个处理器
+            if handler not in self._handlers[event_type]:
+                self._handlers[event_type].append(handler)
+                logger.debug(f"注册事件处理器: {event_type.value} -> {handler.__name__}")
+            else:
+                logger.warning(f"事件处理器已存在，跳过注册: {event_type.value} -> {handler.__name__}")
+
     def unregister_handler(self, event_type: EventTypeEnum, handler: Callable):
-        """取消注册事件处理器
-        
+        """取消注册事件处理器（线程安全）
+
         Args:
             event_type: 事件类型
             handler: 处理器函数
         """
-        if event_type in self._handlers:
-            if handler in self._handlers[event_type]:
-                self._handlers[event_type].remove(handler)
-                logger.debug(f"取消注册事件处理器: {event_type.value} -> {handler.__name__}")
+        with self._handlers_lock:
+            if event_type in self._handlers:
+                if handler in self._handlers[event_type]:
+                    self._handlers[event_type].remove(handler)
+                    logger.debug(f"取消注册事件处理器: {event_type.value} -> {handler.__name__}")
+
+                    # 如果该事件类型没有处理器了，删除该键
+                    if not self._handlers[event_type]:
+                        del self._handlers[event_type]
     
-    def publish_event(self, event: BaseEvent):
-        """发布事件到队列
+    def publish_event(self, event: BaseEvent) -> bool:
+        """发布事件到队列（线程安全）
 
         Args:
             event: 事件对象
+
+        Returns:
+            bool: 是否成功发布（False表示队列已满）
         """
         # 获取唯一序列号（线程安全）
         with self._counter_lock:
@@ -83,25 +122,69 @@ class EventBus:
 
         # PriorityQueue使用元组进行排序：(优先级, 时间戳, 序列号, 事件)
         # 序列号确保即使 priority 和 timestamp 相同，也能稳定排序
-        self._event_queue.put((priority, timestamp, event_seq, event))
-
-        logger.debug(f"发布事件: {event.event_type.value} at {event.event_time}, seq={event_seq}")
+        try:
+            self._event_queue.put((priority, timestamp, event_seq, event), block=False)
+            logger.debug(f"发布事件: {event.event_type.value} at {event.event_time}, seq={event_seq}")
+            return True
+        except Exception:
+            if self._max_queue_size and self._event_queue.full():
+                logger.warning(f"事件队列已满，丢弃事件: {event.event_type.value} at {event.event_time}")
+                return False
+            raise
     
+    def _get_handlers(self, event_type: EventTypeEnum) -> List[Callable]:
+        """获取事件类型的处理器列表（线程安全，返回副本）
+
+        Args:
+            event_type: 事件类型
+
+        Returns:
+            List[Callable]: 处理器列表的副本
+        """
+        with self._handlers_lock:
+            # 返回副本，避免在持有锁的情况下调用处理器
+            handlers = self._handlers.get(event_type, []).copy()
+        return handlers
+
+    def _classify_exception(self, exc: Exception) -> Tuple[ExceptionSeverity, str]:
+        """分类异常的严重程度
+
+        Args:
+            exc: 异常对象
+
+        Returns:
+            Tuple[ExceptionSeverity, str]: (严重程度, 错误类型描述)
+        """
+        # 检查是否为严重异常
+        if isinstance(exc, self.CRITICAL_EXCEPTIONS):
+            return ExceptionSeverity.CRITICAL, f"严重异常: {type(exc).__name__}"
+
+        # 检查异常消息中的关键词
+        error_msg = str(exc).lower()
+        critical_keywords = ['corrupt', 'database', 'connection lost', 'broken pipe']
+        if any(keyword in error_msg for keyword in critical_keywords):
+            return ExceptionSeverity.CRITICAL, f"关键错误: {exc}"
+
+        return ExceptionSeverity.RECOVERABLE, "可恢复异常"
+
     async def _process_event_async(self, event: BaseEvent):
         """异步事件处理方法
-        
+
         Args:
             event: 事件对象
+
+        Raises:
+            Exception: 如果遇到严重异常，会重新抛出
         """
         logger.debug(f"处理事件: {event.event_type.value} at {event.event_time}")
-        
-        # 查找该事件类型的处理器
-        handlers = self._handlers.get(event.event_type, [])
-        
+
+        # 线程安全地获取处理器列表
+        handlers = self._get_handlers(event.event_type)
+
         if not handlers:
             logger.warning(f"没有找到事件处理器: {event.event_type.value}")
             return
-        
+
         # 依次调用所有处理器
         for handler in handlers:
             try:
@@ -112,30 +195,40 @@ class EventBus:
                 else:
                     # 同步处理器，直接调用
                     handler(event)
-                
+
                 logger.debug(f"事件处理器执行成功: {handler.__name__}")
-                
+
             except Exception as e:
-                logger.error(f"事件处理器 {handler.__name__} 执行失败: {e}")
-                self._error_count += 1
-                # 继续处理下一个处理器，不中断
-                continue
+                severity, error_type = self._classify_exception(e)
+
+                if severity == ExceptionSeverity.CRITICAL:
+                    logger.error(f"事件处理器 {handler.__name__} 遇到严重异常: {e}")
+                    self._critical_error_count += 1
+                    raise  # 重新抛出严重异常
+                else:
+                    logger.warning(f"事件处理器 {handler.__name__} 执行失败: {e}")
+                    self._error_count += 1
+                    # 继续处理下一个处理器，不中断
+                    continue
 
     def _process_event(self, event: BaseEvent):
         """内部事件处理方法
-        
+
         Args:
             event: 事件对象
+
+        Raises:
+            Exception: 如果遇到严重异常，会重新抛出
         """
         logger.debug(f"处理事件: {event.event_type.value} at {event.event_time}")
-        
-        # 查找该事件类型的处理器
-        handlers = self._handlers.get(event.event_type, [])
-        
+
+        # 线程安全地获取处理器列表
+        handlers = self._get_handlers(event.event_type)
+
         if not handlers:
             logger.warning(f"没有找到事件处理器: {event.event_type.value}")
             return
-        
+
         # 依次调用所有处理器
         for handler in handlers:
             try:
@@ -157,14 +250,21 @@ class EventBus:
                 else:
                     # 同步处理器，直接调用
                     handler(event)
-                
+
                 logger.debug(f"事件处理器执行成功: {handler.__name__}")
-                
+
             except Exception as e:
-                logger.error(f"事件处理器 {handler.__name__} 执行失败: {e}")
-                self._error_count += 1
-                # 继续处理下一个处理器，不中断
-                continue
+                severity, error_type = self._classify_exception(e)
+
+                if severity == ExceptionSeverity.CRITICAL:
+                    logger.error(f"事件处理器 {handler.__name__} 遇到严重异常: {e}")
+                    self._critical_error_count += 1
+                    raise  # 重新抛出严重异常
+                else:
+                    logger.warning(f"事件处理器 {handler.__name__} 执行失败: {e}")
+                    self._error_count += 1
+                    # 继续处理下一个处理器，不中断
+                    continue
 
     async def process_next_event_async(self) -> bool:
         """异步处理下一个事件
@@ -172,18 +272,23 @@ class EventBus:
         Returns:
             bool: 是否处理了事件
         """
-        if self._event_queue.empty():
-            return False
-
         try:
             # 解包四元组：(优先级, 时间戳, 序列号, 事件)
-            _, _, _, event = self._event_queue.get_nowait()
+            # 使用 block=False 配合超时，避免无限等待
+            _, _, _, event = self._event_queue.get(timeout=0.1)
             await self._process_event_async(event)
             self._processed_count += 1
             return True
 
+        except Empty:
+            # 队列为空，正常情况
+            return False
         except Exception as e:
+            severity, _ = self._classify_exception(e)
             logger.error(f"处理事件时发生错误: {e}")
+            if severity == ExceptionSeverity.CRITICAL:
+                self._critical_error_count += 1
+                raise
             self._error_count += 1
             return False
 
@@ -203,18 +308,23 @@ class EventBus:
         Returns:
             bool: 是否处理了事件
         """
-        if self._event_queue.empty():
-            return False
-
         try:
             # 解包四元组：(优先级, 时间戳, 序列号, 事件)
-            _, _, _, event = self._event_queue.get_nowait()
+            # 使用 block=False 配合超时，避免无限等待
+            _, _, _, event = self._event_queue.get(timeout=0.1)
             self._process_event(event)
             self._processed_count += 1
             return True
 
+        except Empty:
+            # 队列为空，正常情况
+            return False
         except Exception as e:
+            severity, _ = self._classify_exception(e)
             logger.error(f"处理事件时发生错误: {e}")
+            if severity == ExceptionSeverity.CRITICAL:
+                self._critical_error_count += 1
+                raise
             self._error_count += 1
             return False
     
@@ -243,28 +353,35 @@ class EventBus:
         """
         return self._event_queue.qsize()
     
-    def get_statistics(self) -> Dict[str, int]:
+    def get_statistics(self) -> Dict[str, Any]:
         """获取处理统计信息
-        
+
         Returns:
-            Dict[str, int]: 统计信息
+            Dict[str, Any]: 统计信息
         """
+        with self._handlers_lock:
+            handlers_count = sum(len(handlers) for handlers in self._handlers.values())
+
         return {
             'processed_count': self._processed_count,
             'error_count': self._error_count,
+            'critical_error_count': self._critical_error_count,
             'queue_size': self.get_queue_size(),
-            'handlers_count': sum(len(handlers) for handlers in self._handlers.values())
+            'handlers_count': handlers_count,
+            'max_queue_size': self._max_queue_size
         }
-    
+
     def reset_statistics(self):
         """重置统计信息"""
         self._processed_count = 0
         self._error_count = 0
+        self._critical_error_count = 0
         logger.debug("事件总线统计信息已重置")
-    
+
     def stop(self):
         """停止事件总线"""
         self.clear_queue()
-        self._handlers.clear()
+        with self._handlers_lock:
+            self._handlers.clear()
         self.reset_statistics()
         logger.info("事件总线已停止") 

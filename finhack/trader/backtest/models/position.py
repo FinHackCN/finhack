@@ -227,15 +227,31 @@ class Position:
         获取可卖出数量（考虑T+1规则）
 
         Args:
-            current_date: 当前日期
+            current_date: 当前日期时间
 
         Returns:
             可卖出数量
         """
         sellable = 0.0
         for buy_time, qty in self.buy_dates:
+            # 【修复】确保时区一致后再比较日期
+            # 将两个时间都转换为naive datetime或都转换为aware datetime
+            buy_date_for_compare = buy_time
+            current_date_for_compare = current_date
+
+            # 如果buy_time有时区信息但current_date没有，去除buy_time的时区
+            if buy_time.tzinfo is not None and current_date.tzinfo is None:
+                buy_date_for_compare = buy_time.replace(tzinfo=None)
+            # 如果current_date有时区信息但buy_time没有，去除current_date的时区
+            elif current_date.tzinfo is not None and buy_time.tzinfo is None:
+                current_date_for_compare = current_date.replace(tzinfo=None)
+            # 如果两者都有时区但不同，统一转换为UTC
+            elif buy_time.tzinfo is not None and current_date.tzinfo is not None:
+                if buy_time.tzinfo != current_date.tzinfo:
+                    buy_date_for_compare = buy_time.astimezone(current_date.tzinfo)
+
             # 判断是否是昨日及之前买入的（T+1：当日买入不可卖）
-            if buy_time and buy_time.date() < current_date.date():
+            if buy_date_for_compare and buy_date_for_compare.date() < current_date_for_compare.date():
                 sellable += qty
         return sellable
 
