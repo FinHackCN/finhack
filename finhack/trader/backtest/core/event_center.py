@@ -219,13 +219,24 @@ class EventCenter:
             # 3. 生成公司行为事件
             corporate_action_events = self._generate_corporate_action_events(trade_date)
             events.extend(corporate_action_events)
-            
+
             # 4. 按时间排序所有事件
-            # 同时间点的事件，TRY_MATCH 优先级最低（最后执行），确保撮合时使用最新的数据和订单
+            # 【改进】使用事件序列号确保稳定排序
+            # 同一时间的事件按以下优先级排序：
+            #   1. 事件时间
+            #   2. 事件类型优先级（TRY_MATCH最后执行）
+            #   3. 事件优先级（HIGHEST -> LOWEST）
+            #   4. 事件序列号（确保同优先级事件的稳定排序）
+            for i, event in enumerate(events):
+                # 为每个事件分配序列号（如果没有的话）
+                if not hasattr(event, '_seq_no'):
+                    event._seq_no = i
+
             events.sort(key=lambda x: (
                 x.event_time,
                 1 if x.event_type == EventTypeEnum.TRY_MATCH else 0,  # TRY_MATCH 放最后
-                x.priority.value
+                x.priority.value,
+                getattr(x, '_seq_no', 0)  # 序列号确保稳定排序
             ))
 
             # 添加调试日志

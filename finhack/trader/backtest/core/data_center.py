@@ -50,14 +50,18 @@ class DataCenter:
         self.market_data_dir = os.path.join(self.base_data_dir, 'market')
         self.factors_data_dir = os.path.join(self.base_data_dir, 'factors')
         self.reference_data_dir = os.path.join(self.base_data_dir, 'market', 'reference')
-        
+
         # 多频率数据缓存
         self.kline_cache = {}  # 格式: {market: {freq: {symbol: DataFrame}}}
         self.factor_cache = {}  # 格式: {market: {freq: {factor_name: DataFrame}}}
-        
+
+        # 【新增】缓存线程锁（确保线程安全）
+        self._kline_cache_lock = threading.RLock()  # 使用RLock支持同线程重入
+        self._factor_cache_lock = threading.RLock()
+
         # 支持的频率列表
         self.supported_frequencies = ['1m', '30m', '120m', '1d']
-        
+
         # 按月预加载策略相关属性
         self.preloaded_months = {}  # 格式: {market: {year_month: datetime}}
         self.preload_lock = threading.Lock()  # 线程锁，确保预加载过程线程安全
@@ -336,7 +340,9 @@ class DataCenter:
                         for month_group, month_df in df.groupby('month'):
                             cache_key = f"{market}_{frequency}_{month_group}"
                             month_df = month_df.drop(columns=['month'])
-                            self.kline_cache[cache_key] = month_df
+                            # 【线程安全】使用锁保护缓存写入
+                            with self._kline_cache_lock:
+                                self.kline_cache[cache_key] = month_df
                             logger.info(f"[预加载] 缓存月份 {month_group}: {len(month_df):,}行")
 
                         total_records = len(df)
@@ -882,7 +888,9 @@ class DataCenter:
             for month_key, month_df in df.groupby('month'):
                 month_df = month_df.drop(columns=['month'])
                 cache_key = f"{market}_1d_{month_key}"
-                self.kline_cache[cache_key] = month_df
+                # 【线程安全】使用锁保护缓存写入
+                with self._kline_cache_lock:
+                    self.kline_cache[cache_key] = month_df
                 total_cached += len(month_df)
 
             # 主动释放内存
@@ -996,7 +1004,9 @@ class DataCenter:
         for month_key, month_df in df.groupby('month'):
             month_df = month_df.drop(columns=['month'])
             cache_key = f"{market}_1d_{month_key}"
-            self.kline_cache[cache_key] = month_df
+            # 【线程安全】使用锁保护缓存写入
+            with self._kline_cache_lock:
+                self.kline_cache[cache_key] = month_df
             total_cached += len(month_df)
 
         # 释放内存
@@ -1163,7 +1173,9 @@ class DataCenter:
 
             if not month_df.empty:
                 cache_key = f"{market}_{frequency}_{month_key}"
-                self.kline_cache[cache_key] = month_df
+                # 【线程安全】使用锁保护缓存写入
+                with self._kline_cache_lock:
+                    self.kline_cache[cache_key] = month_df
                 total_cached += len(month_df)
 
                 # 标记已加载
@@ -1433,11 +1445,13 @@ class DataCenter:
 
             logger.info(f"[缓存查询] 查找key: {cache_key}, 找到: {cache_key in self.kline_cache}")
 
-            if cache_key not in self.kline_cache:
-                logger.debug(f"[缓存] 缓存未命中: {cache_key}")
-                return None  # 缓存不完整，回退到磁盘加载
+            # 【线程安全】使用锁保护缓存读取和检查
+            with self._kline_cache_lock:
+                if cache_key not in self.kline_cache:
+                    logger.debug(f"[缓存] 缓存未命中: {cache_key}")
+                    return None  # 缓存不完整，回退到磁盘加载
 
-            month_df = self.kline_cache[cache_key]
+                month_df = self.kline_cache[cache_key].copy()  # 复制数据避免在锁内修改
 
             # 【调试】检查缓存数据的索引结构
             logger.info(f"[缓存查询] {cache_key} 索引类型: {type(month_df.index)}, 索引名: {month_df.index.names if hasattr(month_df.index, 'names') else 'N/A'}")
@@ -1452,8 +1466,9 @@ class DataCenter:
                 elif 'code' in month_df.columns:
                     logger.info(f"[缓存查询] 尝试设置 code 索引...")
                     month_df = month_df.set_index('code')
-                # 修复后重新存入缓存
-                self.kline_cache[cache_key] = month_df
+                # 修复后重新存入缓存（使用锁保护）
+                with self._kline_cache_lock:
+                    self.kline_cache[cache_key] = month_df
 
             # 过滤股票代码和时间范围
             month_df = month_df[month_df.index.get_level_values('code').isin(codes)]
@@ -1963,3 +1978,64 @@ class DataCenter:
                                 period: int = 20, std_dev: float = 2.0) -> pd.DataFrame:
         return self.calculate_indicator(talib.BBANDS, codes, freq, start_time, end_time,
                                        timeperiod=period, nbdevup=std_dev, nbdevdn=std_dev)
+
+    # ========================================================================
+    # 资源清理方法
+    # ========================================================================
+
+    def close(self):
+        """关闭数据中心，释放所有资源
+
+        释放的资源包括：
+        - 线程池
+        - 缓存
+        - 其他系统资源
+        """
+        try:
+            # 关闭线程池
+            if hasattr(self, 'preload_thread_pool') and self.preload_thread_pool is not None:
+                self.preload_thread_pool.shutdown(wait=True)
+                logger.info("数据预加载线程池已关闭")
+
+            # 清空缓存
+            if hasattr(self, 'kline_cache'):
+                self.kline_cache.clear()
+                logger.debug("K线缓存已清空")
+
+            if hasattr(self, 'factor_cache'):
+                self.factor_cache.clear()
+                logger.debug("因子缓存已清空")
+
+            if hasattr(self, '_parquet_meta_cache'):
+                self._parquet_meta_cache.clear()
+                logger.debug("Parquet元数据缓存已清空")
+
+            if hasattr(self, '_trading_status'):
+                self._trading_status.clear()
+                logger.debug("交易状态已清空")
+
+            if hasattr(self, 'preloaded_months'):
+                self.preloaded_months.clear()
+                logger.debug("预加载记录已清空")
+
+            logger.info("数据中心已关闭，所有资源已释放")
+
+        except Exception as e:
+            logger.error(f"关闭数据中心时发生错误: {e}")
+
+    def __del__(self):
+        """析构函数，确保资源被释放"""
+        try:
+            self.close()
+        except Exception:
+            # 析构函数中忽略所有异常，避免Python警告
+            pass
+
+    def __enter__(self):
+        """支持上下文管理器协议"""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """支持上下文管理器协议"""
+        self.close()
+        return False

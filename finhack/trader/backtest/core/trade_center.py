@@ -105,6 +105,9 @@ class TradeCenter:
         # 防重复处理：已处理的公司行为记录
         # 格式: {(symbol, ex_date, action_type): True}
         self._processed_corporate_actions: set = set()
+
+        # 资金冻结记录：{order_id: frozen_amount}
+        self._frozen_cash: Dict[str, float] = {}
     
     def initialize(self, context):
         """
@@ -544,6 +547,15 @@ class TradeCenter:
             self.orders[order_id] = order
             order.status = OrderStatus.NEW
 
+            # 【新增】资金冻结：买入订单需要冻结资金
+            if order.side == OrderSide.BUY and self._context and hasattr(self._context, 'account'):
+                frozen_amount = self._estimate_order_cost(order)
+                if frozen_amount > 0:
+                    # 冻结资金
+                    self._freeze_cash(order_id, frozen_amount)
+                    if self._context:
+                        self._context.logger.debug(f"冻结资金: {order_id} {frozen_amount:.2f}元")
+
             # 发布订单提交事件
             if self.event_center:
                 self.event_center.publish_order_event(
@@ -580,25 +592,40 @@ class TradeCenter:
     
     def cancel_order(self, adapter_id: str = "default", order_id: str = "") -> bool:
         """
-        撤单
-        
+        撤单（带资金解冻）
+
         Args:
             adapter_id: 适配器ID
             order_id: 订单ID
-            
+
         Returns:
             bool: 是否成功
         """
         try:
             if order_id not in self.orders:
                 return False
-            
+
             order = self.orders[order_id]
-            
+
             # 只有未成交或部分成交的订单可以撤销
             if order.status in [OrderStatus.PENDING_NEW, OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED]:
                 order.status = OrderStatus.CANCELLED
                 order.updated_at = self._get_backtest_time()
+
+                # 【新增】解冻资金：买入订单需要释放未成交部分的冻结资金
+                if order.side == OrderSide.BUY and order_id in self._frozen_cash:
+                    # 计算剩余未成交数量
+                    remaining_volume = order.volume - order.filled_quantity
+                    if remaining_volume > 0:
+                        # 按比例解冻资金
+                        frozen_amount = self._frozen_cash.get(order_id, 0)
+                        unfreeze_ratio = remaining_volume / order.volume if order.volume > 0 else 1
+                        unfreeze_amount = frozen_amount * unfreeze_ratio
+
+                        if unfreeze_amount > 0:
+                            self._unfreeze_cash(order_id, unfreeze_amount)
+                            if self._context:
+                                self._context.logger.debug(f"解冻资金: {order_id} {unfreeze_amount:.2f}元 (剩余{remaining_volume}股)")
 
                 # 发布订单撤销事件
                 if self.event_center:
@@ -614,9 +641,9 @@ class TradeCenter:
                     self._context.logger.info(f"订单撤销成功: {order_id}")
 
                 return True
-            
+
             return False
-            
+
         except Exception as e:
             if self._context:
                 self._context.logger.error(f"撤单失败: {str(e)}")
@@ -1056,7 +1083,7 @@ class TradeCenter:
         return {'status': 'active', 'reason': '', 'since': None}
 
     def _fill_order(self, order: Order, fill_quantity: float, fill_price: float):
-        """成交订单"""
+        """成交订单（带资金冻结更新）"""
         try:
             # 计算成交金额和手续费
             trade_value = fill_quantity * fill_price
@@ -1104,27 +1131,44 @@ class TradeCenter:
                 commission=commission,
                 timestamp=self._get_backtest_time()
             )
-            
+
             self.trades[trade_id] = trade
-            
+
             # 更新订单状态
             order.filled_quantity += fill_quantity
             order.avg_fill_price = ((order.avg_fill_price * (order.filled_quantity - fill_quantity) +
                                    fill_price * fill_quantity) / order.filled_quantity)
             order.commission += commission
             order.updated_at = self._get_backtest_time()
-            
+
+            # 【新增】更新冻结资金：成交后释放对应的冻结资金
+            if order.side == OrderSide.BUY and order.order_id in self._frozen_cash:
+                # 计算本次成交对应的冻结金额
+                frozen_amount = self._frozen_cash.get(order.order_id, 0)
+                fill_ratio = fill_quantity / order.volume if order.volume > 0 else 0
+                unfreeze_amount = frozen_amount * fill_ratio
+
+                if unfreeze_amount > 0:
+                    # 从冻结记录中扣除已成交部分
+                    self._frozen_cash[order.order_id] -= unfreeze_amount
+                    if self._context:
+                        self._context.logger.debug(f"成交释放冻结资金: {order.order_id} {unfreeze_amount:.2f}元")
+
+                    # 如果订单完全成交，删除冻结记录
+                    if order.filled_quantity >= order.volume:
+                        del self._frozen_cash[order.order_id]
+
             if order.filled_quantity >= order.volume:
                 order.status = OrderStatus.FILLED
             else:
                 order.status = OrderStatus.PARTIALLY_FILLED
-            
+
             # 更新持仓
             self._update_position(order.symbol, order.side, fill_quantity, fill_price, commission)
-            
+
             # 更新账户资金
             self._update_account(order.side, trade_value, commission)
-            
+
             # 记录成交日志
             if self._context:
                 self._context.log_trade({
@@ -1136,12 +1180,12 @@ class TradeCenter:
                     "price": fill_price,
                     "commission": commission
                 })
-                
+
                 self._context.logger.info(
                     f"订单成交: {order.symbol} {order.side.value} {fill_quantity}@{fill_price}, "
                     f"手续费: {commission}"
                 )
-        
+
         except Exception as e:
             if self._context:
                 self._context.logger.error(f"订单成交处理失败: {str(e)}")
@@ -2952,6 +2996,117 @@ class TradeCenter:
         except Exception as e:
             if self._context:
                 self._context.logger.error(f"订单撮合失败: {e}")
+
+    # ========================================================================
+    # 资金冻结/解冻方法
+    # ========================================================================
+
+    def _freeze_cash(self, order_id: str, amount: float) -> bool:
+        """冻结资金（下单时调用）
+
+        Args:
+            order_id: 订单ID
+            amount: 冻结金额
+
+        Returns:
+            bool: 是否成功冻结
+        """
+        try:
+            if not self._context or not hasattr(self._context, 'account'):
+                return False
+
+            account = self._context.account
+
+            # 检查资金是否充足
+            if account.available_cash < amount:
+                if self._context:
+                    self._context.logger.error(f"冻结资金失败: 可用资金不足 {account.available_cash:.2f} < {amount:.2f}")
+                return False
+
+            # 冻结资金
+            account.available_cash -= amount
+            if hasattr(account, 'locked_cash'):
+                account.locked_cash += amount
+
+            # 记录冻结
+            self._frozen_cash[order_id] = amount
+
+            # 同步更新 context['account'] 字典
+            if 'account' in self._context:
+                self._context['account']['cash_available'] = account.available_cash
+
+            return True
+
+        except Exception as e:
+            if self._context:
+                self._context.logger.error(f"冻结资金失败: {e}")
+            return False
+
+    def _unfreeze_cash(self, order_id: str, amount: float) -> bool:
+        """解冻资金（撤单或成交时调用）
+
+        Args:
+            order_id: 订单ID
+            amount: 解冻金额
+
+        Returns:
+            bool: 是否成功解冻
+        """
+        try:
+            if not self._context or not hasattr(self._context, 'account'):
+                return False
+
+            account = self._context.account
+
+            # 检查冻结记录
+            frozen_amount = self._frozen_cash.get(order_id, 0)
+            if frozen_amount <= 0:
+                if self._context:
+                    self._context.logger.warning(f"解冻资金失败: 订单 {order_id} 没有冻结记录")
+                return False
+
+            # 确保解冻金额不超过冻结金额
+            actual_unfreeze = min(amount, frozen_amount)
+
+            # 解冻资金
+            account.available_cash += actual_unfreeze
+            if hasattr(account, 'locked_cash'):
+                account.locked_cash -= actual_unfreeze
+
+            # 更新冻结记录
+            self._frozen_cash[order_id] -= actual_unfreeze
+            if self._frozen_cash[order_id] <= 0:
+                del self._frozen_cash[order_id]
+
+            # 同步更新 context['account'] 字典
+            if 'account' in self._context:
+                self._context['account']['cash_available'] = account.available_cash
+
+            return True
+
+        except Exception as e:
+            if self._context:
+                self._context.logger.error(f"解冻资金失败: {e}")
+            return False
+
+    def get_frozen_cash(self, order_id: str) -> float:
+        """获取订单的冻结金额
+
+        Args:
+            order_id: 订单ID
+
+        Returns:
+            float: 冻结金额
+        """
+        return self._frozen_cash.get(order_id, 0)
+
+    def get_total_frozen_cash(self) -> float:
+        """获取所有订单的冻结总额
+
+        Returns:
+            float: 冻结总额
+        """
+        return sum(self._frozen_cash.values())
 
     def handle_order_submission(self, event):
         """处理订单提交事件
