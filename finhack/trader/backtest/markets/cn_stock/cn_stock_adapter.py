@@ -9,6 +9,8 @@ from datetime import datetime, date, time, timedelta
 import logging
 
 from ..base_market import BaseMarket
+from ..base_minutely_events import BaseMinutelyEventGenerator
+from ..base_daily_events import BaseDailyEventGenerator
 from ...events.event_types import BaseEvent, MarketEvent, EventTypeEnum
 
 logger = logging.getLogger(__name__)
@@ -107,301 +109,268 @@ class CnStockMarketAdapter(BaseMarket):
         events = []
 
         if frequency == '1d':
-            # ========== 日频事件 ==========
+            # ========== 日频事件 - 使用统一框架 ==========
+            # 基础事件由统一框架生成
+            events = BaseDailyEventGenerator.generate_daily_events(
+                adapter=self,
+                trade_date=trade_date
+            )
 
-            # 交易前事件
-            events.append(MarketEvent(
-                event_type=EventTypeEnum.BEFORE_MARKET,
-                event_time=datetime.combine(trade_date, time(9, 0)),
-                market=self.market_name,
-                frequency=frequency,
-                event_description="交易前准备"
-            ))
+            # 添加中国A股特有的集合竞价事件
+            additional_events = self._get_auction_events_1d(trade_date)
 
-            # 开盘事件
-            events.append(MarketEvent(
-                event_type=EventTypeEnum.MARKET_START,
-                event_time=datetime.combine(trade_date, time(9, 30)),
-                market=self.market_name,
-                frequency=frequency,
-                event_description="开盘"
-            ))
+            # 添加收盘相关事件
+            additional_events.extend(self._get_closing_events_1d(trade_date))
 
-            # 撮合事件
-            events.append(MarketEvent(
-                event_type=EventTypeEnum.TRY_MATCH,
-                event_time=datetime.combine(trade_date, time(9, 30)),
-                market=self.market_name,
-                frequency=frequency,
-                event_description="日级撮合"
-            ))
+            events.extend(additional_events)
+            events.sort(key=lambda x: x.event_time)
 
-            # 收盘事件
-            events.append(MarketEvent(
-                event_type=EventTypeEnum.MARKET_END,
-                event_time=datetime.combine(trade_date, time(15, 0)),
-                market=self.market_name,
-                frequency=frequency,
-                event_description="收盘"
-            ))
-
-            # 交易后事件 - 使用18:00（符合规范）
-            events.append(MarketEvent(
-                event_type=EventTypeEnum.AFTER_MARKET,
-                event_time=datetime.combine(trade_date, time(18, 0)),
-                market=self.market_name,
-                frequency=frequency,
-                event_description="交易后处理"
-            ))
-
-            # 日K线事件
-            events.append(MarketEvent(
-                event_type=EventTypeEnum.DAILY_BAR_CLOSED,
-                event_time=datetime.combine(trade_date, time(15, 0)),
-                market=self.market_name,
-                frequency=frequency,
-                event_description="日K线生成"
-            ))
-            
         elif frequency in ['1m', '30m', '120m']:
-            # ========== 分钟频事件 ==========
+            # ========== 分钟频事件 - 使用统一框架 ==========
+            # 基础事件由统一框架生成
+            events = BaseMinutelyEventGenerator.generate_minutely_events(
+                adapter=self,
+                trade_date=trade_date,
+                frequency=frequency
+            )
 
-            # 日开始事件
-            events.append(MarketEvent(
-                event_type=EventTypeEnum.DAY_START,
-                event_time=datetime.combine(trade_date, time(9, 0)),
-                market=self.market_name,
-                frequency=frequency,
-                event_description="日开始"
-            ))
+            # 添加中国A股特有的集合竞价事件
+            additional_events = self._get_auction_events(trade_date, frequency)
 
-            # 交易前事件
-            events.append(MarketEvent(
-                event_type=EventTypeEnum.BEFORE_MARKET,
-                event_time=datetime.combine(trade_date, time(9, 0)),
-                market=self.market_name,
-                frequency=frequency,
-                event_description="交易前准备"
-            ))
+            # 添加细分时段事件
+            additional_events.extend(self._get_session_events(trade_date, frequency))
 
-            # ========== 集合竞价相关事件 ==========
-            # 集合竞价开始
-            events.append(MarketEvent(
-                event_type=EventTypeEnum.PRE_OPENING_START,
-                event_time=datetime.combine(trade_date, time(9, 15)),
-                market=self.market_name,
-                frequency=frequency,
-                event_description="集合竞价开始"
-            ))
+            # 添加收盘相关事件
+            additional_events.extend(self._get_closing_events(trade_date, frequency))
 
-            # 集合竞价可撤单结束
-            events.append(MarketEvent(
-                event_type=EventTypeEnum.PRE_OPENING_END,
-                event_time=datetime.combine(trade_date, time(9, 20)),
-                market=self.market_name,
-                frequency=frequency,
-                event_description="集合竞价不可撤单"
-            ))
+            # 添加K线事件（如果需要）
+            kline_events = self._get_kline_events(trade_date, frequency)
+            additional_events.extend(kline_events)
 
-            # 集合竞价撮合
-            events.append(MarketEvent(
-                event_type=EventTypeEnum.MATCHING_START,
-                event_time=datetime.combine(trade_date, time(9, 25)),
-                market=self.market_name,
-                frequency=frequency,
-                event_description="集合竞价撮合"
-            ))
+            events.extend(additional_events)
+            events.sort(key=lambda x: x.event_time)
 
-            # 开盘价确定
-            events.append(MarketEvent(
-                event_type=EventTypeEnum.OPENING_PRICE_DETERMINED,
-                event_time=datetime.combine(trade_date, time(9, 25)),
-                market=self.market_name,
-                frequency=frequency,
-                event_description="开盘价确定"
-            ))
-
-            # 开盘事件
-            events.append(MarketEvent(
-                event_type=EventTypeEnum.MARKET_START,
-                event_time=datetime.combine(trade_date, time(9, 30)),
-                market=self.market_name,
-                frequency=frequency,
-                event_description="开盘"
-            ))
-
-            # 根据频率生成K线事件
-            interval_minutes = 1 if frequency == '1m' else (30 if frequency == '30m' else 120)
-
-            # 上午交易时段
-            morning_start = datetime.combine(trade_date, time(9, 30))
-            morning_end = datetime.combine(trade_date, time(11, 30))
-            current_time = morning_start
-
-            while current_time <= morning_end:
-                # 生成K线事件
-                if frequency == '1m':
-                    events.append(MarketEvent(
-                        event_type=EventTypeEnum.MARKET_BAR_1M,
-                        event_time=current_time,
-                        market=self.market_name,
-                        frequency=frequency,
-                        event_description="1分钟K线"
-                    ))
-                elif frequency == '30m':
-                    events.append(MarketEvent(
-                        event_type=EventTypeEnum.MARKET_BAR_30M,
-                        event_time=current_time,
-                        market=self.market_name,
-                        frequency=frequency,
-                        event_description="30分钟K线"
-                    ))
-                elif frequency == '120m':
-                    events.append(MarketEvent(
-                        event_type=EventTypeEnum.MARKET_BAR_120M,
-                        event_time=current_time,
-                        market=self.market_name,
-                        frequency=frequency,
-                        event_description="120分钟K线"
-                    ))
-
-                # 生成撮合事件
-                events.append(MarketEvent(
-                    event_type=EventTypeEnum.TRY_MATCH,
-                    event_time=current_time,
-                    market=self.market_name,
-                    frequency=frequency,
-                    event_description=f"{frequency}级撮合"
-                ))
-                current_time += timedelta(minutes=interval_minutes)
-
-            # ========== 细分时段事件 ==========
-            # 上午收盘
-            events.append(MarketEvent(
-                event_type=EventTypeEnum.MORNING_END,
-                event_time=datetime.combine(trade_date, time(11, 30)),
-                market=self.market_name,
-                frequency=frequency,
-                event_description="上午收盘"
-            ))
-
-            # 下午开盘
-            events.append(MarketEvent(
-                event_type=EventTypeEnum.AFTERNOON_START,
-                event_time=datetime.combine(trade_date, time(13, 0)),
-                market=self.market_name,
-                frequency=frequency,
-                event_description="下午开盘"
-            ))
-
-            # 下午交易时段
-            afternoon_start = datetime.combine(trade_date, time(13, 0))
-            afternoon_end = datetime.combine(trade_date, time(15, 0))
-            current_time = afternoon_start
-
-            while current_time <= afternoon_end:
-                # 生成K线事件
-                if frequency == '1m':
-                    events.append(MarketEvent(
-                        event_type=EventTypeEnum.MARKET_BAR_1M,
-                        event_time=current_time,
-                        market=self.market_name,
-                        frequency=frequency,
-                        event_description="1分钟K线"
-                    ))
-                elif frequency == '30m':
-                    events.append(MarketEvent(
-                        event_type=EventTypeEnum.MARKET_BAR_30M,
-                        event_time=current_time,
-                        market=self.market_name,
-                        frequency=frequency,
-                        event_description="30分钟K线"
-                    ))
-                elif frequency == '120m':
-                    events.append(MarketEvent(
-                        event_type=EventTypeEnum.MARKET_BAR_120M,
-                        event_time=current_time,
-                        market=self.market_name,
-                        frequency=frequency,
-                        event_description="120分钟K线"
-                    ))
-
-                # 生成撮合事件
-                events.append(MarketEvent(
-                    event_type=EventTypeEnum.TRY_MATCH,
-                    event_time=current_time,
-                    market=self.market_name,
-                    frequency=frequency,
-                    event_description=f"{frequency}级撮合"
-                ))
-                current_time += timedelta(minutes=interval_minutes)
-
-            # ========== 收盘相关事件 ==========
-            # 收盘集合竞价开始
-            events.append(MarketEvent(
-                event_type=EventTypeEnum.CLOSING_START,
-                event_time=datetime.combine(trade_date, time(14, 57)),
-                market=self.market_name,
-                frequency=frequency,
-                event_description="收盘集合竞价开始"
-            ))
-
-            # 收盘结束
-            events.append(MarketEvent(
-                event_type=EventTypeEnum.CLOSING_END,
-                event_time=datetime.combine(trade_date, time(15, 0)),
-                market=self.market_name,
-                frequency=frequency,
-                event_description="收盘集合竞价结束"
-            ))
-
-            # 收盘价确定
-            events.append(MarketEvent(
-                event_type=EventTypeEnum.CLOSING_PRICE_DETERMINED,
-                event_time=datetime.combine(trade_date, time(15, 0)),
-                market=self.market_name,
-                frequency=frequency,
-                event_description="收盘价确定"
-            ))
-
-            # 收盘事件
-            events.append(MarketEvent(
-                event_type=EventTypeEnum.MARKET_END,
-                event_time=datetime.combine(trade_date, time(15, 0)),
-                market=self.market_name,
-                frequency=frequency,
-                event_description="收盘"
-            ))
-
-            # 交易后事件 - 使用18:00（符合规范）
-            events.append(MarketEvent(
-                event_type=EventTypeEnum.AFTER_MARKET,
-                event_time=datetime.combine(trade_date, time(18, 0)),
-                market=self.market_name,
-                frequency=frequency,
-                event_description="交易后处理"
-            ))
-
-            # 日K线事件
-            events.append(MarketEvent(
-                event_type=EventTypeEnum.DAILY_BAR_CLOSED,
-                event_time=datetime.combine(trade_date, time(15, 0)),
-                market=self.market_name,
-                frequency=frequency,
-                event_description="日K线生成"
-            ))
-
-            # 日终事件
-            events.append(MarketEvent(
-                event_type=EventTypeEnum.DAY_END,
-                event_time=datetime.combine(trade_date, time(23, 59, 59)),
-                market=self.market_name,
-                frequency=frequency,
-                event_description="日终处理"
-            ))
-        
         return events
-    
+
+    def _get_auction_events(self, trade_date: date, frequency: str) -> List[BaseEvent]:
+        """生成A股集合竞价相关事件"""
+        events = []
+
+        # 集合竞价开始
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.PRE_OPENING_START,
+            event_time=datetime.combine(trade_date, time(9, 15)),
+            market=self.market_name,
+            frequency=frequency,
+            event_description="集合竞价开始"
+        ))
+
+        # 集合竞价可撤单结束
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.PRE_OPENING_END,
+            event_time=datetime.combine(trade_date, time(9, 20)),
+            market=self.market_name,
+            frequency=frequency,
+            event_description="集合竞价不可撤单"
+        ))
+
+        # 集合竞价撮合
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.MATCHING_START,
+            event_time=datetime.combine(trade_date, time(9, 25)),
+            market=self.market_name,
+            frequency=frequency,
+            event_description="集合竞价撮合"
+        ))
+
+        # 开盘价确定
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.OPENING_PRICE_DETERMINED,
+            event_time=datetime.combine(trade_date, time(9, 25)),
+            market=self.market_name,
+            frequency=frequency,
+            event_description="开盘价确定"
+        ))
+
+        return events
+
+    def _get_session_events(self, trade_date: date, frequency: str) -> List[BaseEvent]:
+        """生成分段时段事件（午休分段）"""
+        events = []
+
+        # 上午收盘
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.MORNING_END,
+            event_time=datetime.combine(trade_date, time(11, 30)),
+            market=self.market_name,
+            frequency=frequency,
+            event_description="上午收盘"
+        ))
+
+        # 下午开盘
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.AFTERNOON_START,
+            event_time=datetime.combine(trade_date, time(13, 0)),
+            market=self.market_name,
+            frequency=frequency,
+            event_description="下午开盘"
+        ))
+
+        return events
+
+    def _get_closing_events(self, trade_date: date, frequency: str) -> List[BaseEvent]:
+        """生成收盘相关事件"""
+        events = []
+
+        # 收盘集合竞价开始
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.CLOSING_START,
+            event_time=datetime.combine(trade_date, time(14, 57)),
+            market=self.market_name,
+            frequency=frequency,
+            event_description="收盘集合竞价开始"
+        ))
+
+        # 收盘结束
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.CLOSING_END,
+            event_time=datetime.combine(trade_date, time(15, 0)),
+            market=self.market_name,
+            frequency=frequency,
+            event_description="收盘集合竞价结束"
+        ))
+
+        # 收盘价确定
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.CLOSING_PRICE_DETERMINED,
+            event_time=datetime.combine(trade_date, time(15, 0)),
+            market=self.market_name,
+            frequency=frequency,
+            event_description="收盘价确定"
+        ))
+
+        return events
+
+    def _get_kline_events(self, trade_date: date, frequency: str) -> List[BaseEvent]:
+        """生成K线事件（可选，某些策略可能依赖这些事件）"""
+        events = []
+
+        # 确定间隔
+        interval_minutes = 1 if frequency == '1m' else (30 if frequency == '30m' else 120)
+
+        # 获取交易时段
+        trading_sessions = self.get_trading_sessions(trade_date, frequency)
+
+        # 为每个交易时段生成K线事件
+        for session_start, session_end in trading_sessions:
+            start_dt = datetime.combine(trade_date, session_start)
+            end_dt = datetime.combine(trade_date, session_end)
+            current_time = start_dt
+
+            while current_time <= end_dt:
+                if frequency == '1m':
+                    events.append(MarketEvent(
+                        event_type=EventTypeEnum.MARKET_BAR_1M,
+                        event_time=current_time,
+                        market=self.market_name,
+                        frequency=frequency,
+                        event_description="1分钟K线"
+                    ))
+                elif frequency == '30m':
+                    events.append(MarketEvent(
+                        event_type=EventTypeEnum.MARKET_BAR_30M,
+                        event_time=current_time,
+                        market=self.market_name,
+                        frequency=frequency,
+                        event_description="30分钟K线"
+                    ))
+                elif frequency == '120m':
+                    events.append(MarketEvent(
+                        event_type=EventTypeEnum.MARKET_BAR_120M,
+                        event_time=current_time,
+                        market=self.market_name,
+                        frequency=frequency,
+                        event_description="120分钟K线"
+                    ))
+                current_time += timedelta(minutes=interval_minutes)
+
+        return events
+
+    def _get_auction_events_1d(self, trade_date: date) -> List[BaseEvent]:
+        """生成日线频率的A股集合竞价相关事件"""
+        events = []
+
+        # 集合竞价开始
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.PRE_OPENING_START,
+            event_time=datetime.combine(trade_date, time(9, 15)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="集合竞价开始"
+        ))
+
+        # 集合竞价可撤单结束
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.PRE_OPENING_END,
+            event_time=datetime.combine(trade_date, time(9, 20)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="集合竞价不可撤单"
+        ))
+
+        # 集合竞价撮合
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.MATCHING_START,
+            event_time=datetime.combine(trade_date, time(9, 25)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="集合竞价撮合"
+        ))
+
+        # 开盘价确定
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.OPENING_PRICE_DETERMINED,
+            event_time=datetime.combine(trade_date, time(9, 25)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="开盘价确定"
+        ))
+
+        return events
+
+    def _get_closing_events_1d(self, trade_date: date) -> List[BaseEvent]:
+        """生成日线频率的收盘相关事件"""
+        events = []
+
+        # 收盘集合竞价开始
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.CLOSING_START,
+            event_time=datetime.combine(trade_date, time(14, 57)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="收盘集合竞价开始"
+        ))
+
+        # 收盘结束
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.CLOSING_END,
+            event_time=datetime.combine(trade_date, time(15, 0)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="收盘集合竞价结束"
+        ))
+
+        # 收盘价确定
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.CLOSING_PRICE_DETERMINED,
+            event_time=datetime.combine(trade_date, time(15, 0)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="收盘价确定"
+        ))
+
+        return events
+
     def is_trading_time(self, dt: datetime, frequency: str = '1d') -> bool:
         """判断指定时间是否为交易时间
         

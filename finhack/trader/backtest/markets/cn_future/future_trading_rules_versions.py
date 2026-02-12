@@ -228,8 +228,8 @@ TRADING_SCHEDULE_VERSIONS = [
 # 默认交易时段配置（按交易所和品种）
 DEFAULT_TRADING_SCHEDULES = {
     'cffex': {  # 中金所（股指、国债期货）
-        'day_session_start': '09:15',
-        'day_session_end': '15:15',
+        'day_session_start': '09:30',  # 实际数据从09:30开始
+        'day_session_end': '15:00',    # 实际数据到15:00结束
         'morning_break_start': '11:30',
         'morning_break_end': '13:00',
         'night_session': False,

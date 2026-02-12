@@ -9,6 +9,7 @@ from datetime import datetime, date, time, timedelta
 import logging
 
 from ..base_market import BaseMarket
+from ..base_minutely_events import BaseMinutelyEventGenerator
 from ...events.event_types import BaseEvent, MarketEvent, EventTypeEnum
 
 logger = logging.getLogger(__name__)
@@ -199,37 +200,17 @@ class GlobalCryptoSpotMarketAdapter(BaseMarket):
         return events
     
     def _generate_daily_events_min(self, trade_date: date, schedule: Dict[str, time], frequency: str) -> List[BaseEvent]:
-        """生成分钟线频率的事件列表"""
-        events = []
-        
-        # 加密货币市场是24小时交易，所以只需要生成TRY_MATCH事件
-        # 根据频率确定事件间隔
-        if frequency == '1m':
-            interval = timedelta(minutes=1)
-        elif frequency == '30m':
-            interval = timedelta(minutes=30)
-        elif frequency == '120m':
-            interval = timedelta(minutes=120)
-        else:
-            interval = timedelta(minutes=1)
-        
-        # 生成一天内的TRY_MATCH事件
-        start_time = datetime.combine(trade_date, schedule['DAY_START'])
-        end_time = datetime.combine(trade_date, schedule['DAY_END'])
-        
-        current_time = start_time
-        while current_time <= end_time:
-            match_event = MarketEvent(
-                event_type=EventTypeEnum.TRY_MATCH,
-                event_time=current_time,
-                market=self.market_name,
-                frequency=frequency,
-                event_description=f"{frequency}级撮合"
-            )
-            events.append(match_event)
-            current_time += interval
-        
-        return events
+        """生成分钟线频率的事件列表
+
+        使用统一的分钟线事件生成框架。
+        加密货币市场是24/7交易，无午休，无特殊事件。
+        """
+        # 使用统一框架生成标准事件
+        return BaseMinutelyEventGenerator.generate_minutely_events(
+            adapter=self,
+            trade_date=trade_date,
+            frequency=frequency
+        )
     
     def _get_event_description(self, event_name: str) -> str:
         """获取事件描述"""

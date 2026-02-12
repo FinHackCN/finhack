@@ -10,6 +10,7 @@ from datetime import datetime, date, time, timedelta
 import logging
 
 from ..base_market import BaseMarket
+from ..base_minutely_events import BaseMinutelyEventGenerator
 from ...events.event_types import BaseEvent, MarketEvent, EventTypeEnum
 from .future_trading_rules_versions import (
     get_future_exchange,
@@ -217,65 +218,77 @@ class CnFutureMarketAdapter(BaseMarket):
         return events
     
     def _generate_daily_events_1m(self, trade_date: date, schedule: Dict[str, time]) -> List[BaseEvent]:
-        """生成分钟线频率的事件列表"""
-        events = []
-        
-        # 基础市场事件
-        basic_events = ['BEFORE_MARKET', 'DAY_SESSION_START', 'DAY_SESSION_END', 
-                       'NIGHT_SESSION_START']
-        
-        # 将事件名称转换为EventTypeEnum
-        event_type_map = {
-            'BEFORE_MARKET': EventTypeEnum.BEFORE_MARKET,
-            'DAY_SESSION_START': EventTypeEnum.DAY_SESSION_START,
-            'DAY_SESSION_END': EventTypeEnum.DAY_SESSION_END,
-            'NIGHT_SESSION_START': EventTypeEnum.NIGHT_SESSION_START,
-        }
-        
-        for event_name in basic_events:
-            if event_name in schedule:
-                event_type = event_type_map.get(event_name, EventTypeEnum.BEFORE_MARKET)
-                event_dt = datetime.combine(trade_date, schedule[event_name])
-                
-                event = MarketEvent(
-                    event_type=event_type,
-                    event_time=event_dt,
-                    market=self.market_name,
-                    frequency='1m',
-                    event_description=self._get_event_description(event_name)
-                )
-                events.append(event)
-        
-        # 生成分钟级TRY_MATCH事件
-        trading_sessions = self.get_trading_sessions(trade_date, '1m')
-        for session_start, session_end in trading_sessions:
-            current_time = session_start
-            while current_time < session_end:
-                # 每分钟生成一个TRY_MATCH事件
-                match_event = MarketEvent(
-                    event_type=EventTypeEnum.TRY_MATCH,
-                    event_time=current_time,
-                    market=self.market_name,
-                    frequency='1m',
-                    event_description="分钟级撮合"
-                )
-                events.append(match_event)
-                current_time += timedelta(minutes=1)
-        
-        # 处理夜盘结束事件（跨日）
-        if 'NIGHT_SESSION_END' in schedule:
-            event_type = EventTypeEnum.NIGHT_SESSION_END
-            event_dt = datetime.combine(trade_date + timedelta(days=1), schedule['NIGHT_SESSION_END'])
-            
-            event = MarketEvent(
-                event_type=event_type,
-                event_time=event_dt,
+        """生成分钟线频率的事件列表
+
+        使用统一的分钟线事件生成框架，确保与其他市场保持一致。
+        期货特有的夜盘、日盘分段等规则通过 get_trading_sessions() 实现。
+        """
+        # 基础事件由统一框架生成
+        events = BaseMinutelyEventGenerator.generate_minutely_events(
+            adapter=self,
+            trade_date=trade_date,
+            frequency='1m'
+        )
+
+        # 添加期货特有的额外事件
+        additional_events = []
+
+        # 1. 日盘开始前的事件（如果定义了）
+        if 'BEFORE_MARKET' in schedule:
+            additional_events.append(MarketEvent(
+                event_type=EventTypeEnum.BEFORE_MARKET,
+                event_time=datetime.combine(trade_date, schedule['BEFORE_MARKET']),
                 market=self.market_name,
                 frequency='1m',
-                event_description=self._get_event_description('NIGHT_SESSION_END')
-            )
-            events.append(event)
-        
+                event_description="盘前准备"
+            ))
+
+        # 2. 结算价确定事件
+        if 'SETTLEMENT_PRICE_DETERMINED' in schedule:
+            additional_events.append(MarketEvent(
+                event_type=EventTypeEnum.SETTLEMENT_PRICE_DETERMINED,
+                event_time=datetime.combine(trade_date, schedule['SETTLEMENT_PRICE_DETERMINED']),
+                market=self.market_name,
+                frequency='1m',
+                event_description="结算价确定"
+            ))
+
+        # 3. 保证金检查事件
+        if 'MARGIN_CALL_CHECK' in schedule:
+            additional_events.append(MarketEvent(
+                event_type=EventTypeEnum.MARGIN_CALL_CHECK,
+                event_time=datetime.combine(trade_date, schedule['MARGIN_CALL_CHECK']),
+                market=self.market_name,
+                frequency='1m',
+                event_description="保证金检查"
+            ))
+
+        # 4. 夜盘特定事件（通过schedule判断是否有夜盘）
+        if 'NIGHT_SESSION_START' in schedule or 'BEFORE_NIGHT_SESSION' in schedule:
+            # 夜盘盘前准备
+            if 'BEFORE_NIGHT_SESSION' in schedule:
+                additional_events.append(MarketEvent(
+                    event_type=EventTypeEnum.BEFORE_NIGHT_SESSION,
+                    event_time=datetime.combine(trade_date, schedule['BEFORE_NIGHT_SESSION']),
+                    market=self.market_name,
+                    frequency='1m',
+                    event_description="夜盘盘前准备"
+                ))
+
+            # 夜盘集合竞价
+            if 'NIGHT_AUCTION_START' in schedule:
+                additional_events.append(MarketEvent(
+                    event_type=EventTypeEnum.NIGHT_AUCTION_START,
+                    event_time=datetime.combine(trade_date, schedule['NIGHT_AUCTION_START']),
+                    market=self.market_name,
+                    frequency='1m',
+                    event_description="夜盘集合竞价开始"
+                ))
+
+        # 将额外事件添加到基础事件中并重新排序
+        events.extend(additional_events)
+        events.sort(key=lambda x: x.event_time)
+
         return events
     
     def _get_event_description(self, event_name: str) -> str:
@@ -328,10 +341,19 @@ class CnFutureMarketAdapter(BaseMarket):
 
         # 构建日盘时段（考虑中间休息）
         if exchange == 'cffex':
-            # 中金所（股指、国债期货）
-            day_start_dt = datetime.combine(trade_date, day_start)
-            day_end_dt = datetime.combine(trade_date, day_end)
-            sessions.append((day_start_dt, day_end_dt, 'day'))
+            # 中金所（股指、国债期货）也有午休 11:30-13:00
+            morning_break_start = datetime.strptime('11:30', '%H:%M').time()
+            morning_break_end = datetime.strptime('13:00', '%H:%M').time()
+
+            # 上午时段
+            morning_start_dt = datetime.combine(trade_date, day_start)
+            morning_end_dt = datetime.combine(trade_date, morning_break_start)
+            sessions.append((morning_start_dt, morning_end_dt, 'morning'))
+
+            # 下午时段
+            afternoon_start_dt = datetime.combine(trade_date, morning_break_end)
+            afternoon_end_dt = datetime.combine(trade_date, day_end)
+            sessions.append((afternoon_start_dt, afternoon_end_dt, 'afternoon'))
         else:
             # 商品期货（有中间休息）
             break_start_str = default_schedule.get('morning_break_start', '10:15')
