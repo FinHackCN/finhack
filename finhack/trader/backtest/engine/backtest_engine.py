@@ -1860,10 +1860,10 @@ class BacktestEngine:
         # 简单实现：生成所有工作日
         # 尝试多种日期格式
         date_formats = ['%Y-%m-%d %H:%M:%S', '%Y-%m-%d']
-        
+
         start_dt = None
         end_dt = None
-        
+
         # 尝试解析开始日期
         for fmt in date_formats:
             try:
@@ -1871,7 +1871,7 @@ class BacktestEngine:
                 break
             except ValueError:
                 continue
-        
+
         # 尝试解析结束日期
         for fmt in date_formats:
             try:
@@ -1879,19 +1879,24 @@ class BacktestEngine:
                 break
             except ValueError:
                 continue
-        
+
         if start_dt is None or end_dt is None:
             raise ValueError(f"无法解析日期: start_date={start_date}, end_date={end_date}")
-        
+
+        # 检查市场类型，判断是否跳过周末
+        market_name = self.context.get('settings', {}).get('market', '')
+        # 加密货币市场是7x24交易，不跳过周末
+        skip_weekend = not market_name.startswith('global_crypto')
+
         calendar = []
         current_dt = start_dt
-        
+
         while current_dt <= end_dt:
-            # 跳过周末
-            if current_dt.weekday() < 5:  # 0-4为周一到周五
+            # 根据市场类型决定是否跳过周末
+            if not skip_weekend or current_dt.weekday() < 5:  # 加密货币不过滤周末
                 calendar.append(current_dt)
             current_dt += timedelta(days=1)
-            
+
         return calendar
     
     def _process_event_sync(self, event: BaseEvent, strategy):

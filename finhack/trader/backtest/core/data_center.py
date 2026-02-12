@@ -22,6 +22,66 @@ from finhack.library.data import get_data_interface
 
 logger = logging.getLogger(__name__)
 
+# 期货代码标准化映射表（小写交易所代码到大写）
+_FUTURE_EXCHANGE_SUFFIX_MAP = {
+    'cffex': 'CCFX',
+    'shfe': 'SHFE',
+    'dce': 'DCE',
+    'czce': 'XZCE',
+    'gfex': 'GFEX',
+}
+
+# 期货品种代码到交易所映射
+_FUTURE_CODE_EXCHANGE_MAP = {
+    # 中金所
+    'IF': 'CCFX', 'IH': 'CCFX', 'IC': 'CCFX', 'IM': 'CCFX',
+    'TS': 'CCFX', 'TF': 'CCFX', 'T': 'CCFX', 'TL': 'CCFX',
+    # 上期所
+    'CU': 'SHFE', 'AL': 'SHFE', 'ZN': 'SHFE', 'PB': 'SHFE',
+    'NI': 'SHFE', 'SN': 'SHFE', 'AU': 'SHFE', 'AG': 'SHFE',
+    'RB': 'SHFE', 'WR': 'SHFE', 'HC': 'SHFE', 'SS': 'SHFE',
+    'FU': 'SHFE', 'BU': 'SHFE', 'RU': 'SHFE', 'SP': 'SHFE',
+    'AO': 'SHFE',
+    # 大商所
+    'A': 'DCE', 'B': 'DCE', 'M': 'DCE', 'Y': 'DCE',
+    'P': 'DCE', 'C': 'DCE', 'CS': 'DCE', 'JD': 'DCE',
+    'L': 'DCE', 'V': 'DCE', 'PP': 'DCE', 'FB': 'DCE',
+    'BB': 'DCE', 'J': 'DCE', 'JM': 'DCE', 'I': 'DCE',
+    'PG': 'DCE', 'EB': 'DCE', 'EG': 'DCE', 'LH': 'DCE',
+    # 郑商所
+    'SR': 'XZCE', 'CF': 'XZCE', 'TA': 'XZCE', 'OI': 'XZCE',
+    'MA': 'XZCE', 'FG': 'XZCE', 'RM': 'XZCE', 'ZC': 'XZCE',
+    'SF': 'XZCE', 'SM': 'XZCE', 'UR': 'XZCE', 'SA': 'XZCE',
+    'PK': 'XZCE', 'AP': 'XZCE', 'CJ': 'XZCE', 'RS': 'XZCE',
+    'RI': 'XZCE', 'JR': 'XZCE', 'LR': 'XZCE', 'WH': 'XZCE',
+    'WT': 'XZCE', 'PM': 'XZCE',
+    # 广期所
+    'SI': 'GFEX', 'LC': 'GFEX',
+}
+
+
+def _normalize_future_code(code: str) -> str:
+    """标准化期货代码，添加交易所后缀
+
+    Args:
+        code: 期货代码，可能带有或不带有交易所后缀
+
+    Returns:
+        带有交易所后缀的标准化代码，如 'IF2401.CCFX'
+    """
+    # 如果已经有后缀，直接返回
+    if '.' in code:
+        return code
+
+    # 提取品种代码前缀
+    for prefix in sorted(_FUTURE_CODE_EXCHANGE_MAP.keys(), key=len, reverse=True):
+        if code.startswith(prefix):
+            exchange_suffix = _FUTURE_CODE_EXCHANGE_MAP[prefix]
+            return f"{code}.{exchange_suffix}"
+
+    # 如果无法识别，默认添加中金所后缀
+    return f"{code}.CCFX"
+
 
 class DataCenter:
     """数据中心
@@ -1471,7 +1531,13 @@ class DataCenter:
                     self.kline_cache[cache_key] = month_df
 
             # 过滤股票代码和时间范围
-            month_df = month_df[month_df.index.get_level_values('code').isin(codes)]
+            # 对于期货市场，需要标准化代码（添加交易所后缀）
+            if market == 'cn_future':
+                normalized_codes = [_normalize_future_code(code) for code in codes]
+                logger.debug(f"[缓存查询] 期货代码标准化: {codes} -> {normalized_codes}")
+            else:
+                normalized_codes = codes
+            month_df = month_df[month_df.index.get_level_values('code').isin(normalized_codes)]
 
             # 获取该月的起始和结束时间
             month_start = current.replace(day=1, hour=0, minute=0, second=0)

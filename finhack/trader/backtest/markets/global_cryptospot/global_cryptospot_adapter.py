@@ -10,6 +10,7 @@ from datetime import datetime, date, time, timedelta
 import logging
 
 from ..base_market import BaseMarket
+from ..base_minutely_events import BaseMinutelyEventGenerator
 from ...events.event_types import BaseEvent, MarketEvent, EventTypeEnum
 from .crypto_trading_rules_versions import (
     TRADING_SCHEDULE_VERSIONS,
@@ -215,156 +216,13 @@ class GlobalCryptoSpotAdapter(BaseMarket):
             ))
             
         elif frequency in ['1m', '30m', '120m']:
-            # 分钟频事件
-            # 日开始事件 - 在交易前触发，供策略初始化和调仓
-            events.append(MarketEvent(
-                event_type=EventTypeEnum.DAY_START,
-                event_time=datetime.combine(trade_date, time(0, 0)), # 假设UTC 00:00 对应本地 08:00
-                market=self.market_name,
-                frequency=frequency,
-                event_description="日开始"
-            ))
-            
-            # 交易前事件
-            events.append(MarketEvent(
-                event_type=EventTypeEnum.BEFORE_MARKET,
-                event_time=datetime.combine(trade_date, time(0, 0)), # 假设UTC 00:00 对应本地 08:00
-                market=self.market_name,
-                frequency=frequency,
-                event_description="交易前准备"
-            ))
-            
-            # 开盘事件
-            events.append(MarketEvent(
-                event_type=EventTypeEnum.MARKET_START,
-                event_time=datetime.combine(trade_date, time(0, 0)), # 假设UTC 00:00 对应本地 08:00
-                market=self.market_name,
-                frequency=frequency,
-                event_description="开盘"
-            ))
-            
-            # 根据频率生成K线事件
-            interval_minutes = 1 if frequency == '1m' else (30 if frequency == '30m' else 120)
-            
-            # 上午交易时段
-            morning_start = datetime.combine(trade_date, time(0, 0)) # 假设UTC 00:00 对应本地 08:00
-            morning_end = datetime.combine(trade_date, time(23, 59)) # 假设UTC 23:59 对应本地 07:59
-            current_time = morning_start
-            
-            while current_time <= morning_end:
-                # 先生成K线事件
-                if frequency == '1m':
-                    events.append(MarketEvent(
-                        event_type=EventTypeEnum.MARKET_BAR_1M,
-                        event_time=current_time,
-                        market=self.market_name,
-                        frequency=frequency,
-                        event_description="1分钟K线"
-                    ))
-                elif frequency == '30m':
-                    events.append(MarketEvent(
-                        event_type=EventTypeEnum.MARKET_BAR_30M,
-                        event_time=current_time,
-                        market=self.market_name,
-                        frequency=frequency,
-                        event_description="30分钟K线"
-                    ))
-                elif frequency == '120m':
-                    events.append(MarketEvent(
-                        event_type=EventTypeEnum.MARKET_BAR_120M,
-                        event_time=current_time,
-                        market=self.market_name,
-                        frequency=frequency,
-                        event_description="120分钟K线"
-                    ))
-                
-                # 再生成撮合事件
-                events.append(MarketEvent(
-                    event_type=EventTypeEnum.TRY_MATCH,
-                    event_time=current_time,
-                    market=self.market_name,
-                    frequency=frequency,
-                    event_description=f"{frequency}级撮合"
-                ))
-                current_time += timedelta(minutes=interval_minutes)
-            
-            # 下午交易时段
-            afternoon_start = datetime.combine(trade_date, time(0, 0)) # 假设UTC 00:00 对应本地 08:00
-            afternoon_end = datetime.combine(trade_date, time(23, 59)) # 假设UTC 23:59 对应本地 07:59
-            current_time = afternoon_start
-            
-            while current_time <= afternoon_end:
-                # 先生成K线事件
-                if frequency == '1m':
-                    events.append(MarketEvent(
-                        event_type=EventTypeEnum.MARKET_BAR_1M,
-                        event_time=current_time,
-                        market=self.market_name,
-                        frequency=frequency,
-                        event_description="1分钟K线"
-                    ))
-                elif frequency == '30m':
-                    events.append(MarketEvent(
-                        event_type=EventTypeEnum.MARKET_BAR_30M,
-                        event_time=current_time,
-                        market=self.market_name,
-                        frequency=frequency,
-                        event_description="30分钟K线"
-                    ))
-                elif frequency == '120m':
-                    events.append(MarketEvent(
-                        event_type=EventTypeEnum.MARKET_BAR_120M,
-                        event_time=current_time,
-                        market=self.market_name,
-                        frequency=frequency,
-                        event_description="120分钟K线"
-                    ))
-                
-                # 再生成撮合事件
-                events.append(MarketEvent(
-                    event_type=EventTypeEnum.TRY_MATCH,
-                    event_time=current_time,
-                    market=self.market_name,
-                    frequency=frequency,
-                    event_description=f"{frequency}级撮合"
-                ))
-                current_time += timedelta(minutes=interval_minutes)
-            
-            # 收盘事件
-            events.append(MarketEvent(
-                event_type=EventTypeEnum.MARKET_END,
-                event_time=datetime.combine(trade_date, time(23, 59)), # 假设UTC 23:59 对应本地 07:59
-                market=self.market_name,
-                frequency=frequency,
-                event_description="收盘"
-            ))
-            
-            # 交易后事件
-            events.append(MarketEvent(
-                event_type=EventTypeEnum.AFTER_MARKET,
-                event_time=datetime.combine(trade_date, time(23, 59)), # 假设UTC 23:59 对应本地 07:59
-                market=self.market_name,
-                frequency=frequency,
-                event_description="交易后处理"
-            ))
-            
-            # 日终事件
-            events.append(MarketEvent(
-                event_type=EventTypeEnum.DAY_END,
-                event_time=datetime.combine(trade_date, time(23, 59)), # 假设UTC 23:59 对应本地 07:59
-                market=self.market_name,
-                frequency=frequency,
-                event_description="日终处理"
-            ))
-            
-            # 日K线事件
-            events.append(MarketEvent(
-                event_type=EventTypeEnum.DAILY_BAR_CLOSED,
-                event_time=datetime.combine(trade_date, time(23, 59)), # 假设UTC 23:59 对应本地 07:59
-                market=self.market_name,
-                frequency=frequency,
-                event_description="日K线生成"
-            ))
+            # 分钟频事件 - 使用统一框架生成
+            # 加密货币市场是24/7交易，无特殊时段
+            events = BaseMinutelyEventGenerator.generate_minutely_events(
+                adapter=self,
+                trade_date=trade_date,
+                frequency=frequency
+            )
         
         return events
     
