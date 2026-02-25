@@ -253,7 +253,7 @@ class Core:
 
         parser = argparse.ArgumentParser(description='',usage=self.usage, add_help=False)
         parser.add_argument('module', help='需要调用的模块')
-        parser.add_argument('action', help='需要执行的动作')
+        parser.add_argument('action', nargs='?', default='run', help='需要执行的动作（默认: run）')
         parser.add_argument("--background",  default=False, action='store_true', help="是否在后台运行")
         parser.add_argument('--project_path',metavar='', help='项目路径')
         parser.add_argument("--vendor",  metavar='',  help="模块的供给侧")
@@ -302,6 +302,16 @@ finhack collector fix --vendor=tushare --auto=true      # 自动修复质量异�
 finhack collector stop --vendor=tushare                  # 停止采集
 finhack collector save --vendor=tushare                  # 导出数据到CSV
 finhack collector count --vendor=tushare                 # 数据库统计
+
+================================
+检查模块 (check)
+================================
+finhack check                                           # 检查全部（data, cache, factors）
+finhack check --target=all                              # 检查全部
+finhack check --target=data,cache                       # 检查数据和缓存
+finhack check --target=data                             # 只检查数据
+finhack check --target=cache                            # 只检查缓存
+finhack check --target=factors                          # 只检查因子
 
 ================================
 K线模块 (kline)
@@ -357,6 +367,9 @@ finhack trainer run --vendor=lightgbm --market=cn_stock --freq=1d \\
 # 数据采集
 finhack collector run --vendor=tushare
 finhack collector fix --vendor=tushare --auto=true
+
+# 数据检查
+finhack check --target=data,cache                       # 检查数据和缓存完整性
 
 # 因子计算
 finhack factor run
