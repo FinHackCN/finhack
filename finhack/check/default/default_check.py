@@ -33,19 +33,64 @@ from finhack.library.db import DB
 class DefaultCheck:
     """数据质量检查器"""
 
-    # 市场配置
+    # 市场配置 - 已知市场的名称映射
+    MARKET_NAMES = {
+        'cn_stock': 'A股',
+        'cn_fund': '基金',
+        'cn_future': '期货',
+        'cn_index': '指数',
+        'cn_cb': '可转债',
+        'cn_option': '期权',
+        'hk_stock': '港股',
+        'us_stock': '美股',
+        'global_cryptospot': '数字货币现货',
+        'global_cryptoswap': '数字货币合约',
+        'global_fx': '外汇',
+        'econ': '宏观经济',
+    }
+
+    # 市场配置 - 表名前缀映射
     MARKETS = {
         'cn_stock': {'name': 'A股', 'tables': ['astock_'], 'cache': 'cn_stock', 'priority': 1},
         'cn_fund': {'name': '基金', 'tables': ['fund_'], 'cache': 'cn_fund', 'priority': 2},
         'cn_future': {'name': '期货', 'tables': ['futures_'], 'cache': 'cn_future', 'priority': 3},
         'cn_index': {'name': '指数', 'tables': ['astock_index_'], 'cache': 'cn_index', 'priority': 4},
         'cn_cb': {'name': '可转债', 'tables': ['cb_'], 'cache': 'cn_cb', 'priority': 5},
-        'hk_stock': {'name': '港股', 'tables': ['hstock_', 'hk_'], 'cache': 'hk_stock', 'priority': 6},
-        'global_crypto': {'name': '数字货币', 'tables': [], 'cache': 'global_cryptospot', 'priority': 7},
-        'global_fx': {'name': '外汇', 'tables': ['fx_'], 'cache': 'global_fx', 'priority': 8},
-        'econ': {'name': '宏观经济', 'tables': ['econo_'], 'cache': None, 'priority': 9},
-        'other': {'name': '其他', 'tables': [], 'cache': None, 'priority': 99},
+        'cn_option': {'name': '期权', 'tables': ['option_'], 'cache': 'cn_option', 'priority': 6},
+        'hk_stock': {'name': '港股', 'tables': ['hstock_', 'hk_'], 'cache': 'hk_stock', 'priority': 7},
+        'us_stock': {'name': '美股', 'tables': ['usstock_'], 'cache': 'us_stock', 'priority': 8},
+        'global_cryptospot': {'name': '数字货币现货', 'tables': [], 'cache': 'global_cryptospot', 'priority': 9},
+        'global_cryptoswap': {'name': '数字货币合约', 'tables': [], 'cache': 'global_cryptoswap', 'priority': 10},
+        'global_fx': {'name': '外汇', 'tables': ['fx_'], 'cache': 'global_fx', 'priority': 11},
+        'econ': {'name': '宏观经济', 'tables': ['econo_'], 'cache': None, 'priority': 99},
     }
+
+    def _get_market_name(self, market_code: str) -> str:
+        """获取市场的显示名称，未知市场自动生成"""
+        if market_code in self.MARKET_NAMES:
+            return self.MARKET_NAMES[market_code]
+        # 自动生成名称：将下划线和前缀转换为可读名称
+        # global_cryptospot -> 数字货币现货 (已经在映射中)
+        # unknown_market -> Unknown Market
+        parts = market_code.split('_')
+        name_map = {
+            'cn': '中国',
+            'hk': '香港',
+            'us': '美国',
+            'global': '全球',
+            'stock': '股票',
+            'fund': '基金',
+            'future': '期货',
+            'index': '指数',
+            'cb': '可转债',
+            'option': '期权',
+            'crypto': '数字货币',
+            'fx': '外汇',
+            'spot': '现货',
+            'swap': '合约',
+        }
+        name_parts = [name_map.get(p, p.title()) for p in parts]
+        return ''.join(name_parts) if name_parts else market_code
 
     FREQUENCIES = ['1d', '1m']
 
@@ -183,6 +228,8 @@ class DefaultCheck:
                     'total': {'files': 0, 'size_mb': 0}
                 },
                 'csv_codebased': {
+                    '1d': {'files': 0, 'size_mb': 0, 'min_date': None, 'max_date': None, 'details': []},
+                    '1m': {'files': 0, 'size_mb': 0, 'min_date': None, 'max_date': None, 'details': []},
                     'total': {'files': 0, 'size_mb': 0, 'codes': 0, 'details': []}
                 },
                 'pkl': {
@@ -272,26 +319,79 @@ class DefaultCheck:
         print("="*100)
 
     def _check_file_data(self):
-        """检查各类文件数据 - 使用shell命令快速统计"""
+        """检查各类文件数据 - 自动检测所有目录中的市场"""
         kline_dir = KLINE_DIR if 'KLINE_DIR' in dir() else os.path.join(DATA_DIR, 'market', 'kline')
 
-        market_map = {
-            'cn_stock': 'cn_stock', 'cn_fund': 'cn_fund', 'cn_future': 'cn_future',
-            'cn_index': 'cn_index', 'cn_cb': 'cn_cb', 'cn_option': 'cn_option',
-            'hk_stock': 'hk_stock', 'global_fx': 'global_fx',
-            'global_cryptospot': 'global_cryptospot', 'global_cryptoswap': 'global_cryptoswap',
-            'us_stock': 'us_stock'
-        }
+        # 自动扫描目录发现所有市场
+        discovered_markets = set()
 
-        # 扫描 parquet (codebased)
+        # 扫描 codebased 目录发现市场
         codebased_dir = os.path.join(kline_dir, 'codebased')
         if os.path.exists(codebased_dir):
-            print(f"  扫描 parquet 文件...")
+            for market_dir in os.listdir(codebased_dir):
+                if os.path.isdir(os.path.join(codebased_dir, market_dir)):
+                    discovered_markets.add(market_dir)
+
+        # 扫描 timebased 目录发现市场
+        timebased_dir = os.path.join(kline_dir, 'timebased')
+        if os.path.exists(timebased_dir):
+            for market_dir in os.listdir(timebased_dir):
+                if os.path.isdir(os.path.join(timebased_dir, market_dir)):
+                    discovered_markets.add(market_dir)
+
+        # 为发现的市场初始化统计结构
+        for market in discovered_markets:
+            if market not in self.market_stats:
+                self.market_stats[market] = {
+                    'database': {'tables': 0, 'records': 0, 'size_mb': 0, 'tables_detail': []},
+                    'files': {
+                        'parquet': {
+                            '1d': {'files': 0, 'size_mb': 0},
+                            '1m': {'files': 0, 'size_mb': 0},
+                            'total': {'files': 0, 'size_mb': 0}
+                        },
+                        'csv_timebased': {
+                            '1d': {'files': 0, 'size_mb': 0},
+                            '1m': {'files': 0, 'size_mb': 0},
+                            'total': {'files': 0, 'size_mb': 0}
+                        },
+                        'csv_codebased': {
+                            '1d': {'files': 0, 'size_mb': 0},
+                            '1m': {'files': 0, 'size_mb': 0},
+                            'total': {'files': 0, 'size_mb': 0}
+                        },
+                        'pkl': {
+                            '1d': {'files': 0, 'size_mb': 0},
+                            '1m': {'files': 0, 'size_mb': 0},
+                            'total': {'files': 0, 'size_mb': 0}
+                        }
+                    },
+                    'cache': {
+                        '1d': {'files': 0, 'size_mb': 0, 'last_update': None},
+                        '1m': {'files': 0, 'size_mb': 0, 'last_update': None},
+                        'total': {'files': 0, 'size_mb': 0}
+                    },
+                    'factors': {
+                        '1d': {'files': 0, 'size_mb': 0},
+                        '1m': {'files': 0, 'size_mb': 0},
+                        'total': {'files': 0, 'size_mb': 0}
+                    },
+                    'health': {
+                        'score': 100,
+                        'issues': []
+                    }
+                }
+
+        print(f"  发现 {len(discovered_markets)} 个市场: {', '.join(sorted(discovered_markets))}")
+
+        # 扫描 codebased 目录 (parquet 和 csv)
+        if os.path.exists(codebased_dir):
+            print(f"  扫描 codebased 文件 (parquet + csv)...")
             for market_dir in os.listdir(codebased_dir):
                 market_path = os.path.join(codebased_dir, market_dir)
                 if not os.path.isdir(market_path):
                     continue
-                market = market_map.get(market_dir, market_dir)
+                market = market_dir  # 直接使用目录名作为市场标识
 
                 for freq_dir in os.listdir(market_path):
                     freq_path = os.path.join(market_path, freq_dir)
@@ -299,7 +399,7 @@ class DefaultCheck:
                         continue
                     freq = freq_dir if freq_dir in ['1d', '1m'] else 'unknown'
 
-                    # 使用 find 命令快速统计
+                    # 统计 parquet 文件
                     try:
                         result = os.popen(f'find "{freq_path}" -name "*.parquet" -type f 2>/dev/null | wc -l').read().strip()
                         file_count = int(result) if result.isdigit() else 0
@@ -316,15 +416,33 @@ class DefaultCheck:
                     except:
                         pass
 
+                    # 统计 csv 文件 (codebased)
+                    try:
+                        result = os.popen(f'find "{freq_path}" -name "*.csv" -type f 2>/dev/null | wc -l').read().strip()
+                        file_count = int(result) if result.isdigit() else 0
+
+                        if file_count > 0:
+                            # 获取该目录大小(只计算csv文件)
+                            size_result = os.popen(f'find "{freq_path}" -name "*.csv" -type f -exec du -cm {{}} + 2>/dev/null | tail -1 | cut -f1').read().strip()
+                            size_mb = float(size_result) if size_result.replace('.','').isdigit() else 0
+
+                            stats = self.market_stats[market]
+                            stats['files']['csv_codebased'][freq]['files'] = file_count
+                            stats['files']['csv_codebased'][freq]['size_mb'] = size_mb
+                            stats['files']['csv_codebased']['total']['files'] += file_count
+                            stats['files']['csv_codebased']['total']['size_mb'] += size_mb
+                    except:
+                        pass
+
         # 扫描 csv (timebased)
         timebased_dir = os.path.join(kline_dir, 'timebased')
         if os.path.exists(timebased_dir):
-            print(f"  扫描 csv 文件...")
+            print(f"  扫描 timebased csv 文件...")
             for market_dir in os.listdir(timebased_dir):
                 market_path = os.path.join(timebased_dir, market_dir)
                 if not os.path.isdir(market_path):
                     continue
-                market = market_map.get(market_dir, market_dir)
+                market = market_dir  # 直接使用目录名
 
                 for freq_dir in os.listdir(market_path):
                     freq_path = os.path.join(market_path, freq_dir)
@@ -1081,7 +1199,9 @@ class DefaultCheck:
         self.report['anomalies'] = self.anomalies
 
     def _check_data_continuity(self):
-        """检查数据连续性"""
+        """检查数据连续性 - 基于交易日历的精确检查"""
+        print("\n  检查数据连续性...")
+
         # 检查交易日历是否有断档
         try:
             result = DB.select_one("SELECT MIN(cal_date) as min_date, MAX(cal_date) as max_date FROM astock_trade_cal WHERE is_open=1", 'tushare')
@@ -1101,30 +1221,381 @@ class DefaultCheck:
         except Exception:
             pass
 
-        # 检查关键行情表的数据连续性
-        key_tables = ['astock_price_daily', 'astock_price_daily_basic']
-        for table in key_tables:
-            if table in self.table_stats:
-                info = self.table_stats[table]
-                if info.get('min_date') and info.get('max_date'):
+        # 精确检查关键行情表的数据完整性
+        key_tables = [
+            ('astock_price_daily', 'trade_date', 'astock_basic'),
+            ('astock_price_daily_basic', 'trade_date', 'astock_basic'),
+        ]
+
+        for table, date_field, code_table in key_tables:
+            self._check_table_data_integrity(table, date_field, code_table)
+
+        # 检查CSV文件数据完整性
+        self._check_csv_data_integrity()
+
+    def _check_csv_data_integrity(self):
+        """检查CSV文件数据完整性"""
+        print("\n  检查CSV文件数据完整性...")
+        kline_dir = KLINE_DIR if 'KLINE_DIR' in dir() else os.path.join(DATA_DIR, 'market', 'kline')
+        timebased_dir = os.path.join(kline_dir, 'timebased')
+
+        if not os.path.exists(timebased_dir):
+            return
+
+        # 获取交易日历
+        try:
+            cal_result = DB.select(
+                "SELECT cal_date FROM astock_trade_cal WHERE is_open=1 ORDER BY cal_date",
+                'tushare'
+            )
+            trading_days = set(str(r['cal_date']) for r in cal_result) if cal_result else set()
+        except:
+            trading_days = set()
+
+        # 自动扫描目录中的所有市场
+        if not os.path.exists(timebased_dir):
+            return
+
+        for market_dir in os.listdir(timebased_dir):
+            market_path = os.path.join(timebased_dir, market_dir)
+            if not os.path.isdir(market_path):
+                continue
+
+            market = market_dir
+            name = self._get_market_name(market)
+
+            for freq in ['1d', '1m']:
+                csv_dir = os.path.join(market_path, freq)
+                if not os.path.exists(csv_dir):
+                    continue
+
+                # 扫描目录获取存在的日期
+                existing_dates = set()
+                daily_file_counts = {}
+
+                try:
+                    for year_dir in os.listdir(csv_dir):
+                        year_path = os.path.join(csv_dir, year_dir)
+                        if not os.path.isdir(year_path) or not year_dir.isdigit():
+                            continue
+
+                        for month_dir in os.listdir(year_path):
+                            month_path = os.path.join(year_path, month_dir)
+                            if not os.path.isdir(month_path) or not month_dir.isdigit():
+                                continue
+
+                            for day_dir in os.listdir(month_path):
+                                day_path = os.path.join(month_path, day_dir)
+                                if not os.path.isdir(day_path) or not day_dir.isdigit():
+                                    continue
+
+                                date_str = f"{year_dir}{month_dir.zfill(2)}{day_dir.zfill(2)}"
+                                existing_dates.add(date_str)
+
+                                # 统计当天的文件数
+                                try:
+                                    csv_files = [f for f in os.listdir(day_path) if f.endswith('.csv')]
+                                    daily_file_counts[date_str] = len(csv_files)
+                                except:
+                                    pass
+                except Exception as e:
+                    continue
+
+                if not existing_dates:
+                    continue
+
+                # 计算日期范围
+                min_date = min(existing_dates)
+                max_date = max(existing_dates)
+
+                # 获取该范围内的交易日
+                range_trading_days = set(d for d in trading_days if min_date <= d <= max_date)
+
+                # 找出缺失的交易日
+                missing_dates = range_trading_days - existing_dates
+
+                # 计算覆盖率
+                coverage = len(existing_dates & range_trading_days) / len(range_trading_days) * 100 if range_trading_days else 0
+
+                # 计算新鲜度
+                freshness_days = None
+                try:
+                    max_dt = datetime.datetime.strptime(max_date, '%Y%m%d')
+                    freshness_days = (datetime.datetime.now() - max_dt).days
+                except:
+                    pass
+
+                # 使用近4周同星期对比检测异常
+                low_count_dates = []
+                sorted_dates = sorted(daily_file_counts.keys(), reverse=True)
+
+                for date in sorted_dates[:50]:
+                    count = daily_file_counts[date]
                     try:
-                        min_dt = datetime.datetime.strptime(str(info['min_date']), '%Y%m%d')
-                        max_dt = datetime.datetime.strptime(str(info['max_date']), '%Y%m%d')
-                        date_range = (max_dt - min_dt).days
+                        dt = datetime.datetime.strptime(date, '%Y%m%d')
 
-                        # 估算应有记录数
-                        trading_days = date_range * 5 // 7  # 粗略估计交易日
-                        expected = trading_days * 5000  # 约5000只股票
-                        actual = info.get('record_count', 0)
+                        # 找近4周同星期的数据
+                        same_weekday_counts = []
+                        for weeks_ago in range(1, 5):
+                            past_date = dt - timedelta(weeks=weeks_ago)
+                            past_date_str = past_date.strftime('%Y%m%d')
+                            if past_date_str in daily_file_counts:
+                                same_weekday_counts.append(daily_file_counts[past_date_str])
 
-                        if expected > 0 and actual > 0:
-                            coverage = actual / expected
-                            if coverage < 0.7:
-                                self._add_anomaly('warning', 'continuity', table,
-                                                f"{table} 数据覆盖率仅 {coverage*100:.1f}%",
-                                                {'expected': expected, 'actual': actual})
-                    except Exception:
+                        if len(same_weekday_counts) >= 2:
+                            same_weekday_avg = sum(same_weekday_counts) / len(same_weekday_counts)
+
+                            if count < same_weekday_avg * 0.5:
+                                low_count_dates.append((
+                                    date, count,
+                                    round(count / same_weekday_avg * 100, 1),
+                                    round(same_weekday_avg),
+                                    len(same_weekday_counts)
+                                ))
+                    except:
                         pass
+
+                low_count_dates.sort(key=lambda x: x[0], reverse=True)
+
+                # 存储报告
+                csv_integrity_key = f"csv_{market}_{freq}"
+                if 'csv_integrity' not in self.report:
+                    self.report['csv_integrity'] = {}
+
+                self.report['csv_integrity'][csv_integrity_key] = {
+                    'market': market,
+                    'market_name': name,
+                    'freq': freq,
+                    'date_range': f"{min_date} ~ {max_date}",
+                    'expected_trading_days': len(range_trading_days),
+                    'actual_trading_days': len(existing_dates & range_trading_days),
+                    'coverage': round(coverage, 1),
+                    'freshness_days': freshness_days,
+                    'missing_dates': sorted(list(missing_dates))[:50],
+                    'missing_count': len(missing_dates),
+                    'low_count_dates': low_count_dates[:20],
+                }
+
+                # 添加异常警告
+                if missing_dates and len(missing_dates) > 10:
+                    recent_missing = [d for d in sorted(missing_dates, reverse=True)][:10]
+                    self._add_anomaly('warning', 'csv_integrity', f"{name}-{freq}",
+                                    f"CSV数据缺失 {len(missing_dates)} 个交易日，覆盖率 {coverage:.1f}%",
+                                    {
+                                        'missing_count': len(missing_dates),
+                                        'recent_missing': recent_missing,
+                                        'coverage': coverage
+                                    })
+
+                freshness_str = f", 新鲜度 {freshness_days} 天" if freshness_days else ""
+                print(f"    {name}-{freq}: 覆盖率 {coverage:.1f}%, 缺失 {len(missing_dates)} 天{freshness_str}")
+
+    def _check_table_data_integrity(self, table: str, date_field: str, code_table: str):
+        """
+        精确检查表数据完整性
+
+        检查逻辑:
+        1. 获取交易日历中的所有交易日
+        2. 获取当前有效代码数量
+        3. 检查每个交易日是否有数据
+        4. 检查每天的记录数是否与期望值匹配
+        5. 区分工作日和周末分别检查
+        6. 输出缺失的日期列表
+        """
+        try:
+            # 1. 获取该表的数据日期范围
+            range_result = DB.select_one(
+                f"SELECT MIN({date_field}) as min_date, MAX({date_field}) as max_date, COUNT(DISTINCT {date_field}) as days FROM {table}",
+                'tushare'
+            )
+            if not range_result or not range_result.get('min_date'):
+                return
+
+            table_min_date = str(range_result['min_date'])
+            table_max_date = str(range_result['max_date'])
+            actual_days = range_result.get('days', 0)
+
+            # 2. 获取交易日历（该表日期范围内的交易日）
+            trading_days_result = DB.select(
+                f"SELECT cal_date FROM astock_trade_cal WHERE is_open=1 AND cal_date >= '{table_min_date}' AND cal_date <= '{table_max_date}' ORDER BY cal_date",
+                'tushare'
+            )
+            if not trading_days_result:
+                return
+
+            trading_days = set(str(r['cal_date']) for r in trading_days_result)
+            expected_days = len(trading_days)
+
+            # 3. 获取该表实际存在的日期
+            existing_dates_result = DB.select(
+                f"SELECT DISTINCT {date_field} as trade_date FROM {table} ORDER BY {date_field}",
+                'tushare'
+            )
+            existing_dates = set(str(r['trade_date']) for r in existing_dates_result) if existing_dates_result else set()
+
+            # 4. 找出缺失的交易日
+            missing_dates = trading_days - existing_dates
+
+            # 5. 获取当前有效代码数量（用于估算期望记录数）
+            code_count_result = DB.select_one(
+                f"SELECT COUNT(*) as cnt FROM {code_table} WHERE list_status = 'L'",
+                'tushare'
+            )
+            current_code_count = code_count_result.get('cnt', 5000) if code_count_result else 5000
+
+            # 6. 获取每天的记录数分布
+            daily_counts_result = DB.select(
+                f"SELECT {date_field} as trade_date, COUNT(*) as cnt FROM {table} GROUP BY {date_field}",
+                'tushare'
+            )
+            daily_counts = {str(r['trade_date']): r['cnt'] for r in daily_counts_result} if daily_counts_result else {}
+
+            # 7. 计算数据新鲜度（最新数据距今天数）
+            freshness_days = None
+            try:
+                if table_max_date:
+                    max_dt = datetime.datetime.strptime(str(table_max_date), '%Y%m%d')
+                    freshness_days = (datetime.datetime.now() - max_dt).days
+            except:
+                pass
+
+            # 8. 使用"近4周同星期对比"检测异常
+            # 逻辑：对于每个日期，找出近4周内同星期的数据，计算平均值，然后对比
+            low_count_dates = []
+            recent_avg_info = {}  # 存储近期的同星期平均值
+
+            # 按日期排序
+            sorted_dates = sorted(daily_counts.keys(), reverse=True)
+
+            # 计算每个日期的同星期平均值（近4周）
+            for date in sorted_dates[:100]:  # 只检查最近100天
+                count = daily_counts[date]
+                try:
+                    dt = datetime.datetime.strptime(date, '%Y%m%d')
+                    weekday = dt.weekday()
+
+                    # 找近4周同星期的数据
+                    same_weekday_counts = []
+                    for weeks_ago in range(1, 5):  # 1-4周前
+                        past_date = dt - timedelta(weeks=weeks_ago)
+                        past_date_str = past_date.strftime('%Y%m%d')
+                        if past_date_str in daily_counts:
+                            same_weekday_counts.append(daily_counts[past_date_str])
+
+                    # 如果有足够的对比数据（至少2周）
+                    if len(same_weekday_counts) >= 2:
+                        same_weekday_avg = sum(same_weekday_counts) / len(same_weekday_counts)
+                        recent_avg_info[date] = {
+                            'avg': same_weekday_avg,
+                            'weeks_compared': len(same_weekday_counts)
+                        }
+
+                        # 如果低于同星期平均值的50%，则标记为异常
+                        if count < same_weekday_avg * 0.5:
+                            low_count_dates.append((
+                                date,
+                                count,
+                                round(count / same_weekday_avg * 100, 1),  # 相对于同星期平均的百分比
+                                round(same_weekday_avg),  # 同星期平均值
+                                len(same_weekday_counts)  # 对比的周数
+                            ))
+                except:
+                    pass
+
+            # 按日期排序
+            low_count_dates.sort(key=lambda x: x[0], reverse=True)
+
+            # 9. 计算近期的统计信息（最近30天）
+            recent_30d = (datetime.datetime.now() - timedelta(days=30)).strftime('%Y%m%d')
+            recent_counts = [(d, c) for d, c in daily_counts.items() if d >= recent_30d]
+            recent_avg = sum(c for _, c in recent_counts) / len(recent_counts) if recent_counts else 0
+
+            # 10. 区分工作日和周末分析（最近3个月）
+            workday_counts = []
+            weekend_counts = []
+
+            three_months_ago = (datetime.datetime.now() - timedelta(days=90)).strftime('%Y%m%d')
+
+            for date, count in daily_counts.items():
+                if date >= three_months_ago:
+                    try:
+                        dt = datetime.datetime.strptime(date, '%Y%m%d')
+                        weekday = dt.weekday()
+                        if weekday < 5:  # 周一到周五
+                            workday_counts.append((date, count))
+                        else:  # 周六、周日
+                            weekend_counts.append((date, count))
+                    except:
+                        pass
+
+            # 计算工作日和周末的平均记录数
+            workday_avg = sum(c for _, c in workday_counts) / len(workday_counts) if workday_counts else 0
+            weekend_avg = sum(c for _, c in weekend_counts) / len(weekend_counts) if weekend_counts else 0
+
+            # 11. 计算整体覆盖率
+            coverage = len(existing_dates & trading_days) / expected_days * 100 if expected_days > 0 else 0
+
+            # 12. 生成报告
+            integrity_report = {
+                'table': table,
+                'date_range': f"{table_min_date} ~ {table_max_date}",
+                'expected_trading_days': expected_days,
+                'actual_trading_days': actual_days,
+                'coverage': round(coverage, 1),
+                'freshness_days': freshness_days,
+                'current_code_count': current_code_count,
+                'recent_avg_records': round(recent_avg),  # 近30天平均
+                'workday_avg_records': round(workday_avg),
+                'weekend_avg_records': round(weekend_avg),
+                'missing_dates': sorted(list(missing_dates))[:50],  # 最多显示50个
+                'missing_count': len(missing_dates),
+                'low_count_dates': low_count_dates[:20],  # 最多显示20个
+            }
+
+            # 存储报告
+            if 'data_integrity' not in self.report:
+                self.report['data_integrity'] = {}
+            self.report['data_integrity'][table] = integrity_report
+
+            # 13. 添加异常警告
+            if missing_dates:
+                recent_missing = [d for d in sorted(missing_dates, reverse=True)][:10]
+                self._add_anomaly('warning', 'continuity', table,
+                                f"{table} 缺失 {len(missing_dates)} 个交易日数据，覆盖率 {coverage:.1f}%",
+                                {
+                                    'missing_count': len(missing_dates),
+                                    'recent_missing': recent_missing,
+                                    'coverage': coverage
+                                })
+
+            # 检查记录数异常（基于同星期对比）
+            if low_count_dates:
+                recent_low = low_count_dates[:5]
+                self._add_anomaly('warning', 'integrity', table,
+                                f"{table} 有 {len(low_count_dates)} 天数据量异常偏低（基于近4周同星期对比）",
+                                {
+                                    'low_count_dates': [(d, c, pct) for d, c, pct, _, _ in recent_low],
+                                    'expected_codes': current_code_count
+                                })
+
+            # 检查工作日/周末数据量对比
+            if workday_avg > 0 and weekend_avg > 0:
+                weekend_ratio = weekend_avg / workday_avg
+                # 正常情况下周末交易量可能是工作日的80%-120%
+                if weekend_ratio < 0.5 or weekend_ratio > 1.5:
+                    self._add_anomaly('info', 'pattern', table,
+                                    f"{table} 周末/工作日数据量比例异常: {weekend_ratio:.2f}",
+                                    {
+                                        'workday_avg': workday_avg,
+                                        'weekend_avg': weekend_avg,
+                                        'ratio': weekend_ratio
+                                    })
+
+            freshness_str = f", 新鲜度 {freshness_days} 天" if freshness_days else ""
+            print(f"    {table}: 覆盖率 {coverage:.1f}%, 缺失 {len(missing_dates)} 天, 近期平均 {recent_avg:.0f} 条/天{freshness_str}")
+
+        except Exception as e:
+            print(f"    {table}: 检查失败 - {e}")
 
     def _check_data_coverage(self):
         """检查数据覆盖率"""
@@ -1222,7 +1693,7 @@ class DefaultCheck:
 
         # 获取有数据的市场列表
         markets_with_data = self._get_markets_with_data()
-        market_names = [self.MARKETS.get(m, {}).get('name', m) for m in markets_with_data]
+        market_names = [self._get_market_name(m) for m in markets_with_data]
 
         # 打印1d频率数据
         self._print_market_comparison_table(markets_with_data, market_names, '1d')
@@ -1240,17 +1711,25 @@ class DefaultCheck:
         self._print_anomalies_summary()
 
     def _get_markets_with_data(self) -> List[str]:
-        """获取有数据的市场列表"""
+        """获取有数据的市场列表 - 自动检测所有有数据的市场"""
         markets = []
-        for market in self.MARKETS.keys():
-            stats = self.market_stats.get(market, {})
-            db_stats = stats.get('database', {})
-            cache_stats = stats.get('cache', {}).get('total', {})
-            factor_stats = stats.get('factors', {}).get('total', {})
 
-            if (db_stats.get('tables', 0) > 0 or
+        # 遍历所有已发现的市场（不仅仅是预定义的MARKETS）
+        for market, stats in self.market_stats.items():
+            db_stats = stats.get('database', {})
+            files_stats = stats.get('files', {})
+            cache_stats = stats.get('cache', {}).get('total', {})
+
+            # 检查是否有任何数据
+            has_data = (
+                db_stats.get('tables', 0) > 0 or
                 cache_stats.get('files', 0) > 0 or
-                factor_stats.get('files', 0) > 0):
+                files_stats.get('parquet', {}).get('total', {}).get('files', 0) > 0 or
+                files_stats.get('csv_timebased', {}).get('total', {}).get('files', 0) > 0 or
+                files_stats.get('csv_codebased', {}).get('total', {}).get('files', 0) > 0
+            )
+
+            if has_data:
                 markets.append(market)
 
         # 如果没有市场有数据，返回默认市场
@@ -1482,7 +1961,7 @@ class DefaultCheck:
 
         # 获取有数据的市场列表
         markets_with_data = self._get_markets_with_data()
-        market_names = [self.MARKETS.get(m, {}).get('name', m) for m in markets_with_data]
+        market_names = [self._get_market_name(m) for m in markets_with_data]
 
         # 生成各频率的市场对比表
         for freq in ['1d', '1m', 'all']:
@@ -1770,11 +2249,17 @@ class DefaultCheck:
         html += '</div></div>'
         return html
 
+    def _format_size(self, size_mb: float) -> str:
+        """格式化文件大小，大于1GB时显示GB"""
+        if size_mb >= 1024:
+            return f"{size_mb / 1024:.2f} GB"
+        return f"{size_mb:.1f} MB"
+
     def _generate_html_report(self) -> str:
         """生成HTML报告 - 支持多级展开的交互式报告"""
 
         markets_with_data = self._get_markets_with_data()
-        market_names = [self.MARKETS.get(m, {}).get('name', m) for m in markets_with_data]
+        market_names = [self._get_market_name(m) for m in markets_with_data]
 
         html = f"""<!DOCTYPE html>
 <html lang="zh-CN">
@@ -1810,6 +2295,7 @@ class DefaultCheck:
         .badge-csv-time {{ background: #217346; color: white; }}
         .badge-csv-code {{ background: #4caf50; color: white; }}
         .badge-pkl {{ background: #ff6f00; color: white; }}
+        .badge-cache {{ background: #9c27b0; color: white; }}
 
         /* 健康指示器 */
         .health-bar {{ height: 4px; background: #eee; border-radius: 2px; overflow: hidden; margin-top: 5px; }}
@@ -1880,7 +2366,15 @@ class DefaultCheck:
         # 1. SQLite 数据库详情
         html += self._html_sqlite_detail(markets_with_data, market_names)
 
-        # 2. Parquet 文件详情
+        # 2. 数据完整性详情
+        if self.report.get('data_integrity'):
+            html += self._html_data_integrity_detail()
+
+        # 2.5 CSV数据完整性详情
+        if self.report.get('csv_integrity'):
+            html += self._html_csv_integrity_detail()
+
+        # 3. Parquet 文件详情
         html += self._html_parquet_detail(markets_with_data, market_names)
 
         # 3. CSV 文件详情 (区分timebased和codebased)
@@ -1889,7 +2383,10 @@ class DefaultCheck:
         # 4. PKL 文件详情
         html += self._html_pkl_detail(markets_with_data, market_names)
 
-        # 5. 检查点
+        # 5. 缓存数据详情
+        html += self._html_cache_detail(markets_with_data, market_names)
+
+        # 6. 检查点
         cache_report = self.report.get('cache', {})
         if cache_report.get('checkpoints'):
             html += self._html_checkpoints_detail(cache_report['checkpoints'])
@@ -1899,13 +2396,11 @@ class DefaultCheck:
             html += f"""
         <div class="issues">
             <strong>⚠️ 发现 {len(self.anomalies)} 个问题</strong>
-            <div style="max-height:150px; overflow-y:auto; margin-top:8px; font-size:12px;">
+            <div style="max-height:300px; overflow-y:auto; margin-top:8px; font-size:12px;">
 """
-            for a in self.anomalies[:30]:
+            for a in self.anomalies:
                 icon = {'critical': '🔴', 'warning': '🟡', 'info': '🔵'}.get(a['level'], '⚪')
                 html += f"<div>{icon} [{a['category']}] {a['item']}: {a['message']}</div>"
-            if len(self.anomalies) > 30:
-                html += f"<div style='color:#666;'>... 还有 {len(self.anomalies) - 30} 个问题</div>"
             html += "</div></div>"
 
         html += """
@@ -1914,6 +2409,210 @@ class DefaultCheck:
 </body>
 </html>
 """
+        return html
+
+    def _html_data_integrity_detail(self) -> str:
+        """生成数据完整性详情 - 显示缺失日期和记录数异常"""
+        html = """
+        <div class="data-card collapsible-container">
+            <div class="card-header collapsible-header" onclick="toggle(this)">
+                <span><span class="arrow expanded">▶</span><span class="badge badge-cache">数据完整性</span> 精确检查结果</span>
+                <span style="font-size:12px;color:#666;">基于交易日历的精确分析</span>
+            </div>
+            <div class="collapsible-content show">
+"""
+        data_integrity = self.report.get('data_integrity', {})
+
+        for table, info in data_integrity.items():
+            coverage = info.get('coverage', 0)
+            missing_count = info.get('missing_count', 0)
+            missing_dates = info.get('missing_dates', [])
+            low_count_dates = info.get('low_count_dates', [])
+            freshness_days = info.get('freshness_days')
+
+            # 覆盖率颜色
+            if coverage >= 95:
+                coverage_color = '#4caf50'
+            elif coverage >= 80:
+                coverage_color = '#ff9800'
+            else:
+                coverage_color = '#f44336'
+
+            # 新鲜度显示
+            freshness_str = f"{freshness_days} 天前" if freshness_days else "-"
+            if freshness_days:
+                if freshness_days <= 3:
+                    freshness_color = '#4caf50'
+                elif freshness_days <= 7:
+                    freshness_color = '#ff9800'
+                else:
+                    freshness_color = '#f44336'
+                freshness_str = f"<span style='color:{freshness_color};'>{freshness_days} 天前</span>"
+
+            html += f"""
+                <div class="market-card collapsible-container">
+                    <div class="market-header collapsible-header" onclick="toggle(this)">
+                        <span><span class="arrow expanded">▶</span><strong>{table}</strong></span>
+                        <span>覆盖率: <span style="color:{coverage_color};font-weight:bold;">{coverage:.1f}%</span> | 新鲜度: {freshness_str} | 缺失 {missing_count} 天</span>
+                    </div>
+                    <div class="collapsible-content show">
+                        <div class="detail-panel">
+                            <div class="stat-row">
+                                <div class="stat-item"><div class="stat-label">日期范围</div><div class="stat-value">{info.get('date_range', '-')}</div></div>
+                                <div class="stat-item"><div class="stat-label">应有交易日</div><div class="stat-value">{info.get('expected_trading_days', 0)}</div></div>
+                                <div class="stat-item"><div class="stat-label">实际交易日</div><div class="stat-value">{info.get('actual_trading_days', 0)}</div></div>
+                                <div class="stat-item"><div class="stat-label">当前代码数</div><div class="stat-value">{info.get('current_code_count', 0):,}</div></div>
+                            </div>
+                            <div class="stat-row">
+                                <div class="stat-item"><div class="stat-label">近30天平均</div><div class="stat-value">{info.get('recent_avg_records', 0):,}</div></div>
+                                <div class="stat-item"><div class="stat-label">工作日平均</div><div class="stat-value">{info.get('workday_avg_records', 0):,}</div></div>
+                                <div class="stat-item"><div class="stat-label">周末平均</div><div class="stat-value">{info.get('weekend_avg_records', 0):,}</div></div>
+                                <div class="stat-item"><div class="stat-label">数据覆盖率</div><div class="stat-value" style="color:{coverage_color};">{coverage:.1f}%</div></div>
+                            </div>
+"""
+
+            # 显示缺失日期
+            if missing_dates:
+                html += """
+                            <div style="margin-top:15px;"><strong>❌ 缺失交易日:</strong></div>
+                            <div style="max-height:100px; overflow-y:auto; background:#fff5f5; padding:8px; border-radius:4px; margin-top:5px; font-size:11px;">
+"""
+                # 按年份分组显示
+                year_groups = {}
+                for d in missing_dates:
+                    year = d[:4]
+                    if year not in year_groups:
+                        year_groups[year] = []
+                    year_groups[year].append(d)
+
+                for year in sorted(year_groups.keys()):
+                    dates = year_groups[year]
+                    html += f"<div style='margin:3px 0;'><b>{year}</b>: {', '.join(dates[:20])}"
+                    if len(dates) > 20:
+                        html += f" <span style='color:#999;'>(共 {len(dates)} 天)</span>"
+                    html += "</div>"
+
+                html += "</div>"
+
+            # 显示记录数异常的日期
+            if low_count_dates:
+                html += """
+                            <div style="margin-top:15px;"><strong>⚠️ 记录数异常日期 (低于近4周同星期平均值50%):</strong></div>
+                            <div style="max-height:100px; overflow-y:auto; background:#fffbe6; padding:8px; border-radius:4px; margin-top:5px; font-size:11px;">
+"""
+                for item in low_count_dates[:10]:
+                    date, count, pct, avg, weeks = item
+                    html += f"<div style='margin:2px 0;'>{date}: {count:,} 条 (同星期均值 {avg:,} 条的 {pct}%, 对比 {weeks} 周)</div>"
+                if len(low_count_dates) > 10:
+                    html += f"<div style='color:#999;'>... 还有 {len(low_count_dates) - 10} 个异常日期</div>"
+                html += "</div>"
+
+            html += "</div></div></div>"
+
+        if not data_integrity:
+            html += "<div style='color:#999;padding:10px;'>暂无数据完整性检查结果</div>"
+
+        html += "</div></div>"
+        return html
+
+    def _html_csv_integrity_detail(self) -> str:
+        """生成CSV数据完整性详情"""
+        html = """
+        <div class="data-card collapsible-container">
+            <div class="card-header collapsible-header" onclick="toggle(this)">
+                <span><span class="arrow expanded">▶</span><span class="badge badge-csv-time">CSV完整性</span> Time-Based CSV检查</span>
+                <span style="font-size:12px;color:#666;">基于交易日历的CSV文件检查</span>
+            </div>
+            <div class="collapsible-content show">
+"""
+        csv_integrity = self.report.get('csv_integrity', {})
+
+        for key, info in csv_integrity.items():
+            coverage = info.get('coverage', 0)
+            missing_count = info.get('missing_count', 0)
+            missing_dates = info.get('missing_dates', [])
+            low_count_dates = info.get('low_count_dates', [])
+            freshness_days = info.get('freshness_days')
+            market_name = info.get('market_name', info.get('market', key))
+            freq = info.get('freq', '')
+
+            # 覆盖率颜色
+            if coverage >= 95:
+                coverage_color = '#4caf50'
+            elif coverage >= 80:
+                coverage_color = '#ff9800'
+            else:
+                coverage_color = '#f44336'
+
+            # 新鲜度显示
+            freshness_str = "-"
+            if freshness_days:
+                if freshness_days <= 3:
+                    freshness_color = '#4caf50'
+                elif freshness_days <= 7:
+                    freshness_color = '#ff9800'
+                else:
+                    freshness_color = '#f44336'
+                freshness_str = f"<span style='color:{freshness_color};'>{freshness_days} 天前</span>"
+
+            html += f"""
+                <div class="market-card collapsible-container">
+                    <div class="market-header collapsible-header" onclick="toggle(this)">
+                        <span><span class="arrow expanded">▶</span><strong>{market_name} - {freq}</strong></span>
+                        <span>覆盖率: <span style="color:{coverage_color};font-weight:bold;">{coverage:.1f}%</span> | 新鲜度: {freshness_str} | 缺失 {missing_count} 天</span>
+                    </div>
+                    <div class="collapsible-content show">
+                        <div class="detail-panel">
+                            <div class="stat-row">
+                                <div class="stat-item"><div class="stat-label">日期范围</div><div class="stat-value">{info.get('date_range', '-')}</div></div>
+                                <div class="stat-item"><div class="stat-label">应有交易日</div><div class="stat-value">{info.get('expected_trading_days', 0)}</div></div>
+                                <div class="stat-item"><div class="stat-label">实际交易日</div><div class="stat-value">{info.get('actual_trading_days', 0)}</div></div>
+                                <div class="stat-item"><div class="stat-label">数据覆盖率</div><div class="stat-value" style="color:{coverage_color};">{coverage:.1f}%</div></div>
+                            </div>
+"""
+
+            # 显示缺失日期
+            if missing_dates:
+                html += """
+                            <div style="margin-top:15px;"><strong>❌ 缺失交易日:</strong></div>
+                            <div style="max-height:80px; overflow-y:auto; background:#fff5f5; padding:8px; border-radius:4px; margin-top:5px; font-size:11px;">
+"""
+                # 按年份分组显示
+                year_groups = {}
+                for d in missing_dates:
+                    year = d[:4]
+                    if year not in year_groups:
+                        year_groups[year] = []
+                    year_groups[year].append(d)
+
+                for year in sorted(year_groups.keys()):
+                    dates = year_groups[year]
+                    html += f"<div style='margin:3px 0;'><b>{year}</b>: {', '.join(dates[:20])}"
+                    if len(dates) > 20:
+                        html += f" <span style='color:#999;'>(共 {len(dates)} 天)</span>"
+                    html += "</div>"
+
+                html += "</div>"
+
+            # 显示记录数异常的日期
+            if low_count_dates:
+                html += """
+                            <div style="margin-top:15px;"><strong>⚠️ 文件数异常日期 (低于近4周同星期平均值50%):</strong></div>
+                            <div style="max-height:80px; overflow-y:auto; background:#fffbe6; padding:8px; border-radius:4px; margin-top:5px; font-size:11px;">
+"""
+                for item in low_count_dates[:10]:
+                    date, count, pct, avg, weeks = item
+                    html += f"<div style='margin:2px 0;'>{date}: {count:,} 个文件 (同星期均值 {avg:,} 的 {pct}%)</div>"
+                if len(low_count_dates) > 10:
+                    html += f"<div style='color:#999;'>... 还有 {len(low_count_dates) - 10} 个异常日期</div>"
+                html += "</div>"
+
+            html += "</div></div></div>"
+
+        if not csv_integrity:
+            html += "<div style='color:#999;padding:10px;'>暂无CSV数据完整性检查结果</div>"
+
+        html += "</div></div>"
         return html
 
     def _html_sqlite_detail(self, markets: List[str], market_names: List[str]) -> str:
@@ -1935,15 +2634,34 @@ class DefaultCheck:
             if tables == 0:
                 continue
 
+            # 获取SQLite年份分布
+            years = self._get_sqlite_years(tables_detail)
+
             html += f"""
                 <div class="market-card collapsible-container">
                     <div class="market-header collapsible-header" onclick="toggle(this)">
-                        <span><span class="arrow">▶</span><strong>{name}</strong></span>
+                        <span><span class="arrow expanded">▶</span><strong>{name}</strong></span>
                         <span>{tables} 表 / {records:,} 条记录</span>
                     </div>
-                    <div class="collapsible-content">
+                    <div class="collapsible-content show">
                         <div class="detail-panel">
-                            <table>
+                            <div class="stat-row">
+                                <div class="stat-item"><div class="stat-label">表数量</div><div class="stat-value">{tables}</div></div>
+                                <div class="stat-item"><div class="stat-label">记录总数</div><div class="stat-value">{records:,}</div></div>
+                                <div class="stat-item"><div class="stat-label">年份范围</div><div class="stat-value">{years.get('min', '-')} ~ {years.get('max', '-')}</div></div>
+                            </div>
+                            <div style="margin-top:10px;"><strong>年份分布:</strong></div>
+                            <div class="year-grid">
+"""
+            # 生成年份网格
+            for year, count in sorted(years.get('years', {}).items()):
+                css_class = 'year-complete' if count > 0 else 'year-empty'
+                html += f"<div class='year-cell {css_class}' title='{year}: {count} 个表'>{year}</div>"
+
+            html += "</div>"
+            html += """
+                            <div style="margin-top:15px;"><strong>数据表详情:</strong></div>
+                            <table style="margin-top:8px;">
                                 <thead><tr><th>表名</th><th>记录数</th><th>日期范围</th><th>新鲜度</th><th>状态</th></tr></thead>
                                 <tbody>
 """
@@ -1958,39 +2676,56 @@ class DefaultCheck:
         html += "</div></div>"
         return html
 
+    def _get_sqlite_years(self, tables_detail: List[dict]) -> dict:
+        """从SQLite表详情获取年份分布"""
+        years = {}
+        for t in tables_detail:
+            max_date = t.get('max_date')
+            if max_date:
+                try:
+                    year = str(max_date)[:4]
+                    if year.isdigit():
+                        years[year] = years.get(year, 0) + 1
+                except:
+                    pass
+        if years:
+            return {'years': years, 'min': min(years.keys()), 'max': max(years.keys())}
+        return {'years': {}, 'min': '-', 'max': '-'}
+
     def _html_parquet_detail(self, markets: List[str], market_names: List[str]) -> str:
         """生成Parquet详情 - 可展开查看每年的数据分布"""
         html = """
         <div class="data-card collapsible-container">
             <div class="card-header collapsible-header" onclick="toggle(this)">
-                <span><span class="arrow">▶</span><span class="badge badge-parquet">Parquet</span> 文件数据 (codebased)</span>
+                <span><span class="arrow expanded">▶</span><span class="badge badge-parquet">Parquet</span> 文件数据 (codebased)</span>
                 <span style="font-size:12px;color:#666;">按代码组织的parquet文件</span>
             </div>
-            <div class="collapsible-content">
+            <div class="collapsible-content show">
 """
         for market, name in zip(markets, market_names):
             for freq in ['1d', '1m']:
                 stats = self.market_stats.get(market, {}).get('files', {}).get('parquet', {}).get(freq, {})
                 files = stats.get('files', 0)
-                size = stats.get('size_mb', 0)
+                size_mb = stats.get('size_mb', 0)
 
                 if files == 0:
                     continue
 
                 # 获取年份分布（从文件名推断）
                 years = self._get_parquet_years(market, freq)
+                size_str = self._format_size(size_mb)
 
                 html += f"""
                 <div class="market-card collapsible-container">
                     <div class="market-header collapsible-header" onclick="toggle(this)">
-                        <span><span class="arrow">▶</span><strong>{name} - {freq}</strong></span>
-                        <span>{files} 个文件 / {size:.1f} MB</span>
+                        <span><span class="arrow expanded">▶</span><strong>{name} - {freq}</strong></span>
+                        <span>{files:,} 个文件 / {size_str}</span>
                     </div>
-                    <div class="collapsible-content">
+                    <div class="collapsible-content show">
                         <div class="detail-panel">
                             <div class="stat-row">
                                 <div class="stat-item"><div class="stat-label">文件数量</div><div class="stat-value">{files:,}</div></div>
-                                <div class="stat-item"><div class="stat-label">数据大小</div><div class="stat-value">{size:.1f} MB</div></div>
+                                <div class="stat-item"><div class="stat-label">数据大小</div><div class="stat-value">{size_str}</div></div>
                                 <div class="stat-item"><div class="stat-label">年份范围</div><div class="stat-value">{years.get('min', '-')} ~ {years.get('max', '-')}</div></div>
                             </div>
                             <div style="margin-top:10px;"><strong>年份分布:</strong></div>
@@ -2034,10 +2769,10 @@ class DefaultCheck:
         html = """
         <div class="data-card collapsible-container">
             <div class="card-header collapsible-header" onclick="toggle(this)">
-                <span><span class="arrow">▶</span><span class="badge badge-csv-time">CSV</span> 文件数据</span>
+                <span><span class="arrow expanded">▶</span><span class="badge badge-csv-time">CSV</span> 文件数据</span>
                 <span style="font-size:12px;color:#666;">timebased + codebased</span>
             </div>
-            <div class="collapsible-content">
+            <div class="collapsible-content show">
 """
 
         # Time-based CSV
@@ -2053,71 +2788,139 @@ class DefaultCheck:
 
                 # 获取日期分布
                 date_info = self._get_csv_date_range(market, freq)
+                years = date_info.get('years', {})
+                size_str = self._format_size(size)
 
                 html += f"""
                 <div class="market-card collapsible-container">
                     <div class="market-header collapsible-header" onclick="toggle(this)">
-                        <span><span class="arrow">▶</span><strong>{name} - {freq}</strong></span>
-                        <span>{files:,} 个文件 / {size:.1f} MB</span>
+                        <span><span class="arrow expanded">▶</span><strong>{name} - {freq}</strong></span>
+                        <span>{files:,} 个文件 / {size_str}</span>
                     </div>
-                    <div class="collapsible-content">
+                    <div class="collapsible-content show">
                         <div class="detail-panel">
                             <div class="stat-row">
                                 <div class="stat-item"><div class="stat-label">文件数量</div><div class="stat-value">{files:,}</div></div>
-                                <div class="stat-item"><div class="stat-label">数据大小</div><div class="stat-value">{size:.1f} MB</div></div>
+                                <div class="stat-item"><div class="stat-label">数据大小</div><div class="stat-value">{size_str}</div></div>
                                 <div class="stat-item"><div class="stat-label">数据范围</div><div class="stat-value">{date_info.get('min', '-')}</div></div>
                                 <div class="stat-item"><div class="stat-label">最新日期</div><div class="stat-value">{date_info.get('max', '-')}</div></div>
                             </div>
+                            <div style="margin-top:10px;"><strong>年份分布:</strong></div>
+                            <div class="year-grid">
+"""
+                # 生成年份网格
+                for year, count in sorted(years.items()):
+                    css_class = 'year-complete' if count > 0 else 'year-empty'
+                    html += f"<div class='year-cell {css_class}' title='{year}: {count} 个文件'>{year}</div>"
+
+                html += """
+                            </div>
                             <div style="margin-top:8px;">
                                 <strong>健康度:</strong>
-                                <div class="health-bar"><div class="fill health-{date_info.get('health', 'good')}" style="width:{date_info.get('health_pct', 100)}%"></div></div>
-                                <span style="font-size:11px;color:#666;">{date_info.get('health_msg', '')}</span>
+                                <div class="health-bar"><div class="fill health-{health}" style="width:{pct}%"></div></div>
+                                <span style="font-size:11px;color:#666;">{msg}</span>
                             </div>
                         </div>
                     </div>
                 </div>
-"""
+""".format(health=date_info.get('health', 'good'), pct=date_info.get('health_pct', 100), msg=date_info.get('health_msg', ''))
 
         # Code-based CSV (如果有)
         html += "<div style='padding:15px 0 8px;font-weight:600;color:#4caf50;'>📊 代码序列 (Code-Based)</div>"
         has_codebased = False
         for market, name in zip(markets, market_names):
-            stats = self.market_stats.get(market, {}).get('files', {}).get('csv_codebased', {}).get('total', {})
-            files = stats.get('files', 0)
-            size = stats.get('size_mb', 0)
+            for freq in ['1d', '1m']:
+                stats = self.market_stats.get(market, {}).get('files', {}).get('csv_codebased', {}).get(freq, {})
+                files = stats.get('files', 0)
+                size_mb = stats.get('size_mb', 0)
 
-            if files > 0:
-                has_codebased = True
-                html += f"""
-                <div class="market-card">
-                    <div class="market-header">
-                        <strong>{name}</strong>
-                        <span>{files:,} 个文件 / {size:.1f} MB</span>
+                if files > 0:
+                    has_codebased = True
+                    # 获取codebased CSV年份分布
+                    years = self._get_codebased_csv_years(market, freq)
+                    size_str = self._format_size(size_mb)
+
+                    html += f"""
+                <div class="market-card collapsible-container">
+                    <div class="market-header collapsible-header" onclick="toggle(this)">
+                        <span><span class="arrow expanded">▶</span><strong>{name} - {freq}</strong></span>
+                        <span>{files:,} 个文件 / {size_str}</span>
                     </div>
-                </div>
+                    <div class="collapsible-content show">
+                        <div class="detail-panel">
+                            <div class="stat-row">
+                                <div class="stat-item"><div class="stat-label">文件数量</div><div class="stat-value">{files:,}</div></div>
+                                <div class="stat-item"><div class="stat-label">数据大小</div><div class="stat-value">{size_str}</div></div>
+                                <div class="stat-item"><div class="stat-label">年份范围</div><div class="stat-value">{years.get('min', '-')} ~ {years.get('max', '-')}</div></div>
+                            </div>
+                            <div style="margin-top:10px;"><strong>年份分布:</strong></div>
+                            <div class="year-grid">
 """
+                    # 生成年份网格
+                    for year, count in sorted(years.get('years', {}).items()):
+                        css_class = 'year-complete' if count > 0 else 'year-empty'
+                        html += f"<div class='year-cell {css_class}' title='{year}: {count} 个文件'>{year}</div>"
+
+                    html += "</div></div></div></div>"
+
         if not has_codebased:
             html += "<div style='color:#999;padding:5px;'>暂无codebased CSV数据</div>"
 
         html += "</div></div>"
         return html
 
+    def _get_codebased_csv_years(self, market: str, freq: str) -> dict:
+        """获取codebased CSV文件的年份分布"""
+        years = {}
+        try:
+            kline_dir = KLINE_DIR if 'KLINE_DIR' in dir() else os.path.join(DATA_DIR, 'market', 'kline')
+            market_dir = os.path.join(kline_dir, 'codebased', market, freq)
+            if os.path.exists(market_dir):
+                # 检查是否有年份子目录
+                for item in os.listdir(market_dir):
+                    if item.isdigit() and len(item) == 4:
+                        item_path = os.path.join(market_dir, item)
+                        if os.path.isdir(item_path):
+                            csv_count = len([x for x in os.listdir(item_path) if x.endswith('.csv')])
+                            if csv_count > 0:
+                                years[item] = years.get(item, 0) + csv_count
+        except:
+            pass
+
+        if years:
+            return {'years': years, 'min': min(years.keys()), 'max': max(years.keys())}
+        return {'years': {}, 'min': '-', 'max': '-'}
+
     def _get_csv_date_range(self, market: str, freq: str) -> dict:
-        """获取CSV文件的日期范围"""
+        """获取CSV文件的日期范围和年份分布"""
         try:
             kline_dir = KLINE_DIR if 'KLINE_DIR' in dir() else os.path.join(DATA_DIR, 'market', 'kline')
             base_dir = os.path.join(kline_dir, 'timebased', market, freq)
 
             if not os.path.exists(base_dir):
-                return {'min': '-', 'max': '-', 'health': 'good', 'health_pct': 100, 'health_msg': '无数据'}
+                return {'min': '-', 'max': '-', 'years': {}, 'health': 'good', 'health_pct': 100, 'health_msg': '无数据'}
 
             # 找最新和最早的目录
-            years = sorted([d for d in os.listdir(base_dir) if d.isdigit()])
-            if not years:
-                return {'min': '-', 'max': '-', 'health': 'good', 'health_pct': 100, 'health_msg': '无数据'}
+            year_dirs = sorted([d for d in os.listdir(base_dir) if d.isdigit()])
+            if not year_dirs:
+                return {'min': '-', 'max': '-', 'years': {}, 'health': 'good', 'health_pct': 100, 'health_msg': '无数据'}
 
-            min_year = years[0]
-            max_year = years[-1]
+            min_year = year_dirs[0]
+            max_year = year_dirs[-1]
+
+            # 统计每年的文件数
+            years = {}
+            for year_dir in year_dirs:
+                year_path = os.path.join(base_dir, year_dir)
+                if os.path.isdir(year_path):
+                    # 递归统计csv文件数
+                    try:
+                        result = os.popen(f'find "{year_path}" -name "*.csv" -type f 2>/dev/null | wc -l').read().strip()
+                        file_count = int(result) if result.isdigit() else 0
+                        if file_count > 0:
+                            years[year_dir] = file_count
+                    except:
+                        pass
 
             # 获取最新月份
             max_year_dir = os.path.join(base_dir, max_year)
@@ -2157,61 +2960,209 @@ class DefaultCheck:
             return {
                 'min': min_year,
                 'max': max_date,
+                'years': years,
                 'health': health,
                 'health_pct': health_pct,
                 'health_msg': health_msg
             }
         except:
-            return {'min': '-', 'max': '-', 'health': 'good', 'health_pct': 100, 'health_msg': ''}
+            return {'min': '-', 'max': '-', 'years': {}, 'health': 'good', 'health_pct': 100, 'health_msg': ''}
 
     def _html_pkl_detail(self, markets: List[str], market_names: List[str]) -> str:
         """生成PKL详情"""
         html = """
         <div class="data-card collapsible-container">
             <div class="card-header collapsible-header" onclick="toggle(this)">
-                <span><span class="arrow">▶</span><span class="badge badge-pkl">PKL</span> Pickle文件数据</span>
+                <span><span class="arrow expanded">▶</span><span class="badge badge-pkl">PKL</span> Pickle文件数据</span>
                 <span style="font-size:12px;color:#666;">缓存 + 因子数据</span>
             </div>
-            <div class="collapsible-content">
+            <div class="collapsible-content show">
 """
+        factors_cache_dir = FACTORS_CACHE_DIR if 'FACTORS_CACHE_DIR' in dir() else os.path.join(DATA_DIR, 'cache', 'factors')
+        has_pkl = False
+
         for market, name in zip(markets, market_names):
             for freq in ['1d', '1m']:
-                stats = self.market_stats.get(market, {}).get('files', {}).get('pkl', {}).get(freq, {})
-                files = stats.get('files', 0)
-                size = stats.get('size_mb', 0)
-
-                if files == 0:
+                # 直接扫描缓存目录获取PKL文件
+                cache_dir = os.path.join(factors_cache_dir, market, freq)
+                if not os.path.exists(cache_dir):
                     continue
 
-                html += f"""
+                try:
+                    pkl_files = [f for f in os.listdir(cache_dir) if f.endswith('.pkl')]
+                    if not pkl_files:
+                        continue
+
+                    has_pkl = True
+                    files = len(pkl_files)
+                    size_bytes = sum(os.path.getsize(os.path.join(cache_dir, f)) for f in pkl_files)
+                    size_mb = size_bytes / (1024 * 1024)
+                    size_str = self._format_size(size_mb)
+
+                    # 获取年份分布
+                    years = self._get_pkl_years(market, freq)
+
+                    html += f"""
                 <div class="market-card collapsible-container">
                     <div class="market-header collapsible-header" onclick="toggle(this)">
-                        <span><span class="arrow">▶</span><strong>{name} - {freq}</strong></span>
-                        <span>{files:,} 个文件 / {size:.1f} MB</span>
+                        <span><span class="arrow expanded">▶</span><strong>{name} - {freq}</strong></span>
+                        <span>{files:,} 个文件 / {size_str}</span>
                     </div>
-                    <div class="collapsible-content">
+                    <div class="collapsible-content show">
                         <div class="detail-panel">
                             <div class="stat-row">
                                 <div class="stat-item"><div class="stat-label">文件数量</div><div class="stat-value">{files:,}</div></div>
-                                <div class="stat-item"><div class="stat-label">数据大小</div><div class="stat-value">{size:.1f} MB</div></div>
+                                <div class="stat-item"><div class="stat-label">数据大小</div><div class="stat-value">{size_str}</div></div>
+                                <div class="stat-item"><div class="stat-label">年份范围</div><div class="stat-value">{years.get('min', '-')} ~ {years.get('max', '-')}</div></div>
                             </div>
-                        </div>
-                    </div>
-                </div>
+                            <div style="margin-top:10px;"><strong>年份分布:</strong></div>
+                            <div class="year-grid">
 """
+                    # 生成年份网格
+                    for year, count in sorted(years.get('years', {}).items()):
+                        css_class = 'year-complete' if count > 0 else 'year-empty'
+                        html += f"<div class='year-cell {css_class}' title='{year}: {count} 个文件'>{year}</div>"
+
+                    html += "</div></div></div></div>"
+                except Exception as e:
+                    continue
+
+        if not has_pkl:
+            html += "<div style='color:#999;padding:10px;'>暂无PKL缓存数据</div>"
 
         html += "</div></div>"
         return html
+
+    def _get_pkl_years(self, market: str, freq: str) -> dict:
+        """获取PKL文件的年份分布"""
+        years = {}
+        try:
+            # 检查因子缓存目录
+            factors_dir = FACTORS_CACHE_DIR if 'FACTORS_CACHE_DIR' in dir() else os.path.join(CACHE_DIR, 'factors', market, freq)
+            if os.path.exists(factors_dir):
+                for f in os.listdir(factors_dir):
+                    if f.endswith('.pkl'):
+                        # 从文件修改时间推断年份
+                        try:
+                            fp = os.path.join(factors_dir, f)
+                            mtime = os.path.getmtime(fp)
+                            from datetime import datetime
+                            year = datetime.fromtimestamp(mtime).strftime('%Y')
+                            years[year] = years.get(year, 0) + 1
+                        except:
+                            pass
+        except:
+            pass
+
+        if years:
+            return {'years': years, 'min': min(years.keys()), 'max': max(years.keys())}
+        return {'years': {}, 'min': '-', 'max': '-'}
+
+    def _html_cache_detail(self, markets: List[str], market_names: List[str]) -> str:
+        """生成缓存数据详情"""
+        html = """
+        <div class="data-card collapsible-container">
+            <div class="card-header collapsible-header" onclick="toggle(this)">
+                <span><span class="arrow expanded">▶</span><span class="badge badge-cache">Cache</span> 缓存数据</span>
+                <span style="font-size:12px;color:#666;">因子缓存 + 回测缓存</span>
+            </div>
+            <div class="collapsible-content show">
+"""
+        has_cache = False
+        factors_cache_dir = FACTORS_CACHE_DIR if 'FACTORS_CACHE_DIR' in dir() else os.path.join(DATA_DIR, 'cache', 'factors')
+
+        for market, name in zip(markets, market_names):
+            for freq in ['1d', '1m']:
+                cache_dir = os.path.join(factors_cache_dir, market, freq)
+                if not os.path.exists(cache_dir):
+                    continue
+
+                # 统计文件
+                try:
+                    files = len([f for f in os.listdir(cache_dir) if f.endswith('.pkl')])
+                    if files == 0:
+                        continue
+
+                    # 计算大小
+                    size_bytes = sum(os.path.getsize(os.path.join(cache_dir, f)) for f in os.listdir(cache_dir) if f.endswith('.pkl'))
+                    size_mb = size_bytes / (1024 * 1024)
+
+                    # 获取最后更新时间
+                    mtimes = [os.path.getmtime(os.path.join(cache_dir, f)) for f in os.listdir(cache_dir) if f.endswith('.pkl')]
+                    last_update = datetime.datetime.fromtimestamp(max(mtimes)).strftime('%Y-%m-%d %H:%M:%S') if mtimes else '-'
+
+                    has_cache = True
+                    size_str = self._format_size(size_mb)
+
+                    # 获取年份分布
+                    years = self._get_cache_years(market, freq)
+
+                    html += f"""
+                <div class="market-card collapsible-container">
+                    <div class="market-header collapsible-header" onclick="toggle(this)">
+                        <span><span class="arrow expanded">▶</span><strong>{name} - {freq}</strong></span>
+                        <span>{files:,} 个文件 / {size_str}</span>
+                    </div>
+                    <div class="collapsible-content show">
+                        <div class="detail-panel">
+                            <div class="stat-row">
+                                <div class="stat-item"><div class="stat-label">缓存文件数</div><div class="stat-value">{files:,}</div></div>
+                                <div class="stat-item"><div class="stat-label">缓存大小</div><div class="stat-value">{size_str}</div></div>
+                                <div class="stat-item"><div class="stat-label">最后更新</div><div class="stat-value">{last_update}</div></div>
+                            </div>
+                            <div style="margin-top:10px;"><strong>年份分布:</strong></div>
+                            <div class="year-grid">
+"""
+                    # 生成年份网格
+                    for year, count in sorted(years.get('years', {}).items()):
+                        css_class = 'year-complete' if count > 0 else 'year-empty'
+                        html += f"<div class='year-cell {css_class}' title='{year}: {count} 个文件'>{year}</div>"
+
+                    html += "</div></div></div></div>"
+
+                except Exception as e:
+                    continue
+
+        if not has_cache:
+            html += "<div style='color:#999;padding:5px;'>暂无缓存数据</div>"
+
+        html += "</div></div>"
+        return html
+
+    def _get_cache_years(self, market: str, freq: str) -> dict:
+        """获取缓存文件的年份分布"""
+        years = {}
+        try:
+            # 使用FACTORS_CACHE_DIR常量
+            factors_cache_dir = FACTORS_CACHE_DIR if 'FACTORS_CACHE_DIR' in dir() else os.path.join(DATA_DIR, 'cache', 'factors')
+            cache_dir = os.path.join(factors_cache_dir, market, freq)
+            if os.path.exists(cache_dir):
+                for f in os.listdir(cache_dir):
+                    if f.endswith('.pkl'):
+                        try:
+                            fp = os.path.join(cache_dir, f)
+                            mtime = os.path.getmtime(fp)
+                            from datetime import datetime
+                            year = datetime.fromtimestamp(mtime).strftime('%Y')
+                            years[year] = years.get(year, 0) + 1
+                        except:
+                            pass
+        except:
+            pass
+
+        if years:
+            return {'years': years, 'min': min(years.keys()), 'max': max(years.keys())}
+        return {'years': {}, 'min': '-', 'max': '-'}
 
     def _html_checkpoints_detail(self, checkpoints: List[dict]) -> str:
         """生成检查点详情"""
         html = """
         <div class="data-card collapsible-container">
             <div class="card-header collapsible-header" onclick="toggle(this)">
-                <span><span class="arrow">▶</span><span class="badge badge-sqlite">检查点</span> 数据采集状态</span>
+                <span><span class="arrow expanded">▶</span><span class="badge badge-sqlite">检查点</span> 数据采集状态</span>
                 <span style="font-size:12px;color:#666;">各表的数据更新状态</span>
             </div>
-            <div class="collapsible-content">
+            <div class="collapsible-content show">
                 <table>
                     <thead><tr><th>数据表</th><th>最后日期</th><th>滞后天数</th><th>健康度</th><th>状态</th></tr></thead>
                     <tbody>
