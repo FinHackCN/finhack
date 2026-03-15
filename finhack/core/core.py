@@ -316,10 +316,12 @@ finhack check --target=factors                          # 只检查因子
 ================================
 K线模块 (kline)
 ================================
-finhack kline cache                                     # K线数据缓存
-finhack kline cache --market=cn_stock --freq=1m         # 缓存指定市场和频率
+finhack kline cache                                     # K线数据缓存（默认所有市场、所有频率）
+finhack kline cache --market=cn_stock                   # 缓存指定市场
+finhack kline cache --freq=1m                           # 缓存指定频率
 finhack kline cache --year=2024                         # 缓存指定年份
-finhack kline cache --force                             # 强制重建缓存
+finhack kline cache --force=true                        # 强制重建缓存（忽略文件时间）
+finhack kline cache --market=all --freq=all             # 显式指定所有市场和频率
 finhack kline stop                                      # 停止任务
 
 ================================

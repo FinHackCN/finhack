@@ -1390,6 +1390,103 @@ class DefaultCheck:
                 freshness_str = f", 新鲜度 {freshness_days} 天" if freshness_days else ""
                 print(f"    {name}-{freq}: 覆盖率 {coverage:.1f}%, 缺失 {len(missing_dates)} 天{freshness_str}")
 
+        # 检查 codebased 目录的 CSV 数据完整性
+        self._check_codebased_csv_integrity()
+
+    def _check_codebased_csv_integrity(self):
+        """检查 codebased 目录下的 CSV 文件数据完整性
+
+        codebased 目录结构: codebased/{market}/{freq}/{year}/{code}.csv
+        每个 CSV 文件包含单个股票的历史数据
+        """
+        print("\n  检查 codebased CSV 文件数据完整性...")
+        kline_dir = KLINE_DIR if 'KLINE_DIR' in dir() else os.path.join(DATA_DIR, 'market', 'kline')
+        codebased_dir = os.path.join(kline_dir, 'codebased')
+
+        if not os.path.exists(codebased_dir):
+            return
+
+        # 获取交易日历
+        try:
+            cal_result = DB.select(
+                "SELECT cal_date FROM astock_trade_cal WHERE is_open=1 ORDER BY cal_date",
+                'tushare'
+            )
+            trading_days = set(str(r['cal_date']) for r in cal_result) if cal_result else set()
+        except:
+            trading_days = set()
+
+        # 扫描目录中的所有市场
+        for market_dir in os.listdir(codebased_dir):
+            market_path = os.path.join(codebased_dir, market_dir)
+            if not os.path.isdir(market_path):
+                continue
+
+            market = market_dir
+            name = self._get_market_name(market)
+
+            for freq in ['1d', '1m']:
+                freq_dir = os.path.join(market_path, freq)
+                if not os.path.exists(freq_dir):
+                    continue
+
+                # 收集所有年份和代码信息
+                years_found = set()
+                code_count = 0
+                date_range = {'min': None, 'max': None}
+
+                # 检查年份子目录
+                for item in os.listdir(freq_dir):
+                    item_path = os.path.join(freq_dir, item)
+
+                    # 如果是年份目录
+                    if os.path.isdir(item_path) and item.isdigit():
+                        years_found.add(int(item))
+
+                        # 统计该年份下的代码文件数
+                        for csv_file in os.listdir(item_path):
+                            if csv_file.endswith('.csv'):
+                                code_count += 1
+
+                # 如果没有年份目录，检查是否有直接放在 freq 目录下的 CSV 文件
+                csv_files_direct = [f for f in os.listdir(freq_dir) if f.endswith('.csv')]
+                if csv_files_direct:
+                    code_count += len(csv_files_direct)
+
+                if not years_found and not csv_files_direct:
+                    continue
+
+                # 计算数据新鲜度（基于最新年份）
+                freshness_days = None
+                if years_found:
+                    max_year = max(years_found)
+                    try:
+                        max_dt = datetime.datetime(max_year, 12, 31)
+                        freshness_days = (datetime.datetime.now() - max_dt).days
+                    except:
+                        pass
+
+                # 存储报告
+                csv_integrity_key = f"csv_codebased_{market}_{freq}"
+                if 'csv_codebased_integrity' not in self.report:
+                    self.report['csv_codebased_integrity'] = {}
+
+                years_str = ', '.join(map(str, sorted(years_found))) if years_found else '无年份目录'
+
+                self.report['csv_codebased_integrity'][csv_integrity_key] = {
+                    'market': market,
+                    'market_name': name,
+                    'freq': freq,
+                    'code_count': code_count,
+                    'years': sorted(years_found),
+                    'years_str': years_str,
+                    'freshness_days': freshness_days,
+                }
+
+                year_range = f"{min(years_found)}-{max(years_found)}" if years_found else "无"
+                freshness_str = f", 新鲜度 {freshness_days} 天" if freshness_days else ""
+                print(f"    {name}-{freq} (codebased): {code_count} 个代码, 年份 {year_range}{freshness_str}")
+
     def _check_table_data_integrity(self, table: str, date_field: str, code_table: str):
         """
         精确检查表数据完整性
@@ -1926,10 +2023,10 @@ class DefaultCheck:
             if not os.path.exists(report_dir):
                 os.makedirs(report_dir, exist_ok=True)
 
-            timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-            json_file = os.path.join(report_dir, f'check_report_{timestamp}.json')
-            md_file = os.path.join(report_dir, f'check_report_{timestamp}.md')
-            html_file = os.path.join(report_dir, f'check_report_{timestamp}.html')
+            # 使用固定文件名，每次覆盖
+            json_file = os.path.join(report_dir, 'check_report.json')
+            md_file = os.path.join(report_dir, 'check_report.md')
+            html_file = os.path.join(report_dir, 'check_report.html')
 
             # JSON
             with open(json_file, 'w', encoding='utf-8') as f:
@@ -2275,7 +2372,7 @@ class DefaultCheck:
         .meta {{ text-align: center; color: #7f8c8d; margin-bottom: 15px; font-size: 12px; }}
 
         /* 可折叠项 */
-        .collapsible-header {{ cursor: pointer; user-select: none; position: relative; }}
+        .collapsible-header {{ cursor: pointer; position: relative; }}
         .collapsible-header:hover {{ background: #e8e8e8 !important; }}
         .arrow {{ display: inline-block; width: 16px; font-size: 10px; color: #666; transition: transform 0.2s; }}
         .arrow.expanded {{ transform: rotate(90deg); }}
@@ -2296,6 +2393,13 @@ class DefaultCheck:
         .badge-csv-code {{ background: #4caf50; color: white; }}
         .badge-pkl {{ background: #ff6f00; color: white; }}
         .badge-cache {{ background: #9c27b0; color: white; }}
+
+        /* 数据来源 */
+        .data-source {{ background: #f0f4f8; border-left: 3px solid #607d8b; padding: 8px 12px; margin: 10px 0; border-radius: 0 4px 4px 0; font-size: 11px; }}
+        .data-source-title {{ font-weight: bold; color: #455a64; margin-bottom: 5px; }}
+        .data-source-path {{ font-family: 'Consolas', 'Monaco', monospace; color: #1565c0; word-break: break-all; }}
+        .data-source-note {{ color: #78909c; margin-top: 3px; }}
+        .data-source-cmd {{ font-family: 'Consolas', 'Monaco', monospace; background: #263238; color: #80cbc4; padding: 3px 8px; border-radius: 3px; margin: 3px 0; font-size: 12px; display: inline-block; }}
 
         /* 健康指示器 */
         .health-bar {{ height: 4px; background: #eee; border-radius: 2px; overflow: hidden; margin-top: 5px; }}
@@ -2413,13 +2517,21 @@ class DefaultCheck:
 
     def _html_data_integrity_detail(self) -> str:
         """生成数据完整性详情 - 显示缺失日期和记录数异常"""
-        html = """
+        db_path = DB_PATH if 'DB_PATH' in dir() else os.path.join(DATA_DIR, 'db', 'tushare.db')
+
+        html = f"""
         <div class="data-card collapsible-container">
             <div class="card-header collapsible-header" onclick="toggle(this)">
                 <span><span class="arrow expanded">▶</span><span class="badge badge-cache">数据完整性</span> 精确检查结果</span>
                 <span style="font-size:12px;color:#666;">基于交易日历的精确分析</span>
             </div>
             <div class="collapsible-content show">
+                <div class="data-source">
+                    <div class="data-source-title">📥 数据采集方式</div>
+                    <div class="data-source-cmd">finhack collector run --vendor=tushare</div>
+                    <div class="data-source-note">基于交易日历检查 SQLite 数据库中每个交易日是否都有数据，并使用近4周同星期对比检测异常。交易日历来自 astock_trade_cal 表。</div>
+                    <div class="data-source-path">检查对象: {db_path}</div>
+                </div>
 """
         data_integrity = self.report.get('data_integrity', {})
 
@@ -2517,13 +2629,22 @@ class DefaultCheck:
 
     def _html_csv_integrity_detail(self) -> str:
         """生成CSV数据完整性详情"""
-        html = """
+        kline_dir = os.path.join(DATA_DIR, 'kline')
+        timebased_dir = os.path.join(kline_dir, 'timebased')
+
+        html = f"""
         <div class="data-card collapsible-container">
             <div class="card-header collapsible-header" onclick="toggle(this)">
                 <span><span class="arrow expanded">▶</span><span class="badge badge-csv-time">CSV完整性</span> Time-Based CSV检查</span>
                 <span style="font-size:12px;color:#666;">基于交易日历的CSV文件检查</span>
             </div>
             <div class="collapsible-content show">
+                <div class="data-source">
+                    <div class="data-source-title">📥 数据来源</div>
+                    <div class="data-source-cmd">外部数据源导入 / 自定义采集脚本</div>
+                    <div class="data-source-note">按时间组织的CSV文件，每个交易日一个目录，包含当日所有标的的行情数据。通常来自外部数据源或自定义采集。</div>
+                    <div class="data-source-path">存储位置: {timebased_dir}/{{market}}/{{freq}}/{{year}}/{{month}}/{{day}}/*.csv</div>
+                </div>
 """
         csv_integrity = self.report.get('csv_integrity', {})
 
@@ -2617,13 +2738,22 @@ class DefaultCheck:
 
     def _html_sqlite_detail(self, markets: List[str], market_names: List[str]) -> str:
         """生成SQLite详情 - 可展开查看每个表的详细信息"""
-        html = """
+        db_path = DB_PATH if 'DB_PATH' in dir() else os.path.join(DATA_DIR, 'db', 'tushare.db')
+
+        html = f"""
         <div class="data-card collapsible-container">
             <div class="card-header collapsible-header" onclick="toggle(this)">
                 <span><span class="arrow expanded">▶</span><span class="badge badge-sqlite">SQLite</span> 数据库数据</span>
                 <span style="font-size:12px;color:#666;">点击展开/收起</span>
             </div>
             <div class="collapsible-content show">
+                <div class="data-source">
+                    <div class="data-source-title">📥 数据采集方式</div>
+                    <div class="data-source-cmd">finhack collector run --vendor=tushare</div>
+                    <div class="data-source-cmd">finhack collector fix --vendor=tushare --auto=true</div>
+                    <div class="data-source-note">从 Tushare Pro API 采集数据，存储到 SQLite 数据库。包含股票、基金、期货、指数等市场的基础信息和行情数据。</div>
+                    <div class="data-source-path">存储位置: {db_path}</div>
+                </div>
 """
         for market, name in zip(markets, market_names):
             db_stats = self.market_stats.get(market, {}).get('database', {})
@@ -2694,13 +2824,22 @@ class DefaultCheck:
 
     def _html_parquet_detail(self, markets: List[str], market_names: List[str]) -> str:
         """生成Parquet详情 - 可展开查看每年的数据分布"""
-        html = """
+        kline_dir = KLINE_DIR if 'KLINE_DIR' in dir() else os.path.join(DATA_DIR, 'market', 'kline')
+        codebased_dir = os.path.join(kline_dir, 'codebased')
+
+        html = f"""
         <div class="data-card collapsible-container">
             <div class="card-header collapsible-header" onclick="toggle(this)">
                 <span><span class="arrow expanded">▶</span><span class="badge badge-parquet">Parquet</span> 文件数据 (codebased)</span>
                 <span style="font-size:12px;color:#666;">按代码组织的parquet文件</span>
             </div>
             <div class="collapsible-content show">
+                <div class="data-source">
+                    <div class="data-source-title">📥 数据生成方式</div>
+                    <div class="data-source-cmd">finhack kline cache --market={{market}} --freq={{freq}}</div>
+                    <div class="data-source-note">从 timebased CSV 文件转换生成 Parquet 格式，按股票代码组织，每个文件包含单个标的的完整历史数据。Parquet 格式读取效率更高，适合回测使用。</div>
+                    <div class="data-source-path">存储位置: {codebased_dir}/{{market}}/{{freq}}/*.parquet</div>
+                </div>
 """
         for market, name in zip(markets, market_names):
             for freq in ['1d', '1m']:
@@ -2714,6 +2853,7 @@ class DefaultCheck:
                 # 获取年份分布（从文件名推断）
                 years = self._get_parquet_years(market, freq)
                 size_str = self._format_size(size_mb)
+                market_path = os.path.join(codebased_dir, market, freq)
 
                 html += f"""
                 <div class="market-card collapsible-container">
@@ -2723,6 +2863,7 @@ class DefaultCheck:
                     </div>
                     <div class="collapsible-content show">
                         <div class="detail-panel">
+                            <div style="font-size:11px;color:#666;margin-bottom:8px;">📂 {market_path}</div>
                             <div class="stat-row">
                                 <div class="stat-item"><div class="stat-label">文件数量</div><div class="stat-value">{files:,}</div></div>
                                 <div class="stat-item"><div class="stat-label">数据大小</div><div class="stat-value">{size_str}</div></div>
@@ -2766,13 +2907,24 @@ class DefaultCheck:
 
     def _html_csv_detail(self, markets: List[str], market_names: List[str]) -> str:
         """生成CSV详情 - 区分timebased和codebased"""
-        html = """
+        kline_dir = KLINE_DIR if 'KLINE_DIR' in dir() else os.path.join(DATA_DIR, 'market', 'kline')
+        timebased_dir = os.path.join(kline_dir, 'timebased')
+        codebased_dir = os.path.join(kline_dir, 'codebased')
+
+        html = f"""
         <div class="data-card collapsible-container">
             <div class="card-header collapsible-header" onclick="toggle(this)">
                 <span><span class="arrow expanded">▶</span><span class="badge badge-csv-time">CSV</span> 文件数据</span>
                 <span style="font-size:12px;color:#666;">timebased + codebased</span>
             </div>
             <div class="collapsible-content show">
+                <div class="data-source">
+                    <div class="data-source-title">📥 数据来源</div>
+                    <div class="data-source-cmd">Time-Based: 外部数据源导入 / 自定义采集脚本</div>
+                    <div class="data-source-cmd">Code-Based: 从 SQLite 导出或外部导入</div>
+                    <div class="data-source-note">Time-Based: 按日期组织的CSV文件，每天一个目录，适合增量更新；Code-Based: 按股票代码组织的CSV文件，适合单标的查询。</div>
+                    <div class="data-source-path">存储位置: {timebased_dir}/ 和 {codebased_dir}/</div>
+                </div>
 """
 
         # Time-based CSV
@@ -2790,6 +2942,7 @@ class DefaultCheck:
                 date_info = self._get_csv_date_range(market, freq)
                 years = date_info.get('years', {})
                 size_str = self._format_size(size)
+                market_path = os.path.join(timebased_dir, market, freq)
 
                 html += f"""
                 <div class="market-card collapsible-container">
@@ -2970,15 +3123,22 @@ class DefaultCheck:
 
     def _html_pkl_detail(self, markets: List[str], market_names: List[str]) -> str:
         """生成PKL详情"""
-        html = """
+        factors_cache_dir = FACTORS_CACHE_DIR if 'FACTORS_CACHE_DIR' in dir() else os.path.join(DATA_DIR, 'cache', 'factors')
+
+        html = f"""
         <div class="data-card collapsible-container">
             <div class="card-header collapsible-header" onclick="toggle(this)">
                 <span><span class="arrow expanded">▶</span><span class="badge badge-pkl">PKL</span> Pickle文件数据</span>
                 <span style="font-size:12px;color:#666;">缓存 + 因子数据</span>
             </div>
             <div class="collapsible-content show">
+                <div class="data-source">
+                    <div class="data-source-title">📥 数据生成方式</div>
+                    <div class="data-source-cmd">finhack factor run --market={{market}} --freq={{freq}}</div>
+                    <div class="data-source-note">因子计算时自动生成的缓存文件。首次计算因子时生成，后续回测直接读取缓存加速计算。删除后会在下次因子计算时自动重新生成。</div>
+                    <div class="data-source-path">存储位置: {factors_cache_dir}/{{market}}/{{freq}}/*.pkl</div>
+                </div>
 """
-        factors_cache_dir = FACTORS_CACHE_DIR if 'FACTORS_CACHE_DIR' in dir() else os.path.join(DATA_DIR, 'cache', 'factors')
         has_pkl = False
 
         for market, name in zip(markets, market_names):
@@ -3060,16 +3220,25 @@ class DefaultCheck:
 
     def _html_cache_detail(self, markets: List[str], market_names: List[str]) -> str:
         """生成缓存数据详情"""
-        html = """
+        factors_cache_dir = FACTORS_CACHE_DIR if 'FACTORS_CACHE_DIR' in dir() else os.path.join(DATA_DIR, 'cache', 'factors')
+        cache_dir_base = CACHE_DIR if 'CACHE_DIR' in dir() else os.path.join(DATA_DIR, 'cache')
+
+        html = f"""
         <div class="data-card collapsible-container">
             <div class="card-header collapsible-header" onclick="toggle(this)">
                 <span><span class="arrow expanded">▶</span><span class="badge badge-cache">Cache</span> 缓存数据</span>
                 <span style="font-size:12px;color:#666;">因子缓存 + 回测缓存</span>
             </div>
             <div class="collapsible-content show">
+                <div class="data-source">
+                    <div class="data-source-title">📥 数据生成方式</div>
+                    <div class="data-source-cmd">因子缓存: finhack factor run (自动生成)</div>
+                    <div class="data-source-cmd">回测缓存: finhack trader run --vendor=backtest (自动生成)</div>
+                    <div class="data-source-note">回测和因子计算过程中自动生成的缓存文件，加速重复回测。删除后会在下次运行时自动重新生成。</div>
+                    <div class="data-source-path">存储位置: {cache_dir_base}/</div>
+                </div>
 """
         has_cache = False
-        factors_cache_dir = FACTORS_CACHE_DIR if 'FACTORS_CACHE_DIR' in dir() else os.path.join(DATA_DIR, 'cache', 'factors')
 
         for market, name in zip(markets, market_names):
             for freq in ['1d', '1m']:

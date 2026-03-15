@@ -1492,18 +1492,12 @@ class DataCenter:
         if isinstance(codes, str):
             codes = [codes]
 
-        # 【调试】输出缓存查询信息
-        logger.info(f"[缓存查询] market={market}, freq={freq}, start={start_time}, end={end_time}")
-        logger.info(f"[缓存查询] 当前缓存中的keys: {list(self.kline_cache.keys())[:10]}...")  # 只显示前10个
-
         # 计算需要查询的月份范围
         all_data = []
         current = start_time
         while current <= end_time:
             month_key = current.strftime('%Y-%m')
             cache_key = f"{market}_{freq}_{month_key}"
-
-            logger.info(f"[缓存查询] 查找key: {cache_key}, 找到: {cache_key in self.kline_cache}")
 
             # 【线程安全】使用锁保护缓存读取和检查
             with self._kline_cache_lock:
@@ -1513,18 +1507,13 @@ class DataCenter:
 
                 month_df = self.kline_cache[cache_key].copy()  # 复制数据避免在锁内修改
 
-            # 【调试】检查缓存数据的索引结构
-            logger.info(f"[缓存查询] {cache_key} 索引类型: {type(month_df.index)}, 索引名: {month_df.index.names if hasattr(month_df.index, 'names') else 'N/A'}")
-
             # 检查索引结构是否正确
             if not hasattr(month_df.index, 'names') or 'code' not in month_df.index.names:
-                logger.error(f"[缓存查询] ⚠️ {cache_key} 索引结构不正确！期望 ['time', 'code']，实际 {month_df.index.names if hasattr(month_df.index, 'names') else month_df.index.name}")
+                logger.warning(f"[缓存] {cache_key} 索引结构不正确，尝试修复")
                 # 尝试修复索引结构
                 if 'code' in month_df.columns and 'time' in month_df.columns:
-                    logger.info(f"[缓存查询] 尝试重新设置索引...")
                     month_df = month_df.set_index(['time', 'code'])
                 elif 'code' in month_df.columns:
-                    logger.info(f"[缓存查询] 尝试设置 code 索引...")
                     month_df = month_df.set_index('code')
                 # 修复后重新存入缓存（使用锁保护）
                 with self._kline_cache_lock:
@@ -1622,7 +1611,8 @@ class DataCenter:
         # 【新增】先检查预加载缓存
         cached_result = self._get_from_cache(codes, market, freq, start_time, end_time, fields)
         if cached_result is not None:
-            logger.info(f"[DataCenter] 从缓存获取数据: shape={cached_result.shape}")
+            # 【性能优化】改为debug级别，避免高频IO
+            logger.debug(f"[DataCenter] 从缓存获取数据: shape={cached_result.shape}")
             # 仍然需要过滤未来数据
             filtered = self._filter_future_data(cached_result, backtest_time)
             return filtered
@@ -1639,9 +1629,9 @@ class DataCenter:
             use_cache=True
         )
 
-        logger.info(f"[DataCenter] get_klines返回: shape={result.shape if not result.empty else 'empty'}, "
-                   f"empty={result.empty}, "
-                   f"index_names={result.index.names if not result.empty else 'N/A'}")
+        # 【性能优化】改为debug级别
+        logger.debug(f"[DataCenter] get_klines返回: shape={result.shape if not result.empty else 'empty'}, "
+                   f"empty={result.empty}")
 
         if result.empty:
             logger.warning(f"[DataCenter] ⚠️ 返回空DataFrame！参数: codes={codes[:3] if isinstance(codes, list) else codes}, "

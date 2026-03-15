@@ -259,8 +259,121 @@ class tsAStockBasic:
     
     @tsMonitor
     def stk_managers(pro,db):
+        """
+        获取上市公司管理层（按股票代码分批获取完整数据）
+
+        修复：按ts_code分批获取，因为API不带参数只返回少量示例数据
+        支持多个股票代码批量获取
+        """
+        table = 'astock_stk_managers'
         try:
-            return tsSHelper.getDataAndReplace(pro,'stk_managers','astock_stk_managers',db)
+            adapter = DB.get_adapter(db)
+            if not adapter:
+                Log.logger.error("stk_managers: 无法获取数据库适配器")
+                return False
+
+            # 获取原表记录数（用于数据校验）
+            old_count = 0
+            try:
+                if adapter.table_exists(table):
+                    result = DB.select_to_list(f"SELECT COUNT(*) as cnt FROM {table}", db)
+                    old_count = result[0]['cnt'] if result else 0
+                    Log.logger.info(f"stk_managers: 原表有 {old_count} 条记录")
+            except Exception as count_error:
+                Log.logger.warning(f"stk_managers: 无法获取原表记录数: {str(count_error)}")
+
+            # 删除临时表
+            DB.exec(f"DROP TABLE IF EXISTS {table}_tmp", db)
+
+            # 获取股票列表
+            Log.logger.info("stk_managers: 正在获取股票列表...")
+            data = tsSHelper.getAllAStock(True, pro, db)
+
+            if data is None or data.empty:
+                Log.logger.error("stk_managers: 获取股票列表失败")
+                return False
+
+            stock_list = data['ts_code'].tolist()
+            Log.logger.info(f"stk_managers: 共获取到 {len(stock_list)} 只股票，开始批量获取管理层信息...")
+
+            total_records = 0
+            processed_count = 0
+
+            # 每批处理100个股票（API支持多个代码）
+            for i in range(0, len(stock_list), 100):
+                code_list = stock_list[i:i+100]
+                processed_count += len(code_list)
+
+                try_times = 0
+                while try_times < 5:
+                    try:
+                        # 支持多个股票代码，用逗号分隔
+                        df = pro.stk_managers(ts_code=','.join(code_list))
+
+                        if df is not None and not df.empty:
+                            # 预处理数据
+                            for col in df.columns:
+                                if col in ['ts_code', 'symbol', 'code', 'ann_date', 'end_date', 'begin_date', 'birthday'] or \
+                                   'code' in col.lower() or 'date' in col.lower():
+                                    df[col] = df[col].fillna('').astype(str)
+
+                            # 写入临时表
+                            if i == 0:
+                                if_exists = 'replace'
+                            else:
+                                if_exists = 'append'
+
+                            DB.safe_to_sql(df, f"{table}_tmp", db, index=False, if_exists=if_exists, chunksize=5000)
+                            total_records += len(df)
+
+                        if processed_count % 1000 == 0:
+                            Log.logger.info(f"stk_managers: 已处理 {processed_count}/{len(stock_list)} 只股票，累计 {total_records} 条记录")
+
+                        break
+                    except Exception as e:
+                        try_times += 1
+                        if "每天最多访问" in str(e) or "每小时最多访问" in str(e):
+                            Log.logger.warning(f"stk_managers: 触发最多访问限制: {str(e)}")
+                            if total_records > 0 and (old_count == 0 or total_records >= old_count * 0.5):
+                                Log.logger.warning(f"stk_managers: 虽然触发限流，但已获取 {total_records} 条记录，尝试保留")
+                                break
+                            return False
+                        if "最多访问" in str(e):
+                            Log.logger.warning(f"stk_managers: 触发限流，等待重试: {str(e)}")
+                            time.sleep(15)
+                            continue
+                        else:
+                            Log.logger.error(f"stk_managers: 获取数据失败: {str(e)}")
+                            break
+
+                # 稍微暂停避免限流
+                time.sleep(0.3)
+
+            # 数据校验
+            Log.logger.info(f"stk_managers: 共获取 {total_records} 条记录，原表有 {old_count} 条记录")
+
+            if total_records == 0:
+                Log.logger.error("stk_managers: 未获取到任何数据")
+                return False
+
+            if old_count > 0 and total_records < old_count * 0.5:
+                Log.logger.error(f"stk_managers: 新数据量({total_records})远少于原数据量({old_count})")
+                return False
+
+            # 检查临时表
+            if not DB.table_exists(f"{table}_tmp", db):
+                Log.logger.error(f"stk_managers: 临时表 {table}_tmp 不存在")
+                return False
+
+            # 替换表
+            Log.logger.info(f"stk_managers: 正在将临时表替换为正式表...")
+            table_to_use = DB.replace_table(table, f"{table}_tmp", db)
+
+            # 创建索引
+            tsSHelper.setIndex(table_to_use, db)
+
+            Log.logger.info(f"stk_managers: 数据同步完成，共 {total_records} 条记录")
+            return True
         except Exception as e:
             Log.logger.error(f"获取公司管理层失败: {str(e)}")
             Log.logger.error(traceback.format_exc())
@@ -268,6 +381,11 @@ class tsAStockBasic:
 
     @tsMonitor
     def stk_rewards(pro,db):
+        """
+        获取管理层薪酬和持股（带数据校验保护）
+
+        修复：添加数据量校验，防止空数据或不完整数据覆盖原表
+        """
         table='astock_stk_rewards'
         try:
             # 检查数据库连接是否正常
@@ -275,55 +393,70 @@ class tsAStockBasic:
             if not adapter:
                 Log.logger.error("无法获取数据库适配器")
                 return False
-                
+
+            # 获取原表记录数（用于数据校验）
+            old_count = 0
+            try:
+                if adapter.table_exists(table):
+                    result = DB.select_to_list(f"SELECT COUNT(*) as cnt FROM {table}", db)
+                    old_count = result[0]['cnt'] if result else 0
+                    Log.logger.info(f"stk_rewards: 原表有 {old_count} 条记录")
+            except Exception as count_error:
+                Log.logger.warning(f"stk_rewards: 无法获取原表记录数: {str(count_error)}")
+
             # 删除临时表(如果存在)
             DB.exec("drop table if exists "+table+"_tmp", db)
-            
+
             # 获取股票列表
             Log.logger.info("正在获取股票列表...")
             data = tsSHelper.getAllAStock(True, pro, db)
-            
+
             if data is None or data.empty:
                 Log.logger.error("获取股票列表失败，无法继续获取管理层薪酬和持股")
                 return False
-                
+
             stock_list = data['ts_code'].tolist()
             Log.logger.info(f"共获取到{len(stock_list)}只股票，开始批量获取管理层薪酬和持股...")
-            
+
+            total_records = 0
             processed_count = 0
             for i in range(0, len(stock_list), 100):
                 code_list = stock_list[i:i+100]
                 processed_count += len(code_list)
-                Log.logger.info(f"正在处理第{i+1}-{i+len(code_list)}只股票，共{len(stock_list)}只...")
-                
+
                 try_times = 0
                 while True:
                     try:
                         df = pro.stk_rewards(ts_code=','.join(code_list))
-                        
+
                         # 检查数据是否为空
-                        if df is None or df.empty:
-                            Log.logger.warning(f"获取股票{code_list[0]}等{len(code_list)}只股票的管理层薪酬和持股数据为空")
-                            break
-                            
-                        # 预处理数据，确保股票代码等字段为字符串类型
-                        for col in df.columns:
-                            if col in ['ts_code', 'symbol', 'code', 'ann_date', 'end_date', 'trade_date', 'pre_date', 'actual_date'] or \
-                               'code' in col.lower() or 'symbol' in col.lower() or 'date' in col.lower():
-                                df[col] = df[col].astype(str)
-                        
-                        # 如果是第一批数据使用replace，否则使用append
-                        if i == 0:
-                            if_exists = 'replace'
-                        else:
-                            if_exists = 'append'
-                            
-                        Log.logger.info(f"正在将{len(df)}条管理层薪酬和持股数据写入临时表...")
-                        DB.safe_to_sql(df, table+"_tmp", db, index=False, if_exists=if_exists, chunksize=5000)
+                        if df is not None and not df.empty:
+                            # 预处理数据，确保股票代码等字段为字符串类型
+                            for col in df.columns:
+                                if col in ['ts_code', 'symbol', 'code', 'ann_date', 'end_date', 'trade_date', 'pre_date', 'actual_date'] or \
+                                   'code' in col.lower() or 'symbol' in col.lower() or 'date' in col.lower():
+                                    df[col] = df[col].astype(str)
+
+                            # 如果是第一批数据使用replace，否则使用append
+                            if i == 0:
+                                if_exists = 'replace'
+                            else:
+                                if_exists = 'append'
+
+                            DB.safe_to_sql(df, table+"_tmp", db, index=False, if_exists=if_exists, chunksize=5000)
+                            total_records += len(df)
+
+                        if processed_count % 1000 == 0:
+                            Log.logger.info(f"stk_rewards: 已处理 {processed_count}/{len(stock_list)} 只股票，累计 {total_records} 条记录")
+
                         break
                     except Exception as e:
                         if "每天最多访问" in str(e) or "每小时最多访问" in str(e):
                             Log.logger.warning(f"stk_rewards:触发最多访问限制: {str(e)}")
+                            # 检查已获取的数据量是否足够
+                            if total_records > 0 and (old_count == 0 or total_records >= old_count * 0.5):
+                                Log.logger.warning(f"stk_rewards: 虽然触发限流，但已获取{total_records}条记录，尝试保留")
+                                break
                             return False
                         if "最多访问" in str(e):
                             Log.logger.warning(f"stk_rewards:触发限流，等待重试: {str(e)}")
@@ -338,22 +471,34 @@ class tsAStockBasic:
                             else:
                                 Log.logger.error(f"stk_rewards:函数异常，重试10次失败: {str(e)}")
                                 Log.logger.error(traceback.format_exc())
-                                return False
-            
+                                break
+
+            # 数据校验
+            Log.logger.info(f"stk_rewards: 共获取 {total_records} 条记录，原表有 {old_count} 条记录")
+
+            if total_records == 0:
+                Log.logger.error("stk_rewards: 未获取到任何数据，保留原表不变")
+                return False
+
+            # 如果原表有数据，且新数据量远少于原数据（少于50%），拒绝替换
+            if old_count > 0 and total_records < old_count * 0.5:
+                Log.logger.error(f"stk_rewards: 新数据量({total_records})远少于原数据量({old_count})，保留原表不变")
+                return False
+
             # 检查临时表是否存在并有数据
             if not DB.table_exists(table+"_tmp", db):
                 Log.logger.error(f"临时表 {table}_tmp 不存在，无法替换目标表")
                 return False
-                
+
             # 使用统一的replace_table方法替换表
             Log.logger.info(f"正在将临时表替换为正式表...")
             table_to_use = DB.replace_table(table, table+"_tmp", db)
-            
+
             # 创建索引
             Log.logger.info(f"正在为表 {table_to_use} 创建索引...")
             tsSHelper.setIndex(table_to_use, db)
-            
-            Log.logger.info(f"管理层薪酬和持股数据获取完成，成功保存到表 {table_to_use}")
+
+            Log.logger.info(f"管理层薪酬和持股数据获取完成，成功保存到表 {table_to_use}，共{total_records}条记录")
             return True
         except Exception as e:
             Log.logger.error(f"获取管理层薪酬和持股失败: {str(e)}")

@@ -766,17 +766,102 @@ class tsAStockFinance:
     
     @tsMonitor
     def disclosure_date(pro,db):
+        """
+        获取财报披露计划日期（按季度循环获取完整数据）
+
+        修复：按end_date季度循环获取，因为API单次最大返回3000条
+        需要从2015年开始（tushare该接口最早数据）到当前季度
+        """
+        table = 'astock_finance_disclosure_date'
         try:
-            table = 'astock_finance_disclosure_date'
-            
-            # 使用SQLite兼容的方法检查表是否存在
             adapter = DB.get_adapter(db)
-            table_exists = adapter.table_exists(table)
-            if not table_exists:
-                Log.logger.info(f"创建表 {table}")
-            
-            # 从此处开始获取数据
-            tsSHelper.getDataAndReplace(pro, 'disclosure_date', table, db)
+            if not adapter:
+                Log.logger.error("disclosure_date: 无法获取数据库适配器")
+                return False
+
+            # 删除临时表
+            DB.exec(f"DROP TABLE IF EXISTS {table}_tmp", db)
+
+            # 定义季度列表（从2015年Q1到当前季度）
+            current_year = datetime.datetime.now().year
+            current_month = datetime.datetime.now().month
+            # 确定当前是哪个季度
+            if current_month <= 3:
+                current_quarter = '0331'
+            elif current_month <= 6:
+                current_quarter = '0630'
+            elif current_month <= 9:
+                current_quarter = '0930'
+            else:
+                current_quarter = '1231'
+
+            # 生成所有需要获取的季度
+            period_list = []
+            for year in range(2015, current_year + 1):
+                for quarter in ['0331', '0630', '0930', '1231']:
+                    period = f"{year}{quarter}"
+                    # 只获取到当前季度
+                    if period <= f"{current_year}{current_quarter}":
+                        period_list.append(period)
+
+            Log.logger.info(f"disclosure_date: 需要获取 {len(period_list)} 个季度的数据")
+
+            total_records = 0
+            for idx, period in enumerate(period_list):
+                try_times = 0
+                while try_times < 5:
+                    try:
+                        df = pro.disclosure_date(end_date=period)
+
+                        if df is not None and not df.empty:
+                            # 预处理数据
+                            for col in df.columns:
+                                if 'code' in col.lower() or 'date' in col.lower():
+                                    df[col] = df[col].fillna('').astype(str)
+
+                            # 写入临时表
+                            if idx == 0:
+                                if_exists = 'replace'
+                            else:
+                                if_exists = 'append'
+
+                            DB.safe_to_sql(df, f"{table}_tmp", db, index=False, if_exists=if_exists, chunksize=5000)
+                            total_records += len(df)
+                            Log.logger.info(f"disclosure_date: 期间 {period} 获取 {len(df)} 条记录，累计 {total_records} 条")
+
+                        break
+                    except Exception as e:
+                        try_times += 1
+                        if "最多访问" in str(e):
+                            Log.logger.warning(f"disclosure_date: 触发限流，等待重试: {str(e)}")
+                            time.sleep(15)
+                            continue
+                        else:
+                            Log.logger.error(f"disclosure_date: 获取期间 {period} 失败: {str(e)}")
+                            break
+
+                # 每获取一个季度，稍微暂停避免限流
+                time.sleep(0.3)
+
+            # 数据校验
+            if total_records == 0:
+                Log.logger.error("disclosure_date: 未获取到任何数据")
+                return False
+
+            Log.logger.info(f"disclosure_date: 共获取 {total_records} 条记录")
+
+            # 检查临时表
+            if not DB.table_exists(f"{table}_tmp", db):
+                Log.logger.error(f"disclosure_date: 临时表 {table}_tmp 不存在")
+                return False
+
+            # 替换表
+            table_to_use = DB.replace_table(table, f"{table}_tmp", db)
+
+            # 创建索引
+            tsSHelper.setIndex(table_to_use, db)
+
+            Log.logger.info(f"disclosure_date: 数据同步完成，共 {total_records} 条记录")
             return True
         except Exception as e:
             Log.logger.error(f"获取财务披露日期失败: {str(e)}")
