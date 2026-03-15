@@ -19,10 +19,10 @@ class DefaultKline:
     def __init__(self, args):
         self.args = args
         self.project_path = BASE_DIR
-        
+
         # 获取参数
-        self.market = getattr(args, 'market', 'cn_stock')
-        self.freq = getattr(args, 'freq', '1m')
+        self.market = getattr(args, 'market', 'all')  # 默认处理所有市场
+        self.freq = getattr(args, 'freq', 'all')  # 默认处理所有频率
         self.year = getattr(args, 'year', None)
         self.force = getattr(args, 'force', False)
         self.append = getattr(args, 'append', False)

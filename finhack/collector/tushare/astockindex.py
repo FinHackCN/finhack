@@ -157,15 +157,82 @@ class tsAStockIndex:
     @tsMonitor
     def index_basic(pro,db):
         tsSHelper.getDataAndReplace(pro,'index_basic','astock_index_basic',db)
-    
+
     @tsMonitor
     def index_weekly(pro,db):
         tsSHelper.getDataWithLastDate(pro,'index_weekly','astock_index_weekly',db)
-    
+
     @tsMonitor
     def index_monthly(pro,db):
-        tsSHelper.getDataWithLastDate(pro,'index_monthly','astock_index_monthly',db)
-    
+        """
+        获取指数月线数据（按指数代码循环增量更新）
+        修复：原实现不传ts_code，导致API返回空数据
+        """
+        table = 'astock_index_monthly'
+        try:
+            # 获取所有指数代码
+            data = tsSHelper.getAllAStockIndex(pro, db)
+            if data is None or data.empty:
+                Log.logger.error("获取指数列表失败")
+                return False
+
+            index_list = data['ts_code'].tolist()
+            Log.logger.info(f"共获取到{len(index_list)}个指数，开始获取月线数据...")
+
+            today = datetime.datetime.now().strftime("%Y%m%d")
+            success_count = 0
+            error_count = 0
+
+            for ts_code in index_list:
+                try_times = 0
+                while True:
+                    try:
+                        # 获取该指数的最后日期
+                        lastdate = tsSHelper.getLastDateAndDelete(table, 'trade_date', ts_code=ts_code, db=db)
+
+                        # 调用API获取增量数据
+                        df = pro.index_monthly(ts_code=ts_code, start_date=lastdate, end_date=today)
+
+                        if df is not None and not df.empty:
+                            # 预处理数据
+                            for col in df.columns:
+                                if 'code' in col.lower() or 'date' in col.lower():
+                                    df[col] = df[col].astype(str)
+                            DB.to_sql(df, table, db, 'append')
+                            Log.logger.debug(f"{ts_code}: 获取到{len(df)}条月线数据")
+
+                        success_count += 1
+                        break
+                    except Exception as e:
+                        if "每分钟最多访问" in str(e) or "最多访问" in str(e):
+                            Log.logger.warning(f"index_monthly: 触发限流，等待重试")
+                            time.sleep(15)
+                            continue
+                        elif "您没有访问该接口的权限" in str(e):
+                            Log.logger.warning(f"index_monthly: 没有访问权限")
+                            break
+                        else:
+                            if try_times < 3:
+                                try_times += 1
+                                Log.logger.error(f"index_monthly {ts_code}: 获取失败，重试 {try_times}")
+                                time.sleep(5)
+                                continue
+                            else:
+                                Log.logger.error(f"index_monthly {ts_code}: 获取失败 - {str(e)}")
+                                error_count += 1
+                                break
+
+                # 避免请求过快
+                time.sleep(0.3)
+
+            Log.logger.info(f"指数月线数据获取完成: 成功{success_count}, 失败{error_count}")
+            return True
+
+        except Exception as e:
+            Log.logger.error(f"获取指数月线数据失败: {str(e)}")
+            Log.logger.error(traceback.format_exc())
+            return False
+
     # @tsMonitor
     # def index_weight(pro,db):
     #     tsSHelper.getDataWithLastDate(pro,'index_weight','astock_index_weight',db)

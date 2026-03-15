@@ -218,17 +218,18 @@ class tsSHelper:
         data=DB.select_to_df(sql, db)
         return data      
        
-    # 重新获取数据 
-    def getDataAndReplace(pro, api, table, db):
+    # 重新获取数据
+    def getDataAndReplace(pro, api, table, db, min_records=100):
         """
-        获取数据并替换表
-        
+        获取数据并替换表（带数据校验保护）
+
         Args:
             pro: Tushare API客户端
             api: API名称
             table: 表名
             db: 数据库连接名
-            
+            min_records: 最小记录数阈值，低于此值不替换（防止空数据覆盖）
+
         Returns:
             bool: 操作成功返回True，否则返回False
         """
@@ -245,6 +246,16 @@ class tsSHelper:
             if not adapter:
                 Log.logger.error(f"{api}: 无法获取数据库适配器")
                 return False
+
+            # 获取原表记录数（用于数据校验）
+            old_count = 0
+            try:
+                if adapter.table_exists(table):
+                    result = DB.select_to_list(f"SELECT COUNT(*) as cnt FROM {table}", db)
+                    old_count = result[0]['cnt'] if result else 0
+                    Log.logger.info(f"{api}: 原表 {table} 有 {old_count} 条记录")
+            except Exception as count_error:
+                Log.logger.warning(f"{api}: 无法获取原表记录数: {str(count_error)}")
 
             # 删除临时表(如果存在)
             Log.logger.info(f"{api}: 正在删除临时表 {table}_tmp...")
@@ -263,7 +274,21 @@ class tsSHelper:
 
                 # 检查数据是否为空
                 if data is None or data.empty:
-                    Log.logger.warning(f"{api}: 未获取到任何数据")
+                    Log.logger.warning(f"{api}: 未获取到任何数据，保留原表不变")
+                    return False
+
+                # 数据校验：检查记录数是否合理
+                new_count = len(data)
+                Log.logger.info(f"{api}: 获取到 {new_count} 条记录")
+
+                # 如果原表有数据，且新数据量远少于原数据（少于50%），发出警告并拒绝替换
+                if old_count > 0 and new_count < old_count * 0.5:
+                    Log.logger.warning(f"{api}: 新数据量({new_count})远少于原数据量({old_count})，可能数据不完整，保留原表不变")
+                    return False
+
+                # 如果新数据量少于最小阈值，发出警告
+                if new_count < min_records:
+                    Log.logger.warning(f"{api}: 新数据量({new_count})少于最小阈值({min_records})，可能数据不完整，保留原表不变")
                     return False
 
                 # 预处理数据，确保关键字段为字符串类型
@@ -303,7 +328,13 @@ class tsSHelper:
                     Log.logger.info(f"{api}: 正在重试获取数据...")
                     data = f()
                     if data is None or data.empty:
-                        Log.logger.warning(f"{api}: 重试后仍未获取到任何数据")
+                        Log.logger.warning(f"{api}: 重试后仍未获取到任何数据，保留原表不变")
+                        return False
+
+                    # 数据校验
+                    new_count = len(data)
+                    if old_count > 0 and new_count < old_count * 0.5:
+                        Log.logger.warning(f"{api}: 重试后新数据量({new_count})远少于原数据量({old_count})，保留原表不变")
                         return False
 
                     # 预处理数据
