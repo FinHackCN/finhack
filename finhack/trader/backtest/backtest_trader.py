@@ -513,8 +513,10 @@ class PriceRelatedSlippage:
         # ========== 便利方法 ==========
         self.strategy.order_buy = self.order_buy_sync
         self.strategy.order_sell = self.order_sell_sync
+        self.strategy.order_short = self.order_short_sync
+        self.strategy.close_short = self.close_short_sync
         self.strategy.sell_all_stocks = self.sell_all_stocks_sync
-        
+
         # ========== 回测配置方法 ==========
         self.strategy.set_benchmark = self.set_benchmark
         self.strategy.set_option = self.set_option
@@ -759,7 +761,7 @@ class PriceRelatedSlippage:
     
     def order_sell_sync(self, context, symbol, volume, price=None):
         """便利卖出方法
-        
+
         Args:
             context: 回测上下文（兼容策略调用方式）
             symbol: 股票代码
@@ -769,6 +771,44 @@ class PriceRelatedSlippage:
         from finhack.trader.backtest.models.enums import Side, OrderType
         order_type = OrderType.LIMIT if price else OrderType.MARKET
         return self.place_order_sync('backtest', symbol, Side.SELL, order_type, volume, price)
+
+    def order_short_sync(self, context, symbol, volume, price=None):
+        """开空仓方法（做空）
+
+        用于期货、加密货币等支持做空的市场
+
+        Args:
+            context: 回测上下文（兼容策略调用方式）
+            symbol: 标的代码
+            volume: 数量
+            price: 价格（可选）
+
+        Returns:
+            order_id: 订单ID
+        """
+        from finhack.trader.backtest.models.enums import Side, OrderType
+        order_type = OrderType.LIMIT if price else OrderType.MARKET
+        # 开空仓本质是卖出，标记为SHORT类型
+        return self.place_order_sync('backtest', symbol, Side.SHORT_OPEN, order_type, volume, price)
+
+    def close_short_sync(self, context, symbol, volume, price=None):
+        """平空仓方法（平做空仓位）
+
+        用于期货、加密货币等支持做空的市场
+
+        Args:
+            context: 回测上下文（兼容策略调用方式）
+            symbol: 标的代码
+            volume: 数量
+            price: 价格（可选）
+
+        Returns:
+            order_id: 订单ID
+        """
+        from finhack.trader.backtest.models.enums import Side, OrderType
+        order_type = OrderType.LIMIT if price else OrderType.MARKET
+        # 平空仓本质是买入，标记为SHORT_CLOSE类型
+        return self.place_order_sync('backtest', symbol, Side.SHORT_CLOSE, order_type, volume, price)
     
     def sell_all_stocks_sync(self, context=None):
         """卖出所有持仓的便利方法"""

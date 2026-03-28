@@ -176,45 +176,136 @@ class CnFutureMarketAdapter(BaseMarket):
         return events
     
     def _generate_daily_events_1d(self, trade_date: date, schedule: Dict[str, time]) -> List[BaseEvent]:
-        """生成日线频率的事件列表"""
+        """生成1d频率的精简事件序列
+
+        1d频率回测特点：
+        - 仅加载日频数据
+        - 只有日盘开盘和收盘进行撮合
+        - 不生成夜盘事件（1d频率以日盘为主）
+        - 支持做空（期货T+0）
+
+        事件序列：
+        08:55 DAY_START              每日开始
+        08:55 BEFORE_MARKET          盘前准备
+        09:00 OPENING_PRICE_DETERMINED 开盘价确定
+        09:00 TRY_MATCH              开盘撮合 ← 可交易
+        -- 盘中无事件 --
+        15:00 CLOSING_PRICE_DETERMINED 收盘价确定
+        15:00 TRY_MATCH              收盘撮合 ← 可交易
+        15:15 SETTLEMENT_PRICE_DETERMINED 结算价确定
+        15:15 AFTER_MARKET           盘后处理
+        15:15 DAY_END                每日结束
+
+        Args:
+            trade_date: 交易日期
+            schedule: 交易时间配置
+
+        Returns:
+            List[BaseEvent]: 精简的事件列表
+        """
         events = []
-        
-        # 生成静态市场事件
-        for event_name, event_time in schedule.items():
-            if event_name in ['DAY_START', 'DAY_END']:
-                continue  # 这些事件在EventCenter中统一处理
-                
-            # 将事件名称转换为EventTypeEnum
-            event_type_map = {
-                'BEFORE_MARKET': EventTypeEnum.BEFORE_MARKET,
-                'AUCTION_START': EventTypeEnum.PRE_OPENING_START,
-                'DAY_SESSION_START': EventTypeEnum.DAY_SESSION_START,
-                'DAY_SESSION_END': EventTypeEnum.DAY_SESSION_END,
-                'SETTLEMENT_PRICE_DETERMINED': EventTypeEnum.SETTLEMENT_PRICE_DETERMINED,
-                'MARGIN_CALL_CHECK': EventTypeEnum.MARGIN_CALL_CHECK,
-                'BEFORE_NIGHT_SESSION': EventTypeEnum.BEFORE_NIGHT_SESSION,
-                'NIGHT_AUCTION_START': EventTypeEnum.NIGHT_AUCTION_START,
-                'NIGHT_SESSION_START': EventTypeEnum.NIGHT_SESSION_START,
-                'NIGHT_SESSION_END': EventTypeEnum.NIGHT_SESSION_END,
-            }
-            
-            event_type = event_type_map.get(event_name, EventTypeEnum.BEFORE_MARKET)
-            event_dt = datetime.combine(trade_date, event_time)
-            
-            # 处理跨日事件（夜盘）
-            if event_name == 'NIGHT_SESSION_END':
-                # 夜盘结束时间是第二天
-                event_dt = datetime.combine(trade_date + timedelta(days=1), event_time)
-            
-            event = MarketEvent(
-                event_type=event_type,
-                event_time=event_dt,
-                market=self.market_name,
-                frequency='1d',
-                event_description=self._get_event_description(event_name)
-            )
-            events.append(event)
-        
+
+        # 1. 每日开始
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.DAY_START,
+            event_time=datetime.combine(trade_date, time(8, 55)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="每日开始"
+        ))
+
+        # 2. 盘前准备
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.BEFORE_MARKET,
+            event_time=datetime.combine(trade_date, time(8, 55)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="盘前准备"
+        ))
+
+        # 3. 开盘集合竞价开始
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.PRE_OPENING_START,
+            event_time=datetime.combine(trade_date, time(8, 59)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="集合竞价开始"
+        ))
+
+        # 4. 开盘价确定
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.OPENING_PRICE_DETERMINED,
+            event_time=datetime.combine(trade_date, time(9, 0)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="开盘价确定"
+        ))
+
+        # 5. 开盘撮合 ← 可交易
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.TRY_MATCH,
+            event_time=datetime.combine(trade_date, time(9, 0)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="开盘撮合"
+        ))
+
+        # -- 盘中无事件 --
+
+        # 6. 收盘价确定
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.CLOSING_PRICE_DETERMINED,
+            event_time=datetime.combine(trade_date, time(15, 0)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="收盘价确定"
+        ))
+
+        # 7. 收盘撮合 ← 可交易
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.TRY_MATCH,
+            event_time=datetime.combine(trade_date, time(15, 0)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="收盘撮合"
+        ))
+
+        # 8. 结算价确定
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.SETTLEMENT_PRICE_DETERMINED,
+            event_time=datetime.combine(trade_date, time(15, 15)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="结算价确定"
+        ))
+
+        # 9. 保证金检查
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.MARGIN_CALL_CHECK,
+            event_time=datetime.combine(trade_date, time(15, 15)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="保证金检查"
+        ))
+
+        # 10. 盘后处理
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.AFTER_MARKET,
+            event_time=datetime.combine(trade_date, time(15, 15)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="盘后处理"
+        ))
+
+        # 11. 每日结束
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.DAY_END,
+            event_time=datetime.combine(trade_date, time(15, 15)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="每日结束"
+        ))
+
         return events
     
     def _generate_daily_events_1m(self, trade_date: date, schedule: Dict[str, time]) -> List[BaseEvent]:

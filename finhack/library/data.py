@@ -171,10 +171,10 @@ class MarketConfig:
     MARKET_FREQ_SUPPORT = {
         'cn_stock': ['1d', '1m'],
         'cn_fund': ['1d', '1m'],
-        'cn_future': ['1m'],  # 只有1m数据
+        'cn_future': ['1d', '1m'],  # 支持1d和1m数据
         'cn_index': ['1d', '1m'],
         'cn_cb': ['1d', '1m'],
-        'global_cryptospot': ['1m'],  # 只有1m数据
+        'global_cryptospot': ['1d', '1m'],  # 支持1d和1m数据
         'global_cryptoswap': ['1m'],  # 只有1m数据
         'global_fx': ['1d'],
         'hk_stock': ['1d'],
@@ -856,9 +856,9 @@ class DataInterface:
 
                         logger.debug(f"过滤后数据: 原始={original_count}, 过滤后={filtered_count}")
 
-                        # 调试：输出过滤条件
+                        # 调试：输出过滤条件（降为debug级别避免大量IO）
                         if filtered_count == 0 and original_count > 0:
-                            logger.warning(f"[{symbol}] 时间过滤导致所有数据被过滤！查询范围={start_dt} ~ {end_dt}, "
+                            logger.debug(f"[{symbol}] 时间过滤导致所有数据被过滤！查询范围={start_dt} ~ {end_dt}, "
                                         f"原始数据范围={original_time_min} ~ {original_time_max}")
 
                         if not year_data.empty:

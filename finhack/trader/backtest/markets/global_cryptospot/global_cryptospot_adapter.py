@@ -149,81 +149,143 @@ class GlobalCryptoSpotAdapter(BaseMarket):
     
     def generate_daily_events(self, trade_date: date, frequency: str = '1d') -> List[BaseEvent]:
         """生成指定日期的市场事件列表
-        
+
         Args:
             trade_date: 交易日期
             frequency: 数据频率
-            
+
         Returns:
             List[BaseEvent]: 事件列表
         """
         events = []
-        
+
         if frequency == '1d':
-            # 日频事件
-            # 交易前事件
-            events.append(MarketEvent(
-                event_type=EventTypeEnum.BEFORE_MARKET,
-                event_time=datetime.combine(trade_date, time(0, 0)), # 假设UTC 00:00 对应本地 08:00
-                market=self.market_name,
-                frequency=frequency,
-                event_description="交易前准备"
-            ))
-            
-            # 开盘事件
-            events.append(MarketEvent(
-                event_type=EventTypeEnum.MARKET_START,
-                event_time=datetime.combine(trade_date, time(0, 0)), # 假设UTC 00:00 对应本地 08:00
-                market=self.market_name,
-                frequency=frequency,
-                event_description="开盘"
-            ))
-            
-            # 撮合事件
-            events.append(MarketEvent(
-                event_type=EventTypeEnum.TRY_MATCH,
-                event_time=datetime.combine(trade_date, time(0, 0)), # 假设UTC 00:00 对应本地 08:00
-                market=self.market_name,
-                frequency=frequency,
-                event_description="日级撮合"
-            ))
-            
-            # 收盘事件
-            events.append(MarketEvent(
-                event_type=EventTypeEnum.MARKET_END,
-                event_time=datetime.combine(trade_date, time(23, 59)), # 假设UTC 23:59 对应本地 07:59
-                market=self.market_name,
-                frequency=frequency,
-                event_description="收盘"
-            ))
-            
-            # 交易后事件
-            events.append(MarketEvent(
-                event_type=EventTypeEnum.AFTER_MARKET,
-                event_time=datetime.combine(trade_date, time(23, 59)), # 假设UTC 23:59 对应本地 07:59
-                market=self.market_name,
-                frequency=frequency,
-                event_description="交易后处理"
-            ))
-            
-            # 日K线事件
-            events.append(MarketEvent(
-                event_type=EventTypeEnum.DAILY_BAR_CLOSED,
-                event_time=datetime.combine(trade_date, time(23, 59)), # 假设UTC 23:59 对应本地 07:59
-                market=self.market_name,
-                frequency=frequency,
-                event_description="日K线生成"
-            ))
-            
+            # 1d频率的精简事件序列
+            # 加密货币24/7交易，以UTC 00:00为日线分界点
+            events = self._generate_1d_events(trade_date)
+
         elif frequency in ['1m', '30m', '120m']:
             # 分钟频事件 - 使用统一框架生成
-            # 加密货币市场是24/7交易，无特殊时段
             events = BaseMinutelyEventGenerator.generate_minutely_events(
                 adapter=self,
                 trade_date=trade_date,
                 frequency=frequency
             )
-        
+
+        return events
+
+    def _generate_1d_events(self, trade_date: date) -> List[BaseEvent]:
+        """生成1d频率的精简事件序列
+
+        加密货币市场特点：
+        - 24/7交易，全年无休
+        - 以UTC 00:00为日线分界点
+        - T+0结算（即时）
+        - 支持做空（合约交易）
+        - 支持高杠杆
+
+        事件序列：
+        00:00 DAY_START              每日开始
+        00:00 BEFORE_MARKET          盘前准备
+        00:00 OPENING_PRICE_DETERMINED 开盘价确定（日线开始）
+        00:00 TRY_MATCH              撮合 ← 可交易
+        -- 24小时无中断交易 --
+        23:59 CLOSING_PRICE_DETERMINED 收盘价确定（日线结束）
+        23:59 TRY_MATCH              收盘撮合 ← 可交易
+        23:59 AFTER_MARKET           盘后处理
+        23:59 DAY_END                每日结束
+
+        Args:
+            trade_date: 交易日期
+
+        Returns:
+            List[BaseEvent]: 精简的事件列表
+        """
+        events = []
+
+        # 1. 每日开始
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.DAY_START,
+            event_time=datetime.combine(trade_date, time(0, 0)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="每日开始(UTC)"
+        ))
+
+        # 2. 盘前准备
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.BEFORE_MARKET,
+            event_time=datetime.combine(trade_date, time(0, 0)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="盘前准备"
+        ))
+
+        # 3. 开盘价确定
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.OPENING_PRICE_DETERMINED,
+            event_time=datetime.combine(trade_date, time(0, 0)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="日线开始"
+        ))
+
+        # 4. 开盘撮合 ← 可交易
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.TRY_MATCH,
+            event_time=datetime.combine(trade_date, time(0, 0)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="开盘撮合"
+        ))
+
+        # -- 24小时无中断交易 --
+
+        # 5. 收盘价确定（日线结束）
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.CLOSING_PRICE_DETERMINED,
+            event_time=datetime.combine(trade_date, time(23, 59)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="日线结束"
+        ))
+
+        # 6. 收盘撮合 ← 可交易
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.TRY_MATCH,
+            event_time=datetime.combine(trade_date, time(23, 59)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="收盘撮合"
+        ))
+
+        # 7. 日K线生成
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.DAILY_BAR_CLOSED,
+            event_time=datetime.combine(trade_date, time(23, 59)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="日K线生成"
+        ))
+
+        # 8. 盘后处理
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.AFTER_MARKET,
+            event_time=datetime.combine(trade_date, time(23, 59)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="盘后处理"
+        ))
+
+        # 9. 每日结束
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.DAY_END,
+            event_time=datetime.combine(trade_date, time(23, 59)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="每日结束"
+        ))
+
         return events
     
     def is_trading_time(self, dt: datetime, frequency: str = '1d', symbol: str = None) -> bool:

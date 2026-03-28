@@ -109,21 +109,9 @@ class CnStockMarketAdapter(BaseMarket):
         events = []
 
         if frequency == '1d':
-            # ========== 日频事件 - 使用统一框架 ==========
-            # 基础事件由统一框架生成
-            events = BaseDailyEventGenerator.generate_daily_events(
-                adapter=self,
-                trade_date=trade_date
-            )
-
-            # 添加中国A股特有的集合竞价事件
-            additional_events = self._get_auction_events_1d(trade_date)
-
-            # 添加收盘相关事件
-            additional_events.extend(self._get_closing_events_1d(trade_date))
-
-            events.extend(additional_events)
-            events.sort(key=lambda x: x.event_time)
+            # ========== 日频事件 - 使用1d精简事件序列 ==========
+            # 1d频率仅加载日频数据，只有开盘和收盘进行撮合
+            events = self._generate_1d_events(trade_date)
 
         elif frequency in ['1m', '30m', '120m']:
             # ========== 分钟频事件 - 使用统一框架 ==========
@@ -149,6 +137,147 @@ class CnStockMarketAdapter(BaseMarket):
 
             events.extend(additional_events)
             events.sort(key=lambda x: x.event_time)
+
+        return events
+
+    def _generate_1d_events(self, trade_date: date) -> List[BaseEvent]:
+        """生成1d频率的精简事件序列
+
+        1d频率回测特点：
+        - 仅加载日频数据
+        - 只有开盘和收盘进行撮合
+        - 不生成盘中分钟事件
+        - 不生成午休分段事件
+
+        事件序列：
+        09:00 DAY_START              每日开始（初始化、分红送股处理等）
+        09:00 BEFORE_MARKET          盘前准备（可自定义事件）
+        09:25 OPENING_PRICE_DETERMINED 开盘价确定
+        09:25 TRY_MATCH              开盘集合竞价撮合 ← 可交易
+        -- 盘中无事件 --
+        14:55 CLOSING_START          收盘集合竞价开始
+        15:00 CLOSING_PRICE_DETERMINED 收盘价确定
+        15:00 TRY_MATCH              收盘集合竞价撮合 ← 可交易
+        15:05 AFTER_MARKET           盘后处理（可自定义事件）
+        15:05 DAY_END                每日结束（净值记录等）
+
+        Args:
+            trade_date: 交易日期
+
+        Returns:
+            List[BaseEvent]: 精简的事件列表
+        """
+        events = []
+
+        # 1. 每日开始（初始化、分红送股处理等）
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.DAY_START,
+            event_time=datetime.combine(trade_date, time(9, 0)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="每日开始"
+        ))
+
+        # 2. 盘前准备（策略初始化、调仓准备）
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.BEFORE_MARKET,
+            event_time=datetime.combine(trade_date, time(9, 0)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="盘前准备"
+        ))
+
+        # 3. 开盘集合竞价开始
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.PRE_OPENING_START,
+            event_time=datetime.combine(trade_date, time(9, 15)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="集合竞价开始"
+        ))
+
+        # 4. 开盘集合竞价不可撤单
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.PRE_OPENING_END,
+            event_time=datetime.combine(trade_date, time(9, 20)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="集合竞价不可撤单"
+        ))
+
+        # 5. 开盘价确定
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.OPENING_PRICE_DETERMINED,
+            event_time=datetime.combine(trade_date, time(9, 25)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="开盘价确定"
+        ))
+
+        # 6. 开盘集合竞价撮合 ← 可交易
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.TRY_MATCH,
+            event_time=datetime.combine(trade_date, time(9, 25)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="开盘集合竞价撮合"
+        ))
+
+        # -- 盘中无事件 --
+
+        # 7. 收盘集合竞价开始
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.CLOSING_START,
+            event_time=datetime.combine(trade_date, time(14, 57)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="收盘集合竞价开始"
+        ))
+
+        # 8. 收盘价确定
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.CLOSING_PRICE_DETERMINED,
+            event_time=datetime.combine(trade_date, time(15, 0)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="收盘价确定"
+        ))
+
+        # 9. 收盘集合竞价撮合 ← 可交易
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.TRY_MATCH,
+            event_time=datetime.combine(trade_date, time(15, 0)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="收盘集合竞价撮合"
+        ))
+
+        # 10. 收盘结束
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.CLOSING_END,
+            event_time=datetime.combine(trade_date, time(15, 0)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="收盘集合竞价结束"
+        ))
+
+        # 11. 盘后处理（可自定义事件）
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.AFTER_MARKET,
+            event_time=datetime.combine(trade_date, time(15, 5)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="盘后处理"
+        ))
+
+        # 12. 每日结束（净值记录等）
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.DAY_END,
+            event_time=datetime.combine(trade_date, time(15, 5)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="每日结束"
+        ))
 
         return events
 
@@ -293,81 +422,6 @@ class CnStockMarketAdapter(BaseMarket):
                         event_description="120分钟K线"
                     ))
                 current_time += timedelta(minutes=interval_minutes)
-
-        return events
-
-    def _get_auction_events_1d(self, trade_date: date) -> List[BaseEvent]:
-        """生成日线频率的A股集合竞价相关事件"""
-        events = []
-
-        # 集合竞价开始
-        events.append(MarketEvent(
-            event_type=EventTypeEnum.PRE_OPENING_START,
-            event_time=datetime.combine(trade_date, time(9, 15)),
-            market=self.market_name,
-            frequency='1d',
-            event_description="集合竞价开始"
-        ))
-
-        # 集合竞价可撤单结束
-        events.append(MarketEvent(
-            event_type=EventTypeEnum.PRE_OPENING_END,
-            event_time=datetime.combine(trade_date, time(9, 20)),
-            market=self.market_name,
-            frequency='1d',
-            event_description="集合竞价不可撤单"
-        ))
-
-        # 集合竞价撮合
-        events.append(MarketEvent(
-            event_type=EventTypeEnum.MATCHING_START,
-            event_time=datetime.combine(trade_date, time(9, 25)),
-            market=self.market_name,
-            frequency='1d',
-            event_description="集合竞价撮合"
-        ))
-
-        # 开盘价确定
-        events.append(MarketEvent(
-            event_type=EventTypeEnum.OPENING_PRICE_DETERMINED,
-            event_time=datetime.combine(trade_date, time(9, 25)),
-            market=self.market_name,
-            frequency='1d',
-            event_description="开盘价确定"
-        ))
-
-        return events
-
-    def _get_closing_events_1d(self, trade_date: date) -> List[BaseEvent]:
-        """生成日线频率的收盘相关事件"""
-        events = []
-
-        # 收盘集合竞价开始
-        events.append(MarketEvent(
-            event_type=EventTypeEnum.CLOSING_START,
-            event_time=datetime.combine(trade_date, time(14, 57)),
-            market=self.market_name,
-            frequency='1d',
-            event_description="收盘集合竞价开始"
-        ))
-
-        # 收盘结束
-        events.append(MarketEvent(
-            event_type=EventTypeEnum.CLOSING_END,
-            event_time=datetime.combine(trade_date, time(15, 0)),
-            market=self.market_name,
-            frequency='1d',
-            event_description="收盘集合竞价结束"
-        ))
-
-        # 收盘价确定
-        events.append(MarketEvent(
-            event_type=EventTypeEnum.CLOSING_PRICE_DETERMINED,
-            event_time=datetime.combine(trade_date, time(15, 0)),
-            market=self.market_name,
-            frequency='1d',
-            event_description="收盘价确定"
-        ))
 
         return events
 
