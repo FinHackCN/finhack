@@ -437,7 +437,7 @@ class TradeCenter:
         if trade.side == Side.BUY:
             # 买入：减少现金，增加持仓
             self.account.cash_available -= (trade.amount + trade.commission + trade.tax)
-            
+
             if trade.symbol not in self.positions:
                 # 新建持仓
                 self.positions[trade.symbol] = Position(
@@ -459,24 +459,73 @@ class TradeCenter:
                 position.available_volume += trade.volume
                 position.cost_price = (old_cost + new_cost) / position.volume
                 position.market_value = position.volume * trade.price
-                
+
         elif trade.side == Side.SELL:
             # 卖出：增加现金，减少持仓
             self.account.cash_available += (trade.amount - trade.commission - trade.tax)
-            
+
             if trade.symbol in self.positions:
                 position = self.positions[trade.symbol]
                 position.volume -= trade.volume
                 position.available_volume -= trade.volume
                 position.market_value = position.volume * trade.price
-                
+
                 # 计算已实现盈亏
                 realized_pnl = (trade.price - position.cost_price) * trade.volume - trade.commission - trade.tax
                 self.account.pnl_realized += realized_pnl
-                
+
                 # 如果持仓清零，删除持仓记录
                 if position.volume <= 0:
                     del self.positions[trade.symbol]
+
+        elif trade.side == Side.SHORT_OPEN:
+            # 开空仓：减少现金（作为保证金），创建空头持仓
+            self.account.cash_available -= (trade.amount + trade.commission + trade.tax)
+
+            # 生成空头持仓的唯一key
+            short_key = f"{trade.symbol}_SHORT"
+
+            if short_key not in self.positions:
+                # 新建空头持仓
+                self.positions[short_key] = Position(
+                    account_id=self.account.account_id,
+                    symbol=trade.symbol,
+                    position_side=PositionSide.SHORT,
+                    volume=trade.volume,
+                    available_volume=trade.volume,
+                    cost_price=trade.price,
+                    market_value=trade.volume * trade.price,
+                    open_time=trade.trade_time
+                )
+            else:
+                # 增加空头持仓
+                position = self.positions[short_key]
+                old_cost = position.volume * position.cost_price
+                new_cost = trade.volume * trade.price
+                position.volume += trade.volume
+                position.available_volume += trade.volume
+                position.cost_price = (old_cost + new_cost) / position.volume
+                position.market_value = position.volume * trade.price
+
+        elif trade.side == Side.SHORT_CLOSE:
+            # 平空仓：增加现金，减少空头持仓
+            self.account.cash_available += (trade.amount - trade.commission - trade.tax)
+
+            short_key = f"{trade.symbol}_SHORT"
+
+            if short_key in self.positions:
+                position = self.positions[short_key]
+                position.volume -= trade.volume
+                position.available_volume -= trade.volume
+                position.market_value = position.volume * trade.price
+
+                # 计算已实现盈亏（空头：价格下跌盈利）
+                realized_pnl = (position.cost_price - trade.price) * trade.volume - trade.commission - trade.tax
+                self.account.pnl_realized += realized_pnl
+
+                # 如果持仓清零，删除持仓记录
+                if position.volume <= 0:
+                    del self.positions[short_key]
                     
         # 更新账户总资产
         self._update_account_value()
@@ -567,41 +616,78 @@ class TradeCenter:
                 )
                 return False
 
+        # 开空仓订单：检查资金是否充足（作为保证金）
+        elif order.side == Side.SHORT_OPEN:
+            # 获取成交价格
+            if order.order_type == OrderType.LIMIT and order.price:
+                estimated_price = order.price
+            else:
+                estimated_price = self._get_last_price(order.symbol)
+                if estimated_price <= 0:
+                    Log.logger.warning(f"无法获取{order.symbol}的最新价格，无法验证资金")
+                    return False
+
+            # 计算预估成交金额（含手续费）
+            # 开空仓需要冻结资金作为保证金
+            estimated_amount = order.volume * estimated_price
+            estimated_commission = self._calculate_commission(estimated_amount, Side.SHORT_OPEN)
+            estimated_tax = self._calculate_tax(estimated_amount, Side.SHORT_OPEN)
+            # 期货通常使用保证金制度，这里简化为全额
+            total_required = estimated_amount + estimated_commission + estimated_tax
+
+            # 检查可用资金
+            if self.account.cash_available < total_required:
+                Log.logger.warning(
+                    f"资金不足，开空仓订单被拒绝: {order.symbol} 需要{total_required:.2f}元，可用{self.account.cash_available:.2f}元"
+                )
+                return False
+
+        # 平空仓订单：检查空头持仓是否充足
+        elif order.side == Side.SHORT_CLOSE:
+            short_key = f"{order.symbol}_SHORT"
+            position = self.positions.get(short_key)
+            available_volume = position.available_volume if position else 0
+            if available_volume < order.volume:
+                Log.logger.warning(
+                    f"空头持仓不足，平空订单被拒绝: {order.symbol} 需要{order.volume}，可用{available_volume}"
+                )
+                return False
+
         return True
         
     def _apply_slippage(self, price: float, side: Side) -> float:
         """应用滑点"""
         slip_type = self.context['settings'].get('slip_type', 'pricerelated')
         slip_value = self.context['settings'].get('slip_value', 0.001)
-        
+
         if slip_type == 'pricerelated':
-            if side == Side.BUY:
+            if side in (Side.BUY, Side.SHORT_CLOSE):  # 买入和平空仓价格偏高
                 return price * (1 + slip_value)
-            else:
+            else:  # SELL, SHORT_OPEN 价格偏低
                 return price * (1 - slip_value)
         elif slip_type == 'fixed':
-            if side == Side.BUY:
+            if side in (Side.BUY, Side.SHORT_CLOSE):
                 return price + slip_value
             else:
                 return price - slip_value
         else:
             return price
-            
+
     def _calculate_commission(self, amount: float, side: Side) -> float:
         """计算手续费"""
-        if side == Side.BUY:
+        if side in (Side.BUY, Side.SHORT_OPEN):
             commission_rate = self.context['settings'].get('open_commission', 0.0003)
         else:
             commission_rate = self.context['settings'].get('close_commission', 0.0003)
-            
+
         commission = amount * commission_rate
         min_commission = self.context['settings'].get('min_commission', 5.0)
-        
+
         return max(commission, min_commission)
-        
+
     def _calculate_tax(self, amount: float, side: Side) -> float:
         """计算税费"""
-        if side == Side.BUY:
+        if side in (Side.BUY, Side.SHORT_OPEN):
             tax_rate = self.context['settings'].get('open_tax', 0.0)
         else:
             tax_rate = self.context['settings'].get('close_tax', 0.001)

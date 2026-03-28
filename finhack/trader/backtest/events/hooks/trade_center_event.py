@@ -3,6 +3,8 @@ TradeCenter专用事件钩子
 处理交易中心相关的事件，包括分红送股、订单撮合等
 """
 
+import os
+import sqlite3
 import pandas as pd
 from datetime import datetime, timedelta
 from typing import List, Dict, Any
@@ -95,51 +97,89 @@ def _process_dividend_stock_split(context, current_date: datetime):
 
 def _get_dividend_data(context, current_date: datetime) -> Dict[str, Any]:
     """
-    获取分红送股数据
-    
+    从数据库获取分红送股数据
+
     Args:
         context: 回测上下文
         current_date: 当前日期
-        
+
     Returns:
-        Dict[str, Any]: 分红送股数据
+        Dict[str, Any]: 分红送股数据 {symbol: {cash_dividend, stock_dividend, ex_date, ...}}
     """
-    # 这里应该从数据库或文件中获取真实的分红送股数据
-    # 暂时使用模拟数据
     dividend_data = {}
-    
-    # 模拟一些分红送股事件
-    if current_date.month == 6 and current_date.day == 15:  # 6月15日分红
-        dividend_data.update({
-            "000001.SZ": {
-                "type": "dividend",
-                "cash_dividend": 0.1,  # 每股分红0.1元
-                "stock_dividend": 0.0,  # 不送股
-                "ex_date": current_date.strftime('%Y-%m-%d')
-            },
-            "000002.SZ": {
-                "type": "stock_split",
-                "cash_dividend": 0.05,  # 每股分红0.05元
-                "stock_dividend": 0.1,  # 每10股送1股
-                "ex_date": current_date.strftime('%Y-%m-%d')
-            }
-        })
-    elif current_date.month == 3 and current_date.day == 20:  # 3月20日分红
-        dividend_data.update({
-            "600000.SH": {
-                "type": "dividend",
-                "cash_dividend": 0.12,
-                "stock_dividend": 0.0,
-                "ex_date": current_date.strftime('%Y-%m-%d')
-            },
-            "600036.SH": {
-                "type": "dividend",
-                "cash_dividend": 0.08,
-                "stock_dividend": 0.0,
-                "ex_date": current_date.strftime('%Y-%m-%d')
-            }
-        })
-    
+
+    try:
+        # 获取数据库路径
+        db_path = os.path.join(
+            context.project_path,
+            'data/db/tushare.sqlite'
+        )
+
+        if not os.path.exists(db_path):
+            if context.logger:
+                context.logger.warning(f"分红数据库不存在: {db_path}")
+            return dividend_data
+
+        # 查询当日除权的分红送股数据
+        ex_date_str = current_date.strftime('%Y%m%d')
+
+        query = f"""
+        SELECT ts_code, cash_div_tax, stk_div, stk_bo_rate, ex_date, record_date
+        FROM astock_finance_dividend
+        WHERE ex_date = '{ex_date_str}'
+          AND div_proc = '实施'
+        """
+
+        conn = sqlite3.connect(db_path)
+        df = pd.read_sql_query(query, conn)
+        conn.close()
+
+        if df.empty:
+            return dividend_data
+
+        # 构建分红送股数据字典
+        for _, row in df.iterrows():
+            symbol = row['ts_code']
+
+            # 现金分红（扣税后）
+            cash_dividend = row.get('cash_div_tax', 0) or 0
+
+            # 送股比例（每股送多少股）
+            stk_div = row.get('stk_div', 0) or 0
+
+            # 转增股比例（每股转增多少股）
+            stk_bo_rate = row.get('stk_bo_rate', 0) or 0
+            if isinstance(stk_bo_rate, str):
+                try:
+                    stk_bo_rate = float(stk_bo_rate)
+                except:
+                    stk_bo_rate = 0
+
+            # 总送股比例 = 送股 + 转增
+            stock_dividend = stk_div + (stk_bo_rate / 10 if stk_bo_rate else 0)
+
+            # 只有有分红或送股才记录
+            if cash_dividend > 0 or stock_dividend > 0:
+                dividend_data[symbol] = {
+                    'type': 'dividend_stock_split',
+                    'cash_dividend': float(cash_dividend),  # 每股现金分红
+                    'stock_dividend': float(stock_dividend),  # 每股送股
+                    'ex_date': row.get('ex_date', ''),
+                    'record_date': row.get('record_date', '')
+                }
+
+                if context.logger:
+                    context.logger.info(
+                        f"分红送股数据: {symbol} 现金{cash_dividend:.4f}元/股, "
+                        f"送股{stock_dividend:.4f}股/股"
+                    )
+
+    except Exception as e:
+        if context.logger:
+            context.logger.error(f"获取分红送股数据失败: {str(e)}")
+            import traceback
+            context.logger.error(traceback.format_exc())
+
     return dividend_data
 
 

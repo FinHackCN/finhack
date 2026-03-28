@@ -118,85 +118,115 @@ class GlobalCryptoSpotMarketAdapter(BaseMarket):
         logger.debug(f"生成 {trade_date} {frequency} 频率事件 {len(events)} 个")
         return events
     
-    def _generate_daily_events_1d(self, trade_date: datetime.date) -> List[BaseEvent]:
-        """生成1d频率的日内事件"""
+    def _generate_daily_events_1d(self, trade_date) -> List[BaseEvent]:
+        """生成1d频率的精简事件序列
+
+        加密货币市场特点：
+        - 24/7交易，全年无休
+        - 以UTC 00:00为日线分界点
+        - T+0结算（即时）
+        - 支持做空
+
+        事件序列：
+        00:00 DAY_START              每日开始
+        00:00 BEFORE_MARKET          盘前准备
+        00:00 OPENING_PRICE_DETERMINED 开盘价确定（日线开始）
+        00:00 TRY_MATCH              撮合 ← 可交易
+        -- 24小时无中断交易 --
+        23:59 CLOSING_PRICE_DETERMINED 收盘价确定（日线结束）
+        23:59 TRY_MATCH              收盘撮合 ← 可交易
+        23:59 AFTER_MARKET           盘后处理
+        23:59 DAY_END                每日结束
+        """
         events = []
-        
-        # 加密货币市场是7x24连续交易，事件生成逻辑与股票期货有所不同
-        # 简化处理，主要关注日K线和撮合
-        
-        # 交易前 (概念性，实际可能不严格区分)
+
+        # 确保trade_date是date类型
+        if hasattr(trade_date, 'date'):
+            trade_date = trade_date.date()
+
+        # 1. 每日开始
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.DAY_START,
+            event_time=datetime.combine(trade_date, time(0, 0)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="每日开始(UTC)"
+        ))
+
+        # 2. 盘前准备
         events.append(MarketEvent(
             event_type=EventTypeEnum.BEFORE_MARKET,
             event_time=datetime.combine(trade_date, time(0, 0)),
             market=self.market_name,
             frequency='1d',
-            event_description="加密货币交易前准备"
+            event_description="盘前准备"
         ))
-        
-        # 开盘 (概念性，实际是连续的)
+
+        # 3. 开盘价确定
         events.append(MarketEvent(
-            event_type=EventTypeEnum.MARKET_START,
+            event_type=EventTypeEnum.OPENING_PRICE_DETERMINED,
             event_time=datetime.combine(trade_date, time(0, 0)),
             market=self.market_name,
             frequency='1d',
-            event_description="加密货币开盘"
+            event_description="日线开始"
         ))
-        
-        # 撮合事件
+
+        # 4. 开盘撮合 ← 可交易
         events.append(MarketEvent(
             event_type=EventTypeEnum.TRY_MATCH,
             event_time=datetime.combine(trade_date, time(0, 0)),
             market=self.market_name,
             frequency='1d',
-            event_description="加密货币日级撮合"
+            event_description="开盘撮合"
         ))
-        
-        # 尝试撮合 (全天候)
-        # 对于1d频率，可以在一天结束时触发一次撮合和K线生成
-        end_of_day = datetime.datetime.combine(trade_date, time(23, 59, 59))
+
+        # -- 24小时无中断交易 --
+
+        # 5. 收盘价确定（日线结束）
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.CLOSING_PRICE_DETERMINED,
+            event_time=datetime.combine(trade_date, time(23, 59)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="日线结束"
+        ))
+
+        # 6. 收盘撮合 ← 可交易
         events.append(MarketEvent(
             event_type=EventTypeEnum.TRY_MATCH,
-            datetime=end_of_day,
-            trade_date=trade_date,
+            event_time=datetime.combine(trade_date, time(23, 59)),
             market=self.market_name,
-            event_description="加密货币日级撮合"
+            frequency='1d',
+            event_description="收盘撮合"
         ))
-        
-        # 日K线生成
+
+        # 7. 日K线生成
         events.append(MarketEvent(
-            event_type=EventTypeEnum.MARKET_BAR_1D,
-            datetime=end_of_day,
-            trade_date=trade_date,
+            event_type=EventTypeEnum.DAILY_BAR_CLOSED,
+            event_time=datetime.combine(trade_date, time(23, 59)),
             market=self.market_name,
-            event_description="加密货币日K线生成"
+            frequency='1d',
+            event_description="日K线生成"
         ))
-        
-        # 收盘 (概念性，实际是连续的)
-        events.append(MarketEvent(
-            event_type=EventTypeEnum.MARKET_END,
-            datetime=end_of_day,
-            trade_date=trade_date,
-            market=self.market_name,
-            event_description="加密货币收盘"
-        ))
-        
-        # 交易后 (概念性)
+
+        # 8. 盘后处理
         events.append(MarketEvent(
             event_type=EventTypeEnum.AFTER_MARKET,
-            trade_date=trade_date,
+            event_time=datetime.combine(trade_date, time(23, 59)),
             market=self.market_name,
-            event_description="加密货币交易后"
+            frequency='1d',
+            event_description="盘后处理"
         ))
-        
-        # 结算 (加密货币通常没有每日结算的概念，但可以用于内部账户更新)
+
+        # 9. 每日结束
         events.append(MarketEvent(
-            event_type=EventTypeEnum.MARKET_SETTLEMENT,
-            trade_date=trade_date,
+            event_type=EventTypeEnum.DAY_END,
+            event_time=datetime.combine(trade_date, time(23, 59)),
             market=self.market_name,
-            event_description="加密货币结算"
+            frequency='1d',
+            event_description="每日结束"
         ))
-        
+
         return events
     
     def _generate_daily_events_min(self, trade_date: date, schedule: Dict[str, time], frequency: str) -> List[BaseEvent]:

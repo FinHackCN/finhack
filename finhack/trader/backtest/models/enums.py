@@ -405,15 +405,25 @@ class Side(BaseEnum):
     交易方向说明：
     - BUY: 买入/做多
     - SELL: 卖出/做空
+    - SHORT_OPEN: 开空仓（期货/加密货币做空）
+    - SHORT_CLOSE: 平空仓（期货/加密货币平空）
     """
 
-    BUY = "BUY"   # 买入
-    SELL = "SELL" # 卖出
+    BUY = "BUY"         # 买入
+    SELL = "SELL"       # 卖出
+    SHORT_OPEN = "SHORT_OPEN"     # 开空仓
+    SHORT_CLOSE = "SHORT_CLOSE"   # 平空仓
 
     @property
     def opposite(self) -> 'Side':
         """获取相反的方向"""
-        return Side.SELL if self == Side.BUY else Side.BUY
+        opposites = {
+            Side.BUY: Side.SELL,
+            Side.SELL: Side.BUY,
+            Side.SHORT_OPEN: Side.SHORT_CLOSE,
+            Side.SHORT_CLOSE: Side.SHORT_OPEN,
+        }
+        return opposites.get(self, Side.SELL)
 
 
 class PositionEffect(BaseEnum):
