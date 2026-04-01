@@ -61,6 +61,32 @@ class TimeFormatter:
         cls._cache_date = None
 
 
+def _match_quote_symbols(quote_df: pd.DataFrame, symbols_list: List[str]) -> Dict[str, Dict]:
+    """从quote_df中提取市场数据，支持期货多后缀匹配
+
+    Args:
+        quote_df: get_quotes返回的DataFrame，index为code
+        symbols_list: 需要查找的代码列表
+
+    Returns:
+        Dict[symbol, {field: value}]
+    """
+    market_data = {}
+    # 构建base code映射
+    index_base_map = {}
+    for idx in quote_df.index:
+        base = idx.split('.')[0] if '.' in str(idx) else str(idx)
+        index_base_map[base] = idx
+    for symbol in symbols_list:
+        if symbol in quote_df.index:
+            market_data[symbol] = quote_df.loc[symbol].to_dict()
+        else:
+            base = symbol.split('.')[0] if '.' in symbol else symbol
+            if base in index_base_map:
+                market_data[symbol] = quote_df.loc[index_base_map[base]].to_dict()
+    return market_data
+
+
 def extract_latest_prices_batch(klines_df: pd.DataFrame, symbols: List[str]) -> Dict[str, Dict]:
     """
     批量提取最新价格 - 性能优化
@@ -86,14 +112,38 @@ def extract_latest_prices_batch(klines_df: pd.DataFrame, symbols: List[str]) -> 
 
         has_volume = 'volume' in latest.columns
 
+        # 【期货多后缀支持】构建base code到查询symbol的映射
+        # 处理如 IF2401 vs IF2401.CCFX vs IF2401.CFFEX 等不同格式
+        symbol_base_map = {}  # base_code -> query_symbol
+        for s in symbols:
+            base = s.split('.')[0] if '.' in s else s
+            symbol_base_map[base] = s
+
+        # 构建 DataFrame 索引中 base code 到 index key 的映射
+        index_base_map = {}  # base_code -> actual_index_key
+        for idx_key in latest.index:
+            base = idx_key.split('.')[0] if '.' in str(idx_key) else str(idx_key)
+            index_base_map[base] = idx_key
+
         for symbol in symbols:
             try:
+                # 先精确匹配
                 if symbol in latest.index:
                     row = latest.loc[symbol]
                     result[symbol] = {
                         'close': row['close'],
                         'volume': row['volume'] if has_volume else 0
                     }
+                else:
+                    # 模糊匹配：通过base code
+                    base = symbol.split('.')[0] if '.' in symbol else symbol
+                    if base in index_base_map:
+                        idx_key = index_base_map[base]
+                        row = latest.loc[idx_key]
+                        result[symbol] = {
+                            'close': row['close'],
+                            'volume': row['volume'] if has_volume else 0
+                        }
             except (KeyError, IndexError):
                 continue
 
@@ -175,6 +225,44 @@ class TradeCenter:
         # 格式: {(symbol, ex_date, action_type): True}
         self._processed_corporate_actions: set = set()
 
+    # ========== 市场规则委托方法 ==========
+
+    def _get_lot_size(self, symbol: str) -> float:
+        """获取最小交易单位（委托给market_adapter）"""
+        if self.market_adapter and hasattr(self.market_adapter, 'get_lot_size'):
+            try:
+                return float(self.market_adapter.get_lot_size(symbol))
+            except Exception:
+                pass
+        # 默认值：根据市场类型返回
+        market = self.context.get('settings', {}).get('market', 'cn_stock')
+        if market == 'global_cryptospot':
+            return 0.0  # 加密货币支持小数
+        elif market == 'cn_future':
+            return 1.0  # 期货最小1手
+        return 100.0  # 默认A股
+
+    def _get_min_fill_volume(self, symbol: str) -> float:
+        """获取最小成交量"""
+        return self._get_lot_size(symbol)
+
+    def _normalize_volume(self, volume: float, symbol: str) -> float:
+        """标准化交易数量（按市场规则取整）"""
+        lot_size = self._get_lot_size(symbol)
+        if lot_size <= 0:
+            return volume  # 支持小数（如加密货币）
+        return (volume // lot_size) * lot_size
+
+    def _is_t_plus_one(self) -> bool:
+        """判断当前市场是否T+1"""
+        if self.market_adapter:
+            if hasattr(self.market_adapter, 't_plus_one'):
+                return self.market_adapter.t_plus_one
+            if hasattr(self.market_adapter, 'is_t_plus_zero_allowed'):
+                return not self.market_adapter.is_t_plus_zero_allowed('')
+        market = self.context.get('settings', {}).get('market', 'cn_stock')
+        return market in ('cn_stock', 'cn_fund')
+
     def set_event_center(self, event_center):
         """设置事件中心
 
@@ -183,12 +271,8 @@ class TradeCenter:
         """
         self.event_center = event_center
         
-    async def get_account(self, adapter_id: str, refresh: bool = False) -> Account:
-        """获取账户信息"""
-        return self.account
-
     def get_account(self) -> Account:
-        """获取账户信息 - 同步版本"""
+        """获取账户信息"""
         return self.account
 
     async def get_positions(self, adapter_id: str, symbol: Optional[str] = None, refresh: bool = False) -> List[Position]:
@@ -532,6 +616,9 @@ class TradeCenter:
         
     def _update_account_value(self):
         """更新账户总资产"""
+        # 记录更新前的总资产（用于异常检测）
+        prev_total_assets = getattr(self.account, 'total_assets', 0)
+
         # 计算持仓市值（使用已更新的市值）
         positions_value = sum(pos.market_value for pos in self.positions.values())
 
@@ -553,6 +640,26 @@ class TradeCenter:
         elif total_assets < initial_capital * 0.01:  # 小于初始资金的1%
             Log.logger.warning(f"总资产异常低({total_assets:.2f})，请检查！")
 
+        # 异常变化检测：单日总资产变化超过30%时输出详细告警
+        if prev_total_assets > 0:
+            daily_change_ratio = (total_assets - prev_total_assets) / prev_total_assets
+            if abs(daily_change_ratio) > 0.3:
+                Log.logger.warning(
+                    f"[异常波动] 总资产单日变化 {daily_change_ratio:.2%} "
+                    f"({prev_total_assets:.2f} → {total_assets:.2f})，"
+                    f"现金={self.account.cash_available:.2f}, "
+                    f"冻结={self.account.cash_frozen:.2f}, "
+                    f"持仓市值={positions_value:.2f}"
+                )
+                # 打印每只持仓的详细信息以便排查
+                for pos_key, pos in self.positions.items():
+                    Log.logger.warning(
+                        f"  持仓 {pos_key}: volume={pos.volume}, "
+                        f"cost_price={pos.cost_price:.4f}, "
+                        f"last_price={getattr(pos, 'last_price', 'N/A')}, "
+                        f"market_value={pos.market_value:.2f}"
+                    )
+
         # 更新账户
         self.account.market_value = positions_value
         self.account.total_assets = total_assets
@@ -573,12 +680,25 @@ class TradeCenter:
         if order.order_type == OrderType.LIMIT and (not order.price or order.price <= 0):
             return False
 
-        # A股特殊规则验证
-        if self.context['settings']['market'] == 'cn_stock':
-            # 100股整数倍
-            if order.volume % 100 != 0:
-                Log.logger.warning(f"A股买入必须是100股的整数倍: {order.volume}")
+        # 市场规则验证 - 委托给market_adapter
+        lot_size = self._get_lot_size(order.symbol)
+        if lot_size > 0 and order.side in (Side.BUY, Side.SHORT_OPEN):
+            # 买入/开空时检查手数（卖出/平空允许零股）
+            if order.volume % lot_size != 0:
+                Log.logger.warning(f"订单数量必须是{lot_size}的整数倍: {order.volume}")
                 return False
+        # 如果adapter有validate_order方法，也调用它
+        if self.market_adapter and hasattr(self.market_adapter, 'validate_order'):
+            try:
+                is_valid, msg = self.market_adapter.validate_order(
+                    order.symbol, order.volume,
+                    order.price or 0, order.side.value
+                )
+                if not is_valid:
+                    Log.logger.warning(f"市场规则验证失败: {msg}")
+                    return False
+            except Exception:
+                pass
 
         # 买入订单：检查资金是否充足
         if order.side == Side.BUY:
@@ -673,17 +793,65 @@ class TradeCenter:
         else:
             return price
 
-    def _calculate_commission(self, amount: float, side: Side) -> float:
-        """计算手续费"""
+    def _calculate_commission(self, amount: float, side: Side, symbol: str = None) -> float:
+        """计算手续费
+
+        Args:
+            amount: 成交金额
+            side: 交易方向
+            symbol: 交易标的（用于判断是否为平今）
+
+        Returns:
+            float: 手续费金额
+        """
         if side in (Side.BUY, Side.SHORT_OPEN):
             commission_rate = self.context['settings'].get('open_commission', 0.0003)
         else:
-            commission_rate = self.context['settings'].get('close_commission', 0.0003)
+            # 判断是否为平今（期货T+0：当日开仓当日平仓）
+            is_close_today = self._is_close_today(symbol, side)
+            if is_close_today:
+                close_today_rate = self.context['settings'].get('close_today_commission', None)
+                if close_today_rate is not None:
+                    commission_rate = close_today_rate
+                else:
+                    commission_rate = self.context['settings'].get('close_commission', 0.0003)
+            else:
+                commission_rate = self.context['settings'].get('close_commission', 0.0003)
 
         commission = amount * commission_rate
         min_commission = self.context['settings'].get('min_commission', 5.0)
 
         return max(commission, min_commission)
+
+    def _is_close_today(self, symbol: str, side: Side) -> bool:
+        """判断是否为平今操作（当日开仓当日平仓）
+
+        Args:
+            symbol: 交易标的
+            side: 交易方向
+
+        Returns:
+            bool: 是否为平今
+        """
+        if side not in (Side.SELL, Side.SHORT_CLOSE):
+            return False
+
+        current_time = self.context.get('current_dt')
+        if not current_time:
+            return False
+
+        # 检查持仓的买入日期
+        pos_key = symbol
+        if side == Side.SHORT_CLOSE:
+            pos_key = f"{symbol}_SHORT"
+
+        position = self.positions.get(pos_key)
+        if position and hasattr(position, 'buy_dates') and position.buy_dates:
+            for buy_time, buy_volume in position.buy_dates:
+                if buy_time.date() == current_time.date():
+                    return True
+
+        return False
 
     def _calculate_tax(self, amount: float, side: Side) -> float:
         """计算税费"""
@@ -711,8 +879,10 @@ class TradeCenter:
             # 尝试从data_center获取最新行情
             if hasattr(self, 'data_center') and self.data_center:
                 quote_df = self.data_center.get_quotes([symbol], '1d', current_time)
-                if not quote_df.empty and symbol in quote_df.index:
-                    return float(quote_df.loc[symbol, 'close'])
+                if not quote_df.empty:
+                    matched = _match_quote_symbols(quote_df, [symbol])
+                    if symbol in matched:
+                        return float(matched[symbol]['close'])
 
             # 尝试从持仓获取最后价格
             if symbol in self.positions:
@@ -744,6 +914,7 @@ class TradeCenter:
         partial_orders = []
         current_time = self.context.get('current_dt')
         time_str = current_time.strftime('%Y-%m-%d %H:%M:%S') if current_time else '--:--:--'
+        freq = self.context.get('settings', {}).get('freq', '1d')
 
         # 添加INFO级别日志方便调试
         Log.logger.info(f"[{time_str}] 开始撮合，共{len(self.active_orders)}个活跃订单，市场数据标的: {list(market_data.keys())[:5]}...")
@@ -789,13 +960,14 @@ class TradeCenter:
                 Log.logger.info(f"[{time_str}] 跳过订单 {order_id}: 价格无效 {current_price}")
                 continue
 
-            # 【修复】基于市场成交量的成交限制配置
+            # 【修复】基于市场成交量的成交限制配置 - 通过adapter获取市场规则
             max_fill_ratio = 0.15  # 单笔成交不超过市场成交量的15%
-            min_fill_volume = 100   # 最小成交100股（A股规则）
+            min_fill_volume = self._get_min_fill_volume(symbol)
+            lot_size = self._get_lot_size(symbol)
 
             # 计算基于市场成交量的最大可成交数量
             if market_volume > 0:
-                max_fill_by_market = max(min_fill_volume, int(market_volume * max_fill_ratio))
+                max_fill_by_market = max(min_fill_volume, market_volume * max_fill_ratio)
             else:
                 # 如果市场成交量数据缺失，使用默认限制
                 max_fill_by_market = 10000
@@ -805,57 +977,92 @@ class TradeCenter:
             fill_price = current_price
             fill_volume = order.remaining_volume  # 默认全部成交
 
+            # 判断是否为日线频率（日线不做随机部分成交）
+            is_daily_freq = freq == '1d'
+
             if order.order_type == OrderType.MARKET:
-                # 市价单部分成交：每次撮合只成交剩余量的30%-80%，但受市场成交量限制
-                # 分钟级回测中每分钟都会撮合，所以可以部分成交
-                import random
-                # 从配置获取成交比例
-                if order.remaining_volume > self.partial_fill_config['large_order_threshold']:
-                    fill_ratio = random.uniform(
-                        self.partial_fill_config['large_order_min'],
-                        self.partial_fill_config['large_order_max']
-                    )
-                elif order.remaining_volume > self.partial_fill_config['medium_order_threshold']:
-                    fill_ratio = random.uniform(
-                        self.partial_fill_config['medium_order_min'],
-                        self.partial_fill_config['medium_order_max']
-                    )
+                if is_daily_freq:
+                    # 日线频率：市价单直接全部成交（基于日线收盘价）
+                    fill_volume = order.remaining_volume
+                    fill_price = self._apply_slippage(current_price, order.side)
+                    can_fill = True
+                    Log.logger.info(f"[{time_str}] [撮合] {order_id} {symbol} 日线市价单成交: {fill_volume}股 @{fill_price:.4f}")
                 else:
-                    fill_ratio = random.uniform(
-                        self.partial_fill_config['small_order_min'],
-                        self.partial_fill_config['small_order_max']
-                    )  # 小订单更容易全部成交
+                    # 分钟频率：部分成交逻辑（每次撮合只成交剩余量的部分比例）
+                    import random
+                    # 从配置获取成交比例
+                    if order.remaining_volume > self.partial_fill_config['large_order_threshold']:
+                        fill_ratio = random.uniform(
+                            self.partial_fill_config['large_order_min'],
+                            self.partial_fill_config['large_order_max']
+                        )
+                    elif order.remaining_volume > self.partial_fill_config['medium_order_threshold']:
+                        fill_ratio = random.uniform(
+                            self.partial_fill_config['medium_order_min'],
+                            self.partial_fill_config['medium_order_max']
+                        )
+                    else:
+                        fill_ratio = random.uniform(
+                            self.partial_fill_config['small_order_min'],
+                            self.partial_fill_config['small_order_max']
+                        )  # 小订单更容易全部成交
 
-                fill_volume = max(min_fill_volume, int(order.remaining_volume * fill_ratio))
-                # 确保是100的整数倍（A股规则）
-                fill_volume = (fill_volume // 100) * 100
-                # 【修复】不超过剩余量，且不超过市场成交量限制
-                fill_volume = min(fill_volume, order.remaining_volume, max_fill_by_market)
+                    fill_volume = max(min_fill_volume, order.remaining_volume * fill_ratio)
+                    # 按市场规则取整
+                    fill_volume = self._normalize_volume(fill_volume, symbol)
+                    # 不超过剩余量，且不超过市场成交量限制
+                    fill_volume = min(fill_volume, order.remaining_volume, max_fill_by_market)
 
-                can_fill = True
-                fill_price = self._apply_slippage(current_price, order.side)
-                if fill_volume < order.remaining_volume:
-                    Log.logger.info(f"[{time_str}] [撮合] {order_id} {symbol} 市价单部分成交: {order.remaining_volume}->{fill_volume}股 @{fill_price:.4f} (市场成交量限制: {max_fill_by_market})")
-                else:
-                    Log.logger.info(f"[{time_str}] [撮合] {order_id} {symbol} 市价单成交: {fill_volume}股 @{fill_price:.4f}")
+                    can_fill = True
+                    fill_price = self._apply_slippage(current_price, order.side)
+                    if fill_volume < order.remaining_volume:
+                        Log.logger.info(f"[{time_str}] [撮合] {order_id} {symbol} 市价单部分成交: {order.remaining_volume}->{fill_volume}股 @{fill_price:.4f} (市场成交量限制: {max_fill_by_market})")
+                    else:
+                        Log.logger.info(f"[{time_str}] [撮合] {order_id} {symbol} 市价单成交: {fill_volume}股 @{fill_price:.4f}")
             elif order.order_type == OrderType.LIMIT:
                 # 限价单需要判断价格
                 if order.side == Side.BUY and order.price >= current_price:
                     can_fill = True
                     fill_price = min(order.price, current_price)
-                    # 【修复】限价单也受市场成交量限制，移除不合理的按价格计算
-                    fill_volume = min(order.remaining_volume, max_fill_by_market)
-                    fill_volume = (fill_volume // 100) * 100
-                    fill_volume = max(min_fill_volume, fill_volume)
-                    Log.logger.info(f"[{time_str}] [撮合] {order_id} {symbol} 限价买单可成交: {order.price}>={current_price}, 成交{fill_volume}股 (市场成交量限制: {max_fill_by_market})")
+                    if is_daily_freq:
+                        fill_volume = order.remaining_volume
+                    else:
+                        fill_volume = min(order.remaining_volume, max_fill_by_market)
+                        fill_volume = self._normalize_volume(fill_volume, symbol)
+                        fill_volume = max(min_fill_volume, fill_volume)
+                    Log.logger.info(f"[{time_str}] [撮合] {order_id} {symbol} 限价买单可成交: {order.price}>={current_price}, 成交{fill_volume}股")
                 elif order.side == Side.SELL and order.price <= current_price:
                     can_fill = True
                     fill_price = max(order.price, current_price)
-                    # 【修复】限价单也受市场成交量限制
-                    fill_volume = min(order.remaining_volume, max_fill_by_market)
-                    fill_volume = (fill_volume // 100) * 100
-                    fill_volume = max(min_fill_volume, fill_volume)
-                    Log.logger.info(f"[{time_str}] [撮合] {order_id} {symbol} 限价卖单可成交: {order.price}<={current_price}, 成交{fill_volume}股 (市场成交量限制: {max_fill_by_market})")
+                    if is_daily_freq:
+                        fill_volume = order.remaining_volume
+                    else:
+                        fill_volume = min(order.remaining_volume, max_fill_by_market)
+                        fill_volume = self._normalize_volume(fill_volume, symbol)
+                        fill_volume = max(min_fill_volume, fill_volume)
+                    Log.logger.info(f"[{time_str}] [撮合] {order_id} {symbol} 限价卖单可成交: {order.price}<={current_price}, 成交{fill_volume}股")
+                # 开空仓限价单：卖方逻辑（价格低于等于限价时成交）
+                elif order.side == Side.SHORT_OPEN and order.price >= current_price:
+                    can_fill = True
+                    fill_price = min(order.price, current_price)
+                    if is_daily_freq:
+                        fill_volume = order.remaining_volume
+                    else:
+                        fill_volume = min(order.remaining_volume, max_fill_by_market)
+                        fill_volume = self._normalize_volume(fill_volume, symbol)
+                        fill_volume = max(min_fill_volume, fill_volume)
+                    Log.logger.info(f"[{time_str}] [撮合] {order_id} {symbol} 限价开空单可成交: {order.price}>={current_price}, 成交{fill_volume}股")
+                # 平空仓限价单：买方逻辑（价格高于等于限价时成交）
+                elif order.side == Side.SHORT_CLOSE and order.price <= current_price:
+                    can_fill = True
+                    fill_price = max(order.price, current_price)
+                    if is_daily_freq:
+                        fill_volume = order.remaining_volume
+                    else:
+                        fill_volume = min(order.remaining_volume, max_fill_by_market)
+                        fill_volume = self._normalize_volume(fill_volume, symbol)
+                        fill_volume = max(min_fill_volume, fill_volume)
+                    Log.logger.info(f"[{time_str}] [撮合] {order_id} {symbol} 限价平空单可成交: {order.price}<={current_price}, 成交{fill_volume}股")
                 else:
                     Log.logger.debug(f"[{time_str}] 订单 {order_id} 限价单价格不匹配: {order.price} vs {current_price}")
 
@@ -909,8 +1116,8 @@ class TradeCenter:
             # 计算成交金额
             fill_amount = fill_volume * fill_price
 
-            # 计算费用
-            commission = self._calculate_commission(fill_amount, order.side)
+            # 计算费用（传入symbol用于平今判断）
+            commission = self._calculate_commission(fill_amount, order.side, order.symbol)
             tax = self._calculate_tax(fill_amount, order.side)
             total_cost = commission + tax
 
@@ -1029,81 +1236,129 @@ class TradeCenter:
             total_cost: 交易费用（手续费+税费），用于准确计算成本价
 
         Returns:
-            float: 卖出时的成本价（用于盈亏计算），买入时返回0
+            float: 卖出/平仓时的成本价（用于盈亏计算），买入时返回0
         """
         symbol = trade.symbol
         sell_cost_price = 0.0  # 用于记录卖出时的成本价
 
-        if symbol not in self.positions:
-            # 创建新持仓
-            self.positions[symbol] = Position(
-                account_id=trade.account_id,
-                symbol=symbol,
-                position_side=PositionSide.LONG,  # 股票默认多头
-                volume=0,
-                available_volume=0,
-                cost_price=0,
-                market_value=0,
-                unrealized_pnl=0,
-            )
+        # ========== 多头方向：BUY / SELL ==========
+        if trade.side in (Side.BUY, Side.SELL):
+            if symbol not in self.positions:
+                # 创建新持仓
+                self.positions[symbol] = Position(
+                    account_id=trade.account_id,
+                    symbol=symbol,
+                    position_side=PositionSide.LONG,
+                    volume=0,
+                    available_volume=0,
+                    cost_price=0,
+                    market_value=0,
+                    unrealized_pnl=0,
+                )
 
-        position = self.positions[symbol]
+            position = self.positions[symbol]
 
-        if trade.side == Side.BUY:
-            # 买入：增加持仓（成本价计算包含交易费用）
-            old_volume = position.volume
-            old_cost = position.volume * position.cost_price
-            # 新成本 = 成交金额 + 交易费用（费用分摊到每股）
-            new_cost = trade.volume * trade.price + total_cost
+            if trade.side == Side.BUY:
+                # 买入：增加持仓（成本价计算包含交易费用）
+                old_volume = position.volume
+                old_cost = position.volume * position.cost_price
+                # 新成本 = 成交金额 + 交易费用（费用分摊到每股）
+                new_cost = trade.volume * trade.price + total_cost
 
-            Log.logger.info(f"[调试] BUY {symbol}: old_volume={old_volume}, old_cost={old_cost}, "
-                           f"trade.volume={trade.volume}, trade.price={trade.price}, total_cost={total_cost}, "
-                           f"new_cost={new_cost}")
+                Log.logger.debug(f"[调试] BUY {symbol}: old_volume={old_volume}, old_cost={old_cost}, "
+                               f"trade.volume={trade.volume}, trade.price={trade.price}, total_cost={total_cost}, "
+                               f"new_cost={new_cost}")
 
-            position.volume += trade.volume
+                position.volume += trade.volume
 
-            # T+1规则：当日买入的股票冻结，不可用
-            if self.context.get('settings', {}).get('t1_rule', True):
-                # 初始化buy_dates（如果不存在）
-                if not hasattr(position, 'buy_dates'):
-                    position.buy_dates = []
-                # 记录买入日期时间，用于T+1解锁
-                current_time = self.context.get('current_dt')
-                position.buy_dates.append((current_time, trade.volume))
-                # T+1规则下，新买入的股票不可用，available_volume 不变
-                # 但如果是新持仓（old_volume=0），需要确保 available_volume 初始化为0
-                if old_volume == 0:
-                    position.available_volume = 0
-                # 注意：frozen_volume 是计算属性 (volume - available_volume)，不需要直接设置
-            else:
-                # 非T+1市场（如美股、期货），买入立即可用
+                # T+1规则：根据市场adapter判断
+                if self._is_t_plus_one():
+                    if not hasattr(position, 'buy_dates'):
+                        position.buy_dates = []
+                    current_time = self.context.get('current_dt')
+                    position.buy_dates.append((current_time, trade.volume))
+                    if old_volume == 0:
+                        position.available_volume = 0
+                else:
+                    # 非T+1市场（期货、加密货币），买入立即可用
+                    position.available_volume += trade.volume
+
+                # 计算新的加权平均成本价
+                if position.volume > 0:
+                    position.cost_price = (old_cost + new_cost) / position.volume
+                else:
+                    position.cost_price = 0
+
+            elif trade.side == Side.SELL:
+                # 卖出：减少持仓
+                sell_cost_price = position.cost_price
+
+                position.volume -= trade.volume
+                position.available_volume -= trade.volume
+
+                # 如果持仓为0，移除持仓记录
+                if position.volume <= 0:
+                    del self.positions[symbol]
+                    return sell_cost_price
+
+            # 更新持仓市值
+            if symbol in self.positions and position.volume > 0:
+                position.market_value = position.volume * trade.price
+                position.unrealized_pnl = (trade.price - position.cost_price) * position.volume
+                position.last_price = trade.price
+
+        # ========== 空头方向：SHORT_OPEN / SHORT_CLOSE ==========
+        elif trade.side in (Side.SHORT_OPEN, Side.SHORT_CLOSE):
+            short_key = f"{symbol}_SHORT"
+
+            if short_key not in self.positions:
+                self.positions[short_key] = Position(
+                    account_id=trade.account_id,
+                    symbol=symbol,
+                    position_side=PositionSide.SHORT,
+                    volume=0,
+                    available_volume=0,
+                    cost_price=0,
+                    market_value=0,
+                    unrealized_pnl=0,
+                )
+
+            position = self.positions[short_key]
+
+            if trade.side == Side.SHORT_OPEN:
+                # 开空：增加空头持仓
+                old_volume = position.volume
+                old_cost = position.volume * position.cost_price
+                new_cost = trade.volume * trade.price
+
+                position.volume += trade.volume
+                # 期货/加密货币T+0，立即可用
                 position.available_volume += trade.volume
 
-            # 计算新的加权平均成本价
-            if position.volume > 0:
-                position.cost_price = (old_cost + new_cost) / position.volume
-                Log.logger.info(f"[调试] BUY {symbol}: 成本价计算 ({old_cost} + {new_cost}) / {position.volume} = {position.cost_price:.4f}")
-            else:
-                position.cost_price = 0
-                Log.logger.warning(f"[调试] BUY {symbol}: 持仓量为0，成本价设为0")
-        else:
-            # 卖出：减少持仓
-            # 记录卖出前的成本价（用于盈亏计算）
-            sell_cost_price = position.cost_price
+                if position.volume > 0:
+                    position.cost_price = (old_cost + new_cost) / position.volume
 
-            position.volume -= trade.volume
-            position.available_volume -= trade.volume
+                Log.logger.info(f"[开空] {symbol}: volume={old_volume}->{position.volume}, cost_price={position.cost_price:.4f}")
 
-            # 如果持仓为0，移除持仓记录
-            if position.volume <= 0:
-                del self.positions[symbol]
-                return sell_cost_price
+            elif trade.side == Side.SHORT_CLOSE:
+                # 平空：减少空头持仓
+                sell_cost_price = position.cost_price  # 这里是开空均价
 
-        # 更新持仓市值
-        if position.volume > 0:
-            position.market_value = position.volume * trade.price
-            position.unrealized_pnl = (trade.price - position.cost_price) * position.volume
-            position.last_price = trade.price
+                position.volume -= trade.volume
+                position.available_volume -= trade.volume
+
+                Log.logger.info(f"[平空] {symbol}: volume -> {position.volume}, cost_price={position.cost_price:.4f}")
+
+                if position.volume <= 0:
+                    del self.positions[short_key]
+                    return sell_cost_price
+
+            # 更新空头持仓市值和盈亏
+            if short_key in self.positions and position.volume > 0:
+                position.market_value = position.volume * trade.price
+                # 空头：价格下跌盈利
+                position.unrealized_pnl = (position.cost_price - trade.price) * position.volume
+                position.last_price = trade.price
 
         return sell_cost_price
         
@@ -1119,13 +1374,24 @@ class TradeCenter:
             # 买入：减少现金，增加持仓市值
             self.account.cash_available -= (trade.amount + total_cost)
             self.account.market_value += trade.amount
-        else:
+        elif trade.side == Side.SELL:
             # 卖出：增加现金，减少持仓市值
             self.account.cash_available += (trade.amount - total_cost)
             self.account.market_value -= trade.amount
             # 使用传入的成本价计算已实现盈亏（修正Bug：避免持仓删除后获取不到成本价）
             cost_price = sell_cost_price if sell_cost_price > 0 else self._get_cost_price(trade.symbol)
             realized_pnl = (trade.price - cost_price) * trade.volume - total_cost
+            self.account.pnl_realized += realized_pnl
+        elif trade.side == Side.SHORT_OPEN:
+            # 开空：冻结资金作为保证金（简化为全额）
+            self.account.cash_available -= (trade.amount + total_cost)
+            self.account.market_value += trade.amount
+        elif trade.side == Side.SHORT_CLOSE:
+            # 平空：释放资金，计算盈亏（空头：价格下跌盈利）
+            self.account.cash_available += (trade.amount - total_cost)
+            self.account.market_value -= trade.amount
+            cost_price = sell_cost_price if sell_cost_price > 0 else self._get_cost_price(trade.symbol + "_SHORT")
+            realized_pnl = (cost_price - trade.price) * trade.volume - total_cost
             self.account.pnl_realized += realized_pnl
 
         # 更新总资产
@@ -1296,8 +1562,12 @@ class BacktestEngine:
         self.event_center = event_center
         self.event_bus = event_bus
 
-        # 初始化交易中心
-        self.trade_center = TradeCenter(context, data_center=data_center)
+        # 初始化交易中心 - 注入market_adapter实现市场规则委托
+        market_name = context.get('settings', {}).get('market', 'cn_stock')
+        market_adapter = None
+        if self.event_center and hasattr(self.event_center, 'market_adapters'):
+            market_adapter = self.event_center.market_adapters.get(market_name)
+        self.trade_center = TradeCenter(context, market_adapter=market_adapter, data_center=data_center)
 
         # 智能加速跳过追踪（用于合并日志）
         self._skip_total_minutes = 0.0
@@ -1410,16 +1680,14 @@ class BacktestEngine:
                 # 对于日线数据，批量获取
                 quote_df = self.data_center.get_quotes(symbols_list, freq=freq, time=current_time, fields=['close'])
                 if not quote_df.empty:
-                    for symbol in symbols_list:
-                        if symbol in quote_df.index:
-                            market_data[symbol] = quote_df.loc[symbol].to_dict()
+                    market_data = _match_quote_symbols(quote_df, symbols_list)
 
             # 执行撮合
             self.trade_center.try_match_orders_sync(market_data)
 
         except Exception as e:
             Log.logger.error(f"撮合过程中发生错误: {e}")
-            
+
     async def _handle_on_time(self, event):
         """处理定时任务事件"""
         try:
@@ -1484,9 +1752,7 @@ class BacktestEngine:
                     # 日线数据批量获取
                     quote_df = self.data_center.get_quotes(symbols_list, freq=freq, time=current_time, fields=['close'])
                     if not quote_df.empty:
-                        for symbol in symbols_list:
-                            if symbol in quote_df.index:
-                                market_data[symbol] = quote_df.loc[symbol].to_dict()
+                        market_data = _match_quote_symbols(quote_df, symbols_list)
                 else:
                     # 分钟线数据
                     from datetime import timedelta
@@ -1924,16 +2190,22 @@ class BacktestEngine:
                 
                 # 计算数量
                 volume = amount / price
-                
-                # A股特殊规则：买入必须是100股的整数倍
-                if self.context['settings']['market'] == 'cn_stock' and side.lower() == 'buy':
-                    volume = int(volume / 100) * 100  # 向下取整到100的倍数
+
+                # 按市场规则取整（委托给trade_center的_normalize_volume）
+                lot_size = self.trade_center._get_lot_size(security)
+                if lot_size > 0 and side.lower() == 'buy':
+                    volume = int(volume / lot_size) * lot_size
                     if volume <= 0:
-                        volume = 100  # 至少买入100股
-                
+                        volume = lot_size  # 至少买入1手
+
                 # 转换订单类型
                 from finhack.trader.backtest.models.enums import Side
                 order_side = Side.BUY if side.lower() == "buy" else Side.SELL
+                # 支持做空方向
+                if side.lower() == "short_open":
+                    order_side = Side.SHORT_OPEN
+                elif side.lower() == "short_close":
+                    order_side = Side.SHORT_CLOSE
                 
                 # 调用TradeCenter下单（同步版本）
                 import asyncio
@@ -1983,16 +2255,22 @@ class BacktestEngine:
                     return None
                 
                 price = quote_df.loc[security, 'close']
-                
-                # A股特殊规则：买入必须是100股的整数倍
-                if self.context['settings']['market'] == 'cn_stock' and side.lower() == 'buy':
-                    volume = int(volume / 100) * 100  # 向下取整到100的倍数
+
+                # 按市场规则取整（委托给trade_center的_normalize_volume）
+                lot_size = self.trade_center._get_lot_size(security)
+                if lot_size > 0 and side.lower() == 'buy':
+                    volume = int(volume / lot_size) * lot_size
                     if volume <= 0:
-                        volume = 100  # 至少买入100股
-                
+                        volume = lot_size
+
                 # 转换订单类型
                 from finhack.trader.backtest.models.enums import Side
                 order_side = Side.BUY if side.lower() == "buy" else Side.SELL
+                # 支持做空方向
+                if side.lower() == "short_open":
+                    order_side = Side.SHORT_OPEN
+                elif side.lower() == "short_close":
+                    order_side = Side.SHORT_CLOSE
                 
                 # 调用TradeCenter下单（同步版本）
                 import asyncio
@@ -2321,9 +2599,7 @@ class BacktestEngine:
                     # 日线数据批量获取
                     quote_df = self.data_center.get_quotes(symbols_list, freq=freq, time=current_time, fields=['close'])
                     if not quote_df.empty:
-                        for symbol in symbols_list:
-                            if symbol in quote_df.index:
-                                market_data[symbol] = quote_df.loc[symbol].to_dict()
+                        market_data = _match_quote_symbols(quote_df, symbols_list)
                 else:
                     # 分钟线数据
                     start_time = current_time - timedelta(minutes=5)
@@ -2431,9 +2707,7 @@ class BacktestEngine:
                 # 对于日线数据，批量获取
                 quote_df = self.data_center.get_quotes(symbols_list, freq=freq, time=current_time, fields=['close'])
                 if not quote_df.empty:
-                    for symbol in symbols_list:
-                        if symbol in quote_df.index:
-                            market_data[symbol] = quote_df.loc[symbol].to_dict()
+                    market_data = _match_quote_symbols(quote_df, symbols_list)
 
             # 执行撮合
             Log.logger.info(f"[{time_str}] [TRY_MATCH] 获取到市场数据: {len(market_data)}个标的, 数据内容: {list(market_data.items())[:3]}...")
@@ -2459,30 +2733,74 @@ class BacktestEngine:
         try:
             current_time = self.context['current_dt']
             Log.logger.info(f"处理日终事件: {current_time}")
-            
+
+            freq = self.context['settings']['freq']
+
+            # 撤销所有未成交的市场订单（1d模式下MARKET_END事件不存在，需在此处理）
+            cancelled_count = 0
+            for order_id, order in list(self.trade_center.active_orders.items()):
+                if order.order_type == OrderType.MARKET and order.status in [OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED]:
+                    order.status = OrderStatus.CANCELLED
+                    order.rejected_reason = "收盘时未成交自动撤销"
+                    del self.trade_center.active_orders[order_id]
+                    cancelled_count += 1
+            if cancelled_count > 0:
+                Log.logger.info(f"[日终] 撤销{cancelled_count}个未成交的市场订单")
+
             # 更新所有持仓的市值
             market = self.context['settings']['market']
-            freq = self.context['settings']['freq']
             
-            # 获取所有持仓的标的
-            symbols = list(self.trade_center.positions.keys())
-            if symbols:
+            # 获取所有持仓的标的（需要分离多头和空头）
+            # 空头仓的symbol如 IF2401.CFFEX_SHORT，需要提取base code来查行情
+            position_keys = list(self.trade_center.positions.keys())
+            quote_symbols = []
+            for pos_key in position_keys:
+                if pos_key.endswith('_SHORT'):
+                    quote_symbols.append(pos_key[:-6])  # 去掉 _SHORT 后缀
+                else:
+                    quote_symbols.append(pos_key)
+
+            if quote_symbols:
                 try:
-                    # 获取最新价格
-                    quote_df = self.data_center.get_quotes(symbols, freq, current_time)
+                    # 获取最新价格（get_quotes 已内置向前回溯逻辑）
+                    quote_df = self.data_center.get_quotes(quote_symbols, freq, current_time)
                     if not quote_df.empty:
-                        for symbol in symbols:
-                            if symbol in quote_df.index:
-                                latest_price = quote_df.loc[symbol, 'close']
-                                position = self.trade_center.positions[symbol]
-                                position.last_price = latest_price
-                                # 更新持仓市值
-                                position.market_value = position.volume * latest_price
+                        matched = _match_quote_symbols(quote_df, quote_symbols)
+                    else:
+                        matched = {}
+
+                    for pos_key in position_keys:
+                        # 确定用于查行情的symbol
+                        if pos_key.endswith('_SHORT'):
+                            quote_key = pos_key[:-6]
+                        else:
+                            quote_key = pos_key
+
+                        position = self.trade_center.positions[pos_key]
+
+                        # 获取最新价格，三级fallback：报价数据 → last_price → cost_price
+                        if quote_key in matched:
+                            latest_price = matched[quote_key]['close']
+                            # 防御性检查：价格为0或异常
+                            if latest_price <= 0:
+                                Log.logger.warning(f"[日终] {quote_key} 价格异常({latest_price})，使用fallback")
+                                latest_price = getattr(position, 'last_price', None) or position.cost_price
+                        else:
+                            # 报价数据缺失，使用上一次价格或成本价
+                            latest_price = getattr(position, 'last_price', None) or position.cost_price
+                            Log.logger.debug(f"[日终] {quote_key} 无报价数据，使用{'last_price' if hasattr(position, 'last_price') and position.last_price else 'cost_price'}: {latest_price:.4f}")
+
+                        if latest_price and latest_price > 0:
+                            position.last_price = latest_price
+                            position.market_value = position.volume * latest_price
+                            if hasattr(position, 'position_side') and position.position_side == PositionSide.SHORT:
+                                position.unrealized_pnl = (position.cost_price - latest_price) * position.volume
+                            else:
                                 position.unrealized_pnl = (latest_price - position.cost_price) * position.volume
-                                Log.logger.debug(f"更新持仓市值: {symbol} 数量:{position.volume} 价格:{latest_price} 市值:{position.market_value}")
+                            Log.logger.debug(f"更新持仓市值: {pos_key} 数量:{position.volume} 价格:{latest_price} 市值:{position.market_value}")
                 except Exception as e:
                     Log.logger.warning(f"更新持仓市值失败: {e}")
-                
+
             # 更新账户价值
             self.trade_center._update_account_value()
             
@@ -2522,10 +2840,12 @@ class BacktestEngine:
             current_time = self.context['current_dt']
             current_date = current_time.date()
 
-            Log.logger.debug(f"[盘前事件] {current_date} 盘前准备完成")
+            Log.logger.info(f"[盘前事件] {current_date} 盘前准备 - 当前账户: 现金={self.trade_center.account.cash_available:.2f}, "
+                           f"持仓市值={sum(p.market_value for p in self.trade_center.positions.values()):.2f}, "
+                           f"持仓数={len(self.trade_center.positions)}")
 
-            # T+1规则：日始时解冻昨日买入的持仓
-            if self.context.get('settings', {}).get('t1_rule', True):
+            # T+1规则：日始时解冻昨日买入的持仓（仅限T+1市场）
+            if self.trade_center._is_t_plus_one():
                 for symbol, position in self.trade_center.positions.items():
                     if hasattr(position, 'buy_dates') and position.buy_dates:
                         # 解冻昨日及之前买入的持仓
@@ -2545,16 +2865,34 @@ class BacktestEngine:
                             position.buy_dates = remaining_buy_dates
                             Log.logger.info(f"[T+1解冻] {symbol}: 解冻{newly_available}股, 可用{position.available_volume}股, 冻结{position.frozen_volume}股")
 
-            # 更新持仓市值
-            for symbol, position in self.trade_center.positions.items():
+            # 更新持仓市值（使用上一交易日收盘价，因为当前日收盘价在盘前还不可用）
+            freq = self.context.get('settings', {}).get('freq', '1d')
+            previous_date = self.context.get('previous_date')
+            for pos_key, position in self.trade_center.positions.items():
                 try:
-                    quote = self.data_center.get_quotes([symbol], '1d', current_time)
-                    if not quote.empty and symbol in quote.index:
-                        current_price = quote.loc[symbol, 'close']
+                    # 空头仓的key如 IF2401.CFFEX_SHORT，需要提取base code查行情
+                    quote_symbol = pos_key[:-6] if pos_key.endswith('_SHORT') else pos_key
+                    # 盘前时刻，使用上一交易日收盘价更新市值（get_quotes已内置向前回溯）
+                    quote = self.data_center.get_quotes([quote_symbol], freq, current_time)
+                    if not quote.empty and quote_symbol in quote.index:
+                        current_price = quote.loc[quote_symbol, 'close']
+                        # 防御性检查：价格为0或异常
+                        if current_price <= 0:
+                            Log.logger.warning(f"[盘前] {quote_symbol} 价格异常({current_price})，使用fallback")
+                            current_price = getattr(position, 'last_price', None) or position.cost_price
+                    else:
+                        # 报价数据缺失（停牌等），使用上一次价格或成本价
+                        current_price = getattr(position, 'last_price', None) or position.cost_price
+                        Log.logger.debug(f"[盘前] {quote_symbol} 无报价数据，使用fallback价格: {current_price:.4f}")
+
+                    if current_price and current_price > 0:
                         position.market_value = position.volume * current_price
-                        position.unrealized_pnl = (current_price - position.cost_price) * position.volume
+                        if hasattr(position, 'position_side') and position.position_side == PositionSide.SHORT:
+                            position.unrealized_pnl = (position.cost_price - current_price) * position.volume
+                        else:
+                            position.unrealized_pnl = (current_price - position.cost_price) * position.volume
                 except Exception as e:
-                    Log.logger.warning(f"更新{symbol}持仓市值失败: {e}")
+                    Log.logger.warning(f"更新{pos_key}持仓市值失败: {e}")
 
             # 更新账户总资产
             self.trade_center._update_account_value()
@@ -2850,18 +3188,49 @@ class BacktestEngine:
         # 月度/季度统计摘要
         Log.logger.info("-" * 80)
         Log.logger.info("【收益分布统计】")
-        returns_array = np.diff([h.get('total_assets', 0) for h in daily_history]) / \
-                       np.array([h.get('total_assets', 1) for h in daily_history[:-1]])
-        positive_days = len([r for r in returns_array if r > 0])
-        negative_days = len([r for r in returns_array if r < 0])
-        zero_days = len(returns_array) - positive_days - negative_days
-        Log.logger.info(f"盈利天数: {positive_days} ({positive_days/len(returns_array):.1%})")
-        Log.logger.info(f"亏损天数: {negative_days} ({negative_days/len(returns_array):.1%})")
-        Log.logger.info(f"持平天数: {zero_days} ({zero_days/len(returns_array):.1%})")
+        # 使用已计算好的returns（与_calculate_performance_sync一致），而非独立重算
+        returns_array = cumulative_returns_pct = None
+        if len(daily_history) > 1:
+            # 复用已有的收益率计算逻辑（与_calculate_performance_sync一致）
+            returns_list = []
+            for i in range(1, len(daily_history)):
+                prev_value = daily_history[i-1].get('total_assets', 0)
+                curr_value = daily_history[i].get('total_assets', 0)
+                if prev_value > 0:
+                    returns_list.append((curr_value - prev_value) / prev_value)
+                else:
+                    returns_list.append(0.0)
+            returns_array = np.array(returns_list)
 
-        if len(returns_array) > 0:
-            Log.logger.info(f"最大单日盈利: {np.max(returns_array):.2%}")
-            Log.logger.info(f"最大单日亏损: {np.min(returns_array):.2%}")
+        if returns_array is not None and len(returns_array) > 0:
+            positive_days = len([r for r in returns_array if r > 0])
+            negative_days = len([r for r in returns_array if r < 0])
+            zero_days = len(returns_array) - positive_days - negative_days
+            Log.logger.info(f"盈利天数: {positive_days} ({positive_days/len(returns_array):.1%})")
+            Log.logger.info(f"亏损天数: {negative_days} ({negative_days/len(returns_array):.1%})")
+            Log.logger.info(f"持平天数: {zero_days} ({zero_days/len(returns_array):.1%})")
+
+            max_daily_return = float(np.max(returns_array))
+            min_daily_return = float(np.min(returns_array))
+            Log.logger.info(f"最大单日盈利: {max_daily_return:.2%}")
+            Log.logger.info(f"最大单日亏损: {min_daily_return:.2%}")
+
+            # 异常值告警：A股涨跌停10%，超过20%基本不可能
+            abnormal_threshold = 0.20
+            abnormal_days = [(i, returns_array[i]) for i in range(len(returns_array))
+                           if abs(returns_array[i]) > abnormal_threshold]
+            if abnormal_days:
+                Log.logger.warning(f"【异常收益率告警】共{len(abnormal_days)}天收益率超过±{abnormal_threshold:.0%}：")
+                for idx, ret in abnormal_days[:10]:  # 最多显示10条
+                    date = daily_history[idx + 1].get('date', 'N/A')
+                    prev_assets = daily_history[idx].get('total_assets', 0)
+                    curr_assets = daily_history[idx + 1].get('total_assets', 0)
+                    Log.logger.warning(f"  {date}: {ret:.2%} "
+                                     f"(前日资产={prev_assets:,.2f} → 当日={curr_assets:,.2f})")
+                if len(abnormal_days) > 10:
+                    Log.logger.warning(f"  ... 还有{len(abnormal_days) - 10}天异常")
+        else:
+            Log.logger.warning("数据不足，无法计算收益分布")
 
         Log.logger.info("=" * 80)
 

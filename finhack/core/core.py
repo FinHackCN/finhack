@@ -64,9 +64,9 @@ class Core:
     def append_args(self):
         sys.path.append(self.project_path)
         sys.path.append(self.project_path+'/data/cache/')
-        from finhack.library.config import Config 
+        from finhack.library.config import Config
 
-        
+
         #待添加的args列表
         args_list={
 
@@ -75,11 +75,6 @@ class Core:
         #读取args文件下所有分区
         my_args_group_list=Config.get_section_list('args')
         args, unknown = self.parser.parse_known_args()
-
-        # 调试：打印unknown参数
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.info(f"[DEBUG] unknown参数列表: {unknown}")
 
         # 处理命令行传递的额外参数（支持 key=value 格式）
         # 保存命令行参数，用于后续覆盖配置文件参数
@@ -90,6 +85,10 @@ class Core:
                 # 移除开头的 --（如果有）
                 key = key.lstrip('-')
                 cmdline_args[key] = value
+
+        print(f"[append_args] sys.argv={sys.argv}", flush=True)
+        print(f"[append_args] unknown={unknown}", flush=True)
+        print(f"[append_args] cmdline_args={cmdline_args}", flush=True)
 
         #[global]
         for my_args_group in my_args_group_list:
@@ -143,11 +142,10 @@ class Core:
         for key, value in cmdline_args.items():
             args_list[key] = value
 
-        # 调试：打印命令行参数
-        if cmdline_args:
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.info(f"[命令行参数] 检测到 {len(cmdline_args)} 个命令行参数: {cmdline_args}")
+        # 调试：args_list中freq/cash/strategy的值
+        for debug_key in ['freq', 'cash', 'strategy', 'market']:
+            if debug_key in args_list:
+                print(f"[append_args] args_list['{debug_key}']={args_list[debug_key]}", flush=True)
 
 
         for arg,default in args_list.items():
@@ -159,14 +157,17 @@ class Core:
         # 因为parse_args只处理--key value格式，不处理key=value格式
         for key, value in cmdline_args.items():
             setattr(args, key, value)
-            if cmdline_args:
-                import logging
-                logger = logging.getLogger(__name__)
-                logger.info(f"[命令行参数] 设置 {key}={value}")
+
+        # 将cmdline_args存储到args对象中，供下游代码直接使用
+        args._cmdline_args = cmdline_args
+
+        # 调试：最终args值
+        for debug_key in ['freq', 'cash', 'strategy']:
+            print(f"[append_args] 最终 args.{debug_key}={getattr(args, debug_key, 'NOT_SET')}", flush=True)
 
         self.args=args
-        
-        import runtime.global_var as global_var 
+
+        import runtime.global_var as global_var
         global_var.args=args
         
         
@@ -267,10 +268,11 @@ class Core:
         return parser
         
     
-    #生成参数
+    #重新解析参数（动态注册了新的--key参数后需要重新解析）
     def parse_args(self):
-        # args已在generate_args中解析，这里直接返回
-        return self.args
+        args, unknown = self.parser.parse_known_args()
+        self.args = args
+        return args
 
     def _show_full_help(self):
         """显示完整的帮助信息"""

@@ -263,6 +263,10 @@ class CnFundMarketAdapter(BaseMarket):
         Returns:
             List[BaseEvent]: 事件列表
         """
+        # 确保trade_date是date类型（调用方可能传入datetime）
+        if isinstance(trade_date, datetime):
+            trade_date = trade_date.date()
+
         events = []
 
         if frequency == '1d':
@@ -287,7 +291,9 @@ class CnFundMarketAdapter(BaseMarket):
         09:00 DAY_START              每日开始
         09:00 BEFORE_MARKET          盘前准备
         09:25 OPENING_PRICE_DETERMINED 开盘价确定
-        09:25 TRY_MATCH              开盘集合竞价撮合 ← 可交易
+        09:25 TRY_MATCH              开盘集合竞价撮合 ← 可交易（匹配盘前挂单）
+        09:30 MARKET_START           开盘（连续竞价开始）
+        09:30 TRY_MATCH              开盘撮合 ← 可交易（匹配策略09:30下单）
         -- 盘中无事件 --
         14:57 CLOSING_START          收盘集合竞价开始
         15:00 CLOSING_PRICE_DETERMINED 收盘价确定
@@ -364,6 +370,24 @@ class CnFundMarketAdapter(BaseMarket):
             event_description="开盘集合竞价撮合"
         ))
 
+        # 6.5 开盘（连续竞价开始，策略run_daily(09:30)的下单在此撮合）
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.MARKET_START,
+            event_time=datetime.combine(trade_date, time(9, 30)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="开盘"
+        ))
+
+        # 6.6 开盘撮合 ← 策略09:30下的单在此成交
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.TRY_MATCH,
+            event_time=datetime.combine(trade_date, time(9, 30)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="开盘撮合"
+        ))
+
         # -- 盘中无事件 --
 
         # 7. 收盘集合竞价开始
@@ -404,6 +428,15 @@ class CnFundMarketAdapter(BaseMarket):
                 frequency='1d',
                 event_description="收盘集合竞价结束"
             ))
+
+        # 10.5 日线K线收盘事件
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.DAILY_BAR_CLOSED,
+            event_time=datetime.combine(trade_date, time(15, 0)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="日线K线收盘"
+        ))
 
         # 11. 盘后处理
         events.append(MarketEvent(
