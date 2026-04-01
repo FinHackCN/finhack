@@ -69,8 +69,15 @@ def _normalize_future_code(code: str) -> str:
     Returns:
         带有交易所后缀的标准化代码，如 'IF2401.CCFX'
     """
-    # 如果已经有后缀，直接返回
+    # 如果已经有后缀，需要统一格式（reference文件中可能用.CFX，数据文件用.CCFX）
     if '.' in code:
+        # 从带后缀的代码中提取品种前缀，重新匹配标准后缀
+        base = code.split('.')[0]
+        for prefix in sorted(_FUTURE_CODE_EXCHANGE_MAP.keys(), key=len, reverse=True):
+            if base.startswith(prefix):
+                exchange_suffix = _FUTURE_CODE_EXCHANGE_MAP[prefix]
+                return f"{base}.{exchange_suffix}"
+        # 如果无法识别前缀，保留原样
         return code
 
     # 提取品种代码前缀
@@ -333,6 +340,13 @@ class DataCenter:
                 logger.error(f"获取 {market} 股票列表失败: {e}")
                 return
 
+        # 对期货市场代码进行标准化（reference文件中可能用.CFX，数据文件用交易所全称后缀）
+        if market == 'cn_future':
+            universe = [_normalize_future_code(code) for code in universe]
+            # 去重
+            universe = list(dict.fromkeys(universe))
+            logger.debug(f"[预加载] 期货代码标准化后: {len(universe)} 只")
+
         import time
         start_time = time.time()
         logger.info(f"[预加载] 开始预加载 {market} {month_key} 的{frequency}数据，股票数量: {len(universe)}")
@@ -383,7 +397,22 @@ class DataCenter:
                         df['time'] = df['time'].dt.tz_localize(None)
 
                     # 先按code过滤（快速过滤）
-                    df = df[df['code'].isin(universe)]
+                    if market == 'cn_future':
+                        # 期货：按base code（去掉交易所后缀）匹配，因为不同年份后缀不同
+                        base_codes = set(c.split('.')[0] if '.' in c else c for c in universe)
+                        df['_base'] = df['code'].str.split('.').str[0]
+                        df = df[df['_base'].isin(base_codes)]
+                        # 将code统一为查询时的格式
+                        code_map = {}
+                        for c in universe:
+                            base = c.split('.')[0] if '.' in c else c
+                            code_map[base] = c
+                        df['code'] = df['code'].apply(
+                            lambda x: code_map.get(x.split('.')[0] if '.' in x else x, x)
+                        )
+                        df = df.drop(columns=['_base'])
+                    else:
+                        df = df[df['code'].isin(universe)]
                     logger.info(f"[预加载] 代码过滤后: {len(df):,}行")
 
                     # 再按时间过滤
@@ -921,18 +950,37 @@ class DataCenter:
             # 如果指定了universe，检查parquet包含的股票数量
             if universe:
                 parquet_codes = set(df['code'].unique())
-                universe_set = set(universe)
-                missing_codes = universe_set - parquet_codes
 
-                # 如果parquet缺少超过50%的股票，回退到CSV加载
-                if len(missing_codes) > len(universe) * 0.5:
-                    logger.warning(f"[预加载] {year}年日线Parquet数据不完整（{len(parquet_codes)}/{len(universe)}只股票），回退到CSV加载")
-                    print(f"[预加载] Parquet数据不完整，使用CSV加载...", flush=True)
-                    self._load_year_daily_from_csv(market, year, universe, start_time)
-                    return
+                if market == 'cn_future':
+                    # 期货：按base code比较
+                    base_universe = set(c.split('.')[0] if '.' in c else c for c in universe)
+                    base_parquet = set(c.split('.')[0] if '.' in c else c for c in parquet_codes)
+                    missing_ratio = len(base_universe - base_parquet) / max(len(base_universe), 1)
 
-                # 按代码过滤
-                df = df[df['code'].isin(universe)]
+                    if missing_ratio > 0.5:
+                        logger.warning(f"[预加载] {year}年日线Parquet数据不完整（{len(base_parquet & base_universe)}/{len(base_universe)}），回退到CSV加载")
+                        self._load_year_daily_from_csv(market, year, universe, start_time)
+                        return
+
+                    # 按base code过滤并统一code格式
+                    df['_base'] = df['code'].str.split('.').str[0]
+                    df = df[df['_base'].isin(base_universe)]
+                    code_map = {}
+                    for c in universe:
+                        base = c.split('.')[0] if '.' in c else c
+                        code_map[base] = c
+                    df['code'] = df['code'].apply(
+                        lambda x: code_map.get(x.split('.')[0] if '.' in x else x, x)
+                    )
+                    df = df.drop(columns=['_base'])
+                else:
+                    universe_set = set(universe)
+                    missing_codes = universe_set - parquet_codes
+                    if len(missing_codes) > len(universe) * 0.5:
+                        logger.warning(f"[预加载] {year}年日线Parquet数据不完整（{len(parquet_codes)}/{len(universe)}），回退到CSV加载")
+                        self._load_year_daily_from_csv(market, year, universe, start_time)
+                        return
+                    df = df[df['code'].isin(universe)]
                 logger.info(f"[预加载] 日线代码过滤后: {len(df):,}行")
             else:
                 logger.info(f"[预加载] 未指定universe，加载全市场日线数据: {len(df):,}行")
@@ -1184,7 +1232,22 @@ class DataCenter:
             # 代码过滤
             if universe:
                 before_filter = len(df)
-                df = df[df['code'].isin(universe)]
+                if market == 'cn_future':
+                    # 期货：按base code匹配
+                    base_codes = set(c.split('.')[0] if '.' in c else c for c in universe)
+                    df['_base'] = df['code'].str.split('.').str[0]
+                    df = df[df['_base'].isin(base_codes)]
+                    # 统一code格式
+                    code_map = {}
+                    for c in universe:
+                        base = c.split('.')[0] if '.' in c else c
+                        code_map[base] = c
+                    df['code'] = df['code'].apply(
+                        lambda x: code_map.get(x.split('.')[0] if '.' in x else x, x)
+                    )
+                    df = df.drop(columns=['_base'])
+                else:
+                    df = df[df['code'].isin(universe)]
                 if len(df) < before_filter:
                     logger.info(f"[预加载] 代码过滤: {before_filter:,} -> {len(df):,}行")
 
@@ -1520,13 +1583,23 @@ class DataCenter:
                     self.kline_cache[cache_key] = month_df
 
             # 过滤股票代码和时间范围
-            # 对于期货市场，需要标准化代码（添加交易所后缀）
+            # 对于期货市场，使用base code匹配（去掉交易所后缀）
             if market == 'cn_future':
-                normalized_codes = [_normalize_future_code(code) for code in codes]
-                logger.debug(f"[缓存查询] 期货代码标准化: {codes} -> {normalized_codes}")
+                base_codes = set(c.split('.')[0] if '.' in c else c for c in codes)
+                cache_base = month_df.index.get_level_values('code').str.split('.').str[0]
+                month_df = month_df[cache_base.isin(base_codes)]
+                # 统一code格式：reset_index → map → set_index 避免set_levels的内部codes不一致问题
+                code_map = {}
+                for c in codes:
+                    base = c.split('.')[0] if '.' in c else c
+                    code_map[base] = c
+                month_df = month_df.reset_index()
+                month_df['code'] = month_df['code'].apply(
+                    lambda c: code_map.get(c.split('.')[0] if '.' in c else c, c)
+                )
+                month_df = month_df.set_index(['time', 'code'])
             else:
-                normalized_codes = codes
-            month_df = month_df[month_df.index.get_level_values('code').isin(normalized_codes)]
+                month_df = month_df[month_df.index.get_level_values('code').isin(codes)]
 
             # 获取该月的起始和结束时间
             month_start = current.replace(day=1, hour=0, minute=0, second=0)
@@ -1618,8 +1691,14 @@ class DataCenter:
             return filtered
 
         # 缓存未命中，使用统一数据接口获取K线数据
+        # 对期货代码进行标准化（添加交易所后缀），确保与数据文件名匹配
+        query_codes = codes
+        if market == 'cn_future':
+            query_codes = [_normalize_future_code(code) if isinstance(code, str) else code for code in codes]
+            logger.debug(f"[DataCenter] 期货代码标准化: {codes[:3]} -> {query_codes[:3]}")
+
         result = self.data_interface.get_klines(
-            codes=codes,
+            codes=query_codes,
             market=market,
             freq=freq,
             start_date=start_time,

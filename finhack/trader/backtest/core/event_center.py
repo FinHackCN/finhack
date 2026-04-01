@@ -354,7 +354,7 @@ class EventCenter:
                 reference_time = datetime.strptime(reference_time_str, '%H:%M:%S').time()
             except ValueError:
                 reference_time = datetime.strptime(reference_time_str, '%H:%M').time()
-            
+
             # 解析频率
             if frequency_str.endswith('m'):
                 interval_minutes = int(frequency_str[:-1])
@@ -362,6 +362,18 @@ class EventCenter:
             elif frequency_str.endswith('h'):
                 interval_hours = int(frequency_str[:-1])
                 times = self._generate_interval_times(trade_date, reference_time, interval_hours, 'hour')
+
+        elif rule_type == 'monthly':
+            # 每月任务：检查日期
+            monthday = rule.get('monthday', 1)  # 每月第几天
+            task_time_str = rule.get('time', '14:50:00')
+            try:
+                task_time = datetime.strptime(task_time_str, '%H:%M:%S').time()
+            except ValueError:
+                task_time = datetime.strptime(task_time_str, '%H:%M').time()
+
+            if trade_date.day == monthday:
+                times.append(datetime.combine(trade_date, task_time))
         
         return times
     

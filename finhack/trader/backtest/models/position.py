@@ -203,6 +203,16 @@ class Position:
         self.last_price = value
 
     @property
+    def current_price(self) -> float:
+        """兼容字段：当前价格（同 last_price）"""
+        return self.last_price
+
+    @current_price.setter
+    def current_price(self, value: float):
+        """设置当前价格（同时更新 last_price）"""
+        self.last_price = value
+
+    @property
     def total_value(self) -> float:
         """兼容字段：总市值（同 market_value）"""
         return self.market_value

@@ -270,6 +270,15 @@ class CnFutureMarketAdapter(BaseMarket):
             event_description="收盘撮合"
         ))
 
+        # 7.5 日线K线收盘事件
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.DAILY_BAR_CLOSED,
+            event_time=datetime.combine(trade_date, time(15, 0)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="日线K线收盘"
+        ))
+
         # 8. 结算价确定
         events.append(MarketEvent(
             event_type=EventTypeEnum.SETTLEMENT_PRICE_DETERMINED,

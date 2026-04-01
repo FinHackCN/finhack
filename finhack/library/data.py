@@ -392,6 +392,12 @@ class DataInterface:
                 # 单年份+大量代码：优先使用parquet
                 data = self._load_codebased_klines(codes, market, freq, start_date, end_date, fields)
                 logger.debug(f"[DataInterface] Parquet/Codebased返回: {len(data)}条记录")
+                # parquet/codebased返回空时，尝试回退到timebased
+                if data.empty:
+                    logger.info(f"[DataInterface] Parquet/Codebased数据为空，尝试Timebased回退")
+                    data = self._load_timebased_klines(codes, market, freq, start_date, end_date, fields)
+                    if not data.empty:
+                        logger.info(f"[DataInterface] Timebased回退成功: {len(data)}条记录")
             elif freq == '1m' and len(codes) > 50:
                 # 1分钟+中大量代码：使用timebased（CSV，减少文件数量）
                 data = self._load_timebased_klines(codes, market, freq, start_date, end_date, fields)
@@ -400,6 +406,13 @@ class DataInterface:
                 # 其他情况：使用codebased（少量代码或日线数据）
                 data = self._load_codebased_klines(codes, market, freq, start_date, end_date, fields)
                 logger.debug(f"[DataInterface] Codebased返回: {len(data)}条记录")
+
+                # codebased返回空时，尝试回退到timebased加载
+                if data.empty:
+                    logger.info(f"[DataInterface] Codebased数据为空，尝试Timebased回退")
+                    data = self._load_timebased_klines(codes, market, freq, start_date, end_date, fields)
+                    if not data.empty:
+                        logger.info(f"[DataInterface] Timebased回退成功: {len(data)}条记录")
 
             # 应用复权
             if adj_type != 'none' and market in ['cn_stock', 'cn_fund']:
@@ -487,8 +500,23 @@ class DataInterface:
                 try:
                     month_data = future.result()
                     if not month_data.empty:
-                        # 过滤出需要的股票
-                        filtered_data = month_data[month_data.index.get_level_values(1).isin(codes)]
+                        # 过滤出需要的股票（期货支持多后缀匹配）
+                        if market == 'cn_future':
+                            base_codes = set(c.split('.')[0] if '.' in c else c for c in codes)
+                            cache_base = month_data.index.get_level_values(1).str.split('.').str[0]
+                            filtered_data = month_data[cache_base.isin(base_codes)]
+                            # 统一code格式：reset_index → map → set_index
+                            code_map = {}
+                            for c in codes:
+                                base = c.split('.')[0] if '.' in c else c
+                                code_map[base] = c
+                            filtered_data = filtered_data.reset_index()
+                            filtered_data['code'] = filtered_data['code'].apply(
+                                lambda c: code_map.get(c.split('.')[0] if '.' in c else c, c)
+                            )
+                            filtered_data = filtered_data.set_index(['time', 'code'])
+                        else:
+                            filtered_data = month_data[month_data.index.get_level_values(1).isin(codes)]
                         all_data.append(filtered_data)
                 except Exception as e:
                     logger.error(f"加载月份数据失败: {e}")
@@ -516,11 +544,18 @@ class DataInterface:
             
             for dt in dates:
                 # 构建文件路径
-                file_path = os.path.join(
+                # 尝试两种文件名格式：{market}_kline_{freq}.csv 和 {market}_kline_merged.csv
+                file_path_freq = os.path.join(
+                    self.market_data_dir, 'kline', 'timebased', market, freq,
+                    f"{year:04d}", f"{month:02d}", f"{dt.day:02d}",
+                    f"{market}_kline_{freq}.csv"
+                )
+                file_path_merged = os.path.join(
                     self.market_data_dir, 'kline', 'timebased', market, freq,
                     f"{year:04d}", f"{month:02d}", f"{dt.day:02d}",
                     f"{market}_kline_merged.csv"
                 )
+                file_path = file_path_freq if os.path.exists(file_path_freq) else file_path_merged
                 
                 if os.path.exists(file_path):
                     files_found += 1
@@ -650,6 +685,8 @@ class DataInterface:
                 if 'time' not in result.columns:
                     logger.error(f"[CodeBased] 合并后的数据缺少 'time' 列")
                     return pd.DataFrame()
+                # 去重：防止同一(time, code)重复（期货跨年后缀统一可能导致）
+                result = result.drop_duplicates(subset=['time', 'code'], keep='last')
                 result.set_index(['time', 'code'], inplace=True)
                 return result
             else:
@@ -734,9 +771,24 @@ class DataInterface:
                             logger.debug(f"[Parquet] [{year}] 时间过滤后结果为空")
                             continue
 
-                        # 过滤代码
+                        # 过滤代码（期货支持多后缀匹配）
                         before_filter = len(df)
-                        df = df[df['code'].isin(codes)]
+                        if market == 'cn_future':
+                            # 期货：按base code（去掉后缀）匹配
+                            base_codes = set(c.split('.')[0] if '.' in c else c for c in codes)
+                            df['_base'] = df['code'].str.split('.').str[0]
+                            df = df[df['_base'].isin(base_codes)]
+                            df = df.drop(columns=['_base'])
+                            # 将code统一为查询时的格式
+                            code_map = {}
+                            for c in codes:
+                                base = c.split('.')[0] if '.' in c else c
+                                code_map[base] = c
+                            df['code'] = df['code'].apply(
+                                lambda x: code_map.get(x.split('.')[0] if '.' in x else x, x)
+                            )
+                        else:
+                            df = df[df['code'].isin(codes)]
                         if len(df) < before_filter:
                             logger.debug(f"[Parquet] [{year}] 代码过滤: {before_filter:,} -> {len(df):,}")
 
@@ -762,6 +814,13 @@ class DataInterface:
             df = pd.concat(all_data, ignore_index=True)
             logger.debug(f"[Parquet] 合并后共 {len(df)} 条数据")
 
+            # 期货去重：跨年后缀统一可能产生重复(time, code)
+            if market == 'cn_future' and len(df) > 0:
+                before = len(df)
+                df = df.drop_duplicates(subset=['time', 'code'], keep='last')
+                if len(df) < before:
+                    logger.debug(f"[Parquet] 期货去重: {before} -> {len(df)}条")
+
             # 设置MultiIndex
             df = df.set_index(['time', 'code'])
 
@@ -782,102 +841,183 @@ class DataInterface:
             traceback.print_exc()
             return None
     
+    def _get_future_code_variants(self, symbol: str) -> List[str]:
+        """获取期货代码的所有可能变体（不同年份的数据文件可能使用不同的交易所后缀）
+
+        Args:
+            symbol: 期货代码，可能带后缀也可能不带
+
+        Returns:
+            所有可能的代码变体列表
+        """
+        # 已知的交易所后缀变体映射（同一交易所在不同年份使用不同的后缀）
+        EXCHANGE_SUFFIX_VARIANTS = {
+            'CCFX': ['CCFX', 'CFFEX', 'CFX'],       # 中金所
+            'SHFE': ['SHFE', 'XSGE', 'XSHF'],       # 上期所
+            'DCE':  ['DCE', 'XDCE'],                  # 大商所
+            'XZCE': ['XZCE', 'CZCE', 'XZCE'],        # 郑商所
+            'GFEX': ['GFEX'],                         # 广期所
+            'INE':  ['INE', 'XINE'],                  # 能源中心
+        }
+
+        # 品种代码到交易所的映射
+        VARIETY_EXCHANGE = {
+            'IF': 'CCFX', 'IH': 'CCFX', 'IC': 'CCFX', 'IM': 'CCFX',
+            'TS': 'CCFX', 'TF': 'CCFX', 'T': 'CCFX', 'TL': 'CCFX',
+            'CU': 'SHFE', 'AL': 'SHFE', 'ZN': 'SHFE', 'PB': 'SHFE',
+            'NI': 'SHFE', 'SN': 'SHFE', 'AU': 'SHFE', 'AG': 'SHFE',
+            'RB': 'SHFE', 'WR': 'SHFE', 'HC': 'SHFE', 'SS': 'SHFE',
+            'FU': 'SHFE', 'BU': 'SHFE', 'RU': 'SHFE', 'SP': 'SHFE',
+            'AO': 'SHFE',
+            'A': 'DCE', 'B': 'DCE', 'M': 'DCE', 'Y': 'DCE',
+            'P': 'DCE', 'C': 'DCE', 'CS': 'DCE', 'JD': 'DCE',
+            'L': 'DCE', 'V': 'DCE', 'PP': 'DCE', 'FB': 'DCE',
+            'BB': 'DCE', 'J': 'DCE', 'JM': 'DCE', 'I': 'DCE',
+            'PG': 'DCE', 'EB': 'DCE', 'EG': 'DCE', 'LH': 'DCE',
+            'SR': 'XZCE', 'CF': 'XZCE', 'TA': 'XZCE', 'OI': 'XZCE',
+            'MA': 'XZCE', 'FG': 'XZCE', 'RM': 'XZCE', 'ZC': 'XZCE',
+            'SF': 'XZCE', 'SM': 'XZCE', 'UR': 'XZCE', 'SA': 'XZCE',
+            'PK': 'XZCE', 'AP': 'XZCE', 'CJ': 'XZCE', 'RS': 'XZCE',
+            'RI': 'XZCE', 'JR': 'XZCE', 'LR': 'XZCE', 'WH': 'XZCE',
+            'WT': 'XZCE', 'PM': 'XZCE',
+            'SI': 'GFEX', 'LC': 'GFEX',
+            'BC': 'INE', 'SC': 'INE', 'NR': 'INE', 'LU': 'INE',
+        }
+
+        variants = set()
+        base = symbol
+
+        # 去掉现有后缀
+        if '.' in symbol:
+            base = symbol.split('.')[0]
+
+        # 查找品种对应的交易所
+        exchange = None
+        for prefix in sorted(VARIETY_EXCHANGE.keys(), key=len, reverse=True):
+            if base.startswith(prefix):
+                exchange = VARIETY_EXCHANGE[prefix]
+                break
+
+        if exchange and exchange in EXCHANGE_SUFFIX_VARIANTS:
+            for suffix in EXCHANGE_SUFFIX_VARIANTS[exchange]:
+                variants.add(f"{base}.{suffix}")
+        else:
+            # 无法识别，保留原始代码和去后缀的版本
+            variants.add(symbol)
+            if '.' in symbol:
+                variants.add(base)
+
+        # 也加入无后缀的原始代码（某些场景可能用到）
+        variants.add(base)
+        # 保留原始输入
+        variants.add(symbol)
+
+        return list(variants)
+
     def _load_single_codebased_kline(self, market: str, symbol: str, freq: str,
                                     start_date: str, end_date: str, fields: List[str]) -> pd.DataFrame:
         """加载单个股票的codebased数据"""
         try:
             logger.debug(f"加载{symbol}的codebased数据: 市场={market}, 频率={freq}, 开始日期={start_date}, 结束日期={end_date}")
             logger.debug(f"[{symbol}] 参数类型: start_date类型={type(start_date)}, end_date类型={type(end_date)}")
-            
+
             # 确定数据文件路径
             kline_dir = os.path.join(self.market_data_dir, 'kline', 'codebased', market, freq)
-            
+
             # 获取年份范围
             start_year = int(start_date[:4])
             end_year = int(end_date[:4])
-            
+
             logger.debug(f"数据目录: {kline_dir}, 年份范围: {start_year}-{end_year}")
-            
+
             all_data = []
-            
+
             # 按年加载数据
             for year in range(start_year, end_year + 1):
                 year_dir = os.path.join(kline_dir, str(year))
-                symbol_file = os.path.join(year_dir, f"{symbol}.csv")
-                
-                logger.debug(f"检查文件: {symbol_file}")
-                
-                if os.path.exists(symbol_file):
-                    try:
-                        # 读取CSV文件（无header）
-                        year_data = pd.read_csv(symbol_file, header=None, 
-                                              names=['time', 'code', 'open', 'high', 'low', 'close', 'volume', 'amount'])
-                        
-                        logger.debug(f"读取{year}年{symbol}数据: 原始行数={len(year_data)}")
 
-                        # 调试：输出前几行原始数据
-                        if len(year_data) > 0:
-                            logger.debug(f"[{symbol}] 原始时间列前3个值: {year_data['time'].head(3).tolist()}")
+                # 【期货多后缀支持】尝试多种后缀变体查找文件
+                symbol_file = None
+                actual_symbol = symbol  # 记录实际找到文件时的代码（用于保留原始code列）
 
-                        # 转换时间格式（修复：处理带时区的格式）
-                        year_data['time'] = year_data['time'].str.strip()
-                        # 移除时区信息后解析
-                        year_data['time'] = year_data['time'].str.replace(r'[+-]\d{2}:\d{2}$', '', regex=True)
+                if market == 'cn_future':
+                    code_variants = self._get_future_code_variants(symbol)
+                    for variant in code_variants:
+                        candidate = os.path.join(year_dir, f"{variant}.csv")
+                        if os.path.exists(candidate):
+                            symbol_file = candidate
+                            actual_symbol = variant
+                            logger.debug(f"[期货多后缀] 找到文件: {variant}.csv (查询: {symbol})")
+                            break
+                    if symbol_file is None:
+                        # 最后尝试目录扫描：按base code前缀匹配
+                        base = symbol.split('.')[0] if '.' in symbol else symbol
+                        if os.path.exists(year_dir):
+                            for fname in os.listdir(year_dir):
+                                if fname.startswith(base + '.') and fname.endswith('.csv'):
+                                    symbol_file = os.path.join(year_dir, fname)
+                                    actual_symbol = fname[:-4]  # 去掉.csv
+                                    logger.debug(f"[期货目录扫描] 找到文件: {fname} (查询: {symbol})")
+                                    break
+                else:
+                    symbol_file = os.path.join(year_dir, f"{symbol}.csv")
 
-                        # 调试：输出清理后的数据
-                        if len(year_data) > 0:
-                            logger.debug(f"[{symbol}] 清理后时间列前3个值: {year_data['time'].head(3).tolist()}")
+                if symbol_file is None:
+                    continue
 
-                        year_data['time'] = pd.to_datetime(year_data['time'], errors='coerce')
+                try:
+                    # 读取CSV文件（无header）
+                    year_data = pd.read_csv(symbol_file, header=None,
+                                          names=['time', 'code', 'open', 'high', 'low', 'close', 'volume', 'amount'])
 
-                        # 检查转换结果
-                        nat_count = year_data['time'].isna().sum()
-                        if nat_count > 0:
-                            if nat_count == len(year_data):
-                                logger.error(f"[{symbol}] 时间转换全部失败！所有{len(year_data)}行都转为NaT")
-                                # 输出样本数据用于调试
-                                logger.error(f"[{symbol}] 原始数据样本: {year_data['time'].head(5).tolist()}")
-                            else:
-                                logger.warning(f"[{symbol}] 时间转换部分失败: {nat_count}/{len(year_data)} 行转为NaT")
+                    logger.debug(f"读取{year}年{symbol}数据: 原始行数={len(year_data)}")
 
-                        # 过滤日期范围 - 对于日线数据，扩展到整天范围以确保包含性
-                        start_dt = pd.to_datetime(start_date).normalize()  # 设置为当天的开始
-                        end_dt = pd.to_datetime(end_date).normalize() + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)  # 设置为当天的结束
-                        
-                        logger.debug(f"时间范围检查: 开始={start_dt}, 结束={end_dt}, 数据时间范围={year_data['time'].min()}-{year_data['time'].max()}")
+                    # 转换时间格式（修复：处理带时区的格式）
+                    year_data['time'] = year_data['time'].str.strip()
+                    # 移除时区信息后解析
+                    year_data['time'] = year_data['time'].str.replace(r'[+-]\d{2}:\d{2}$', '', regex=True)
 
-                        # 保存原始数据范围用于调试
-                        original_time_min = year_data['time'].min()
-                        original_time_max = year_data['time'].max()
+                    year_data['time'] = pd.to_datetime(year_data['time'], errors='coerce')
 
-                        original_count = len(year_data)
-                        year_data = year_data[(year_data['time'] >= start_dt) & (year_data['time'] <= end_dt)]
-                        filtered_count = len(year_data)
+                    # 【期货多后缀】将code列统一为查询时的symbol，确保后续过滤能匹配
+                    if market == 'cn_future' and actual_symbol != symbol:
+                        year_data['code'] = symbol
 
-                        logger.debug(f"过滤后数据: 原始={original_count}, 过滤后={filtered_count}")
+                    # 过滤日期范围（统一去除时区避免UTC vs naive比较）
+                    start_dt = pd.to_datetime(start_date).normalize()
+                    end_dt = pd.to_datetime(end_date).normalize() + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+                    if hasattr(year_data['time'].dtype, 'tz') and year_data['time'].dt.tz is not None:
+                        year_data['time'] = year_data['time'].dt.tz_localize(None)
 
-                        # 调试：输出过滤条件（降为debug级别避免大量IO）
-                        if filtered_count == 0 and original_count > 0:
-                            logger.debug(f"[{symbol}] 时间过滤导致所有数据被过滤！查询范围={start_dt} ~ {end_dt}, "
-                                        f"原始数据范围={original_time_min} ~ {original_time_max}")
+                    original_count = len(year_data)
+                    year_data = year_data[(year_data['time'] >= start_dt) & (year_data['time'] <= end_dt)]
+                    filtered_count = len(year_data)
 
-                        if not year_data.empty:
-                            # 选择需要的字段
-                            available_fields = ['time'] + [f for f in fields if f in year_data.columns]
-                            year_data = year_data[available_fields]
-                            all_data.append(year_data)
-                            
-                    except Exception as e:
-                        logger.warning(f"读取{symbol}的{year}年数据失败: {e}")
-                        continue
+                    logger.debug(f"过滤后数据: 原始={original_count}, 过滤后={filtered_count}")
+
+                    if not year_data.empty:
+                        # 选择需要的字段
+                        available_fields = ['time'] + [f for f in fields if f in year_data.columns]
+                        year_data = year_data[available_fields]
+                        all_data.append(year_data)
+
+                except Exception as e:
+                    logger.warning(f"读取{symbol}的{year}年数据失败: {e}")
+                    continue
             
             if all_data:
                 result = pd.concat(all_data, ignore_index=True)
                 result = result.sort_values('time').reset_index(drop=True)
+                # 期货多后缀去重：同合约跨年数据可能有重叠时间戳
+                if market == 'cn_future' and len(result) > 0:
+                    before = len(result)
+                    result = result.drop_duplicates(subset=['time', 'code'], keep='last')
+                    if len(result) < before:
+                        logger.debug(f"期货{symbol}去重: {before} -> {len(result)}条")
                 return result
             else:
                 return pd.DataFrame()
-                
+
         except Exception as e:
             logger.error(f"加载{symbol}的codebased数据失败: {e}")
             return pd.DataFrame()
@@ -930,11 +1070,12 @@ class DataInterface:
         # 从数据源获取
         try:
             # 获取指定时间点的K线数据 - 扩大范围以确保包含目标时间
-            # 对于日线数据，查询整个日期范围
+            # 对于日线数据，向前回溯30天以确保停牌股票也能获取最近价格
             # 对于分钟数据，查询当日00:00到23:59
             if freq == '1d':
-                # 日线：查询从目标日期开始到未来7天（确保包含当天的数据）
-                start_time = time.strftime('%Y-%m-%d 00:00:00')
+                # 日线：向前回溯30天 + 未来7天，确保停牌股票也能获取最近价格
+                start_time_dt = time - timedelta(days=30)
+                start_time = start_time_dt.strftime('%Y-%m-%d 00:00:00')
                 end_time_dt = time + timedelta(days=7)
                 end_time = end_time_dt.strftime('%Y-%m-%d 23:59:59')
             else:
@@ -965,16 +1106,42 @@ class DataInterface:
 
                 # 根据频率调整匹配策略
                 if freq == '1d':
-                    # 对于日线数据，只匹配日期部分，忽略时间
+                    # 对于日线数据，优先匹配目标日期，无数据则取最近的前一个交易日
                     target_date = target_time.date()
-                    # 获取时间索引并转换为日期进行比较
                     time_index = klines_df.index.get_level_values('time')
-                    # 处理可能的timezone问题，统一转换为date进行比较
+
+                    # 先尝试精确匹配目标日期
                     if hasattr(time_index, 'date'):
-                        matching_data = klines_df[time_index.date == target_date]
+                        exact_match = klines_df[time_index.date == target_date]
                     else:
-                        # 如果没有.date方法，尝试直接比较
-                        matching_data = klines_df[time_index == target_time]
+                        exact_match = klines_df[time_index == target_time]
+
+                    if not exact_match.empty:
+                        matching_data = exact_match
+                        # 检查是否有缺失的股票，为缺失的股票向前回溯
+                        matched_codes = set(matching_data.index.get_level_values('code'))
+                        missing_codes = [c for c in codes if c not in matched_codes]
+                        if missing_codes:
+                            logger.debug(f"[get_quotes] 以下股票在目标日期无数据，向前回溯: {missing_codes}")
+                            # 筛选目标日期之前的数据
+                            if hasattr(time_index, 'date'):
+                                before_target = klines_df[time_index.date < target_date]
+                            else:
+                                before_target = klines_df[time_index < target_time]
+
+                            if not before_target.empty:
+                                for code in missing_codes:
+                                    code_before = before_target[before_target.index.get_level_values('code') == code]
+                                    if not code_before.empty:
+                                        # 取最近的一条数据
+                                        latest = code_before.groupby(level='code').tail(1)
+                                        matching_data = pd.concat([matching_data, latest])
+                                        logger.debug(f"[get_quotes] {code} 使用回溯价格: 日期={latest.index.get_level_values('time')[0]}")
+                    else:
+                        # 目标日期完全没有数据，取所有数据中每个code最新的
+                        matching_data = klines_df.groupby(level='code').tail(1)
+                        logger.debug(f"[get_quotes] 目标日期无数据，使用最近历史数据: {matching_data.shape}")
+
                     logger.debug(f"[get_quotes] 日线匹配后: matching_data.shape={matching_data.shape}")
                 else:
                     # 对于分钟数据，找到小于等于目标时间的最近数据
@@ -1002,61 +1169,95 @@ class DataInterface:
                     logger.debug(f"获取行情数据: {len(codes)} 只股票, 时间点: {time}")
                     return quotes_df
                 else:
-                    # 如果精确时间没有数据，尝试查找最近的有效数据
+                    # 如果精确时间没有数据，尝试查找最近的有效数据（向前回溯）
                     logger.debug(f"精确时间点 {time} 无数据，尝试查找最近数据")
 
-                    # 扩大时间范围到前后5分钟
-                    start_time = (time - timedelta(minutes=5)).strftime('%Y-%m-%d %H:%M:%S')
-                    end_time = (time + timedelta(minutes=5)).strftime('%Y-%m-%d %H:%M:%S')
+                    if freq == '1d':
+                        # 日线数据：向前回溯最多30天，找最近的交易日价格
+                        lookback_start = (time - timedelta(days=30)).strftime('%Y-%m-%d 00:00:00')
+                        lookback_end = time.strftime('%Y-%m-%d 23:59:59')
 
-                    klines_df = self.get_klines(
-                        codes=codes,
-                        market=market,
-                        freq=freq,
-                        start_date=start_time,
-                        end_date=end_time,
-                        fields=fields,
-                        adj_type=adj_type,
-                        use_cache=use_cache
-                    )
+                        lookback_df = self.get_klines(
+                            codes=codes,
+                            market=market,
+                            freq=freq,
+                            start_date=lookback_start,
+                            end_date=lookback_end,
+                            fields=fields,
+                            adj_type=adj_type,
+                            use_cache=use_cache
+                        )
 
-                    if not klines_df.empty:
-                        # 查找最接近目标时间的数据
-                        target_timestamp = time.timestamp()
-                        closest_data = []
+                        if not lookback_df.empty:
+                            closest_data = []
+                            for code in codes:
+                                code_data = lookback_df[lookback_df.index.get_level_values('code') == code]
+                                if not code_data.empty:
+                                    # 取该code在目标日期之前（含当日）的最新一条数据
+                                    time_index = code_data.index.get_level_values('time')
+                                    before_target = code_data[time_index <= time]
+                                    if not before_target.empty:
+                                        latest_row = before_target.groupby(level='code').tail(1).iloc[0]
+                                        closest_data.append((code, latest_row))
+                                    elif not code_data.empty:
+                                        # 如果没有<=目标时间的，取所有数据中最新的
+                                        latest_row = code_data.groupby(level='code').tail(1).iloc[0]
+                                        closest_data.append((code, latest_row))
 
-                        for code in codes:
-                            code_data = klines_df[klines_df.index.get_level_values('code') == code]
-                            if not code_data.empty:
-                                # 计算时间差，找到最近的数据
-                                time_values = code_data.index.get_level_values('time')
-                                time_diffs = abs(time_values.astype('int64') // 10**9 - target_timestamp)
-                                # 找到最小时间差的索引
-                                closest_idx = time_diffs.argmin()
-                                closest_timestamp = time_values[closest_idx]
-                                closest_row = code_data.loc[(closest_timestamp, code)]
-                                closest_data.append(closest_row)
+                            if closest_data:
+                                quotes_df = pd.DataFrame([row for _, row in closest_data])
+                                quotes_df['code'] = [code for code, _ in closest_data]
+                                quotes_df.set_index('code', inplace=True)
 
-                        if closest_data:
-                            # 从Series列表创建DataFrame
-                            quotes_df = pd.DataFrame(closest_data)
+                                if use_cache:
+                                    self.kline_cache.put(cache_key, quotes_df)
 
-                            # 从Series的索引中提取symbol和时间信息
-                            symbols = [row.name[1] if isinstance(row.name, tuple) else row.name for row in closest_data]
-
-                            # 添加code列
-                            quotes_df['code'] = symbols
-
-                            # 设置code为索引
-                            quotes_df.set_index('code', inplace=True)
-
-                            if use_cache:
-                                self.kline_cache.put(cache_key, quotes_df)
-
-                            logger.debug(f"使用最近数据获取行情: {len(codes)} 只股票")
-                            return quotes_df
+                                found_codes = [code for code, _ in closest_data]
+                                logger.debug(f"日线向前回溯找到最近数据: {found_codes}")
+                                return quotes_df
                     else:
-                        return pd.DataFrame()
+                        # 分钟数据：扩大时间范围到前后5分钟
+                        start_time = (time - timedelta(minutes=5)).strftime('%Y-%m-%d %H:%M:%S')
+                        end_time = (time + timedelta(minutes=5)).strftime('%Y-%m-%d %H:%M:%S')
+
+                        klines_df = self.get_klines(
+                            codes=codes,
+                            market=market,
+                            freq=freq,
+                            start_date=start_time,
+                            end_date=end_time,
+                            fields=fields,
+                            adj_type=adj_type,
+                            use_cache=use_cache
+                        )
+
+                        if not klines_df.empty:
+                            target_timestamp = time.timestamp()
+                            closest_data = []
+
+                            for code in codes:
+                                code_data = klines_df[klines_df.index.get_level_values('code') == code]
+                                if not code_data.empty:
+                                    time_values = code_data.index.get_level_values('time')
+                                    time_diffs = abs(time_values.astype('int64') // 10**9 - target_timestamp)
+                                    closest_idx = time_diffs.argmin()
+                                    closest_timestamp = time_values[closest_idx]
+                                    closest_row = code_data.loc[(closest_timestamp, code)]
+                                    closest_data.append(closest_row)
+
+                            if closest_data:
+                                quotes_df = pd.DataFrame(closest_data)
+                                symbols = [row.name[1] if isinstance(row.name, tuple) else row.name for row in closest_data]
+                                quotes_df['code'] = symbols
+                                quotes_df.set_index('code', inplace=True)
+
+                                if use_cache:
+                                    self.kline_cache.put(cache_key, quotes_df)
+
+                                logger.debug(f"使用最近数据获取行情: {len(codes)} 只股票")
+                                return quotes_df
+
+                    return pd.DataFrame()
             else:
                 return pd.DataFrame()
 
@@ -1303,7 +1504,17 @@ class DataInterface:
                 return cached_result
         
         list_file = os.path.join(self.reference_data_dir, market, f"{market}_list.csv")
-        
+
+        # 如果标准文件名不存在，尝试查找其他可能的文件名
+        if not os.path.exists(list_file):
+            ref_dir = os.path.join(self.reference_data_dir, market)
+            if os.path.isdir(ref_dir):
+                for f in os.listdir(ref_dir):
+                    if f.endswith('_list.csv') or f.endswith('_lst.csv'):
+                        list_file = os.path.join(ref_dir, f)
+                        logger.debug(f"[StockList] 使用替代列表文件: {f}")
+                        break
+
         if os.path.exists(list_file):
             stock_list = pd.read_csv(list_file)
             

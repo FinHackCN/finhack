@@ -153,11 +153,15 @@ class CnStockMarketAdapter(BaseMarket):
         09:00 DAY_START              每日开始（初始化、分红送股处理等）
         09:00 BEFORE_MARKET          盘前准备（可自定义事件）
         09:25 OPENING_PRICE_DETERMINED 开盘价确定
-        09:25 TRY_MATCH              开盘集合竞价撮合 ← 可交易
+        09:25 TRY_MATCH              开盘集合竞价撮合 ← 可交易（匹配盘前挂单）
+        09:30 MARKET_START           开盘（连续竞价开始）
+        09:30 TRY_MATCH              开盘撮合 ← 可交易（匹配策略09:30下单）
         -- 盘中无事件 --
-        14:55 CLOSING_START          收盘集合竞价开始
+        14:57 CLOSING_START          收盘集合竞价开始
         15:00 CLOSING_PRICE_DETERMINED 收盘价确定
         15:00 TRY_MATCH              收盘集合竞价撮合 ← 可交易
+        15:00 CLOSING_END            收盘集合竞价结束
+        15:00 DAILY_BAR_CLOSED       日线K线收盘
         15:05 AFTER_MARKET           盘后处理（可自定义事件）
         15:05 DAY_END                每日结束（净值记录等）
 
@@ -221,6 +225,24 @@ class CnStockMarketAdapter(BaseMarket):
             market=self.market_name,
             frequency='1d',
             event_description="开盘集合竞价撮合"
+        ))
+
+        # 7. 开盘（连续竞价开始，策略run_daily(09:30)的下单在此撮合）
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.MARKET_START,
+            event_time=datetime.combine(trade_date, time(9, 30)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="开盘"
+        ))
+
+        # 8. 开盘撮合 ← 策略09:30下的单在此成交
+        events.append(MarketEvent(
+            event_type=EventTypeEnum.TRY_MATCH,
+            event_time=datetime.combine(trade_date, time(9, 30)),
+            market=self.market_name,
+            frequency='1d',
+            event_description="开盘撮合"
         ))
 
         # -- 盘中无事件 --

@@ -105,12 +105,15 @@ class BacktestTrader:
     def init_context(self):
         """初始化回测上下文"""
         args_dict = self.args.__dict__
-        
+
         # 生成context_id
         context_json = str(args_dict)
         context_id = hashlib.md5(context_json.encode()).hexdigest()
-        
-        # 从参数中获取基础配置
+
+        # 获取命令行直接传入的参数（最高优先级）
+        cmdline_args = getattr(self.args, '_cmdline_args', {})
+
+        # 参数优先级: cmdline_args > args属性 > 配置文件
         market = getattr(self.args, 'market', 'cn_stock')
         freq = getattr(self.args, 'freq', '1d')
         start_date = getattr(self.args, 'start_time', '2024-01-01')
@@ -137,47 +140,45 @@ class BacktestTrader:
             merged_config.update(model_config)
 
             # 应用配置（如果args中没有对应值）
-            if 'market' in merged_config and not hasattr(self.args, 'market'):
+            if 'market' in merged_config and 'market' not in cmdline_args:
                 market = merged_config['market']
-            if 'freq' in merged_config and not hasattr(self.args, 'freq'):
+            if 'freq' in merged_config and 'freq' not in cmdline_args:
                 freq = merged_config['freq']
-                Log.logger.info(f"[CONFIG] 从配置文件读取到 freq={freq}")
-            if 'start_time' in merged_config and not hasattr(self.args, 'start_time'):
+            if 'start_time' in merged_config and 'start_time' not in cmdline_args:
                 start_date = merged_config['start_time']
-            if 'end_time' in merged_config and not hasattr(self.args, 'end_time'):
+            if 'end_time' in merged_config and 'end_time' not in cmdline_args:
                 end_date = merged_config['end_time']
-            if 'cash' in merged_config and not hasattr(self.args, 'cash'):
+            if 'cash' in merged_config and 'cash' not in cmdline_args:
                 initial_cash = float(merged_config['cash'])
-            if 'benchmark' in merged_config and not hasattr(self.args, 'benchmark'):
+            if 'benchmark' in merged_config and 'benchmark' not in cmdline_args:
                 benchmark = merged_config['benchmark']
-            if 'strategy' in merged_config and not hasattr(self.args, 'strategy'):
+            if 'strategy' in merged_config and 'strategy' not in cmdline_args:
                 strategy_name = merged_config['strategy']
 
         except Exception as e:
             Log.logger.warning(f"[CONFIG] 无法读取配置文件: {e}")
 
-        # 调试日志：显示最终使用的参数值
-        Log.logger.info(f"[DEBUG] ===== 最终参数值 =====")
-        Log.logger.info(f"[DEBUG] market={market}, freq={freq}, start_date={start_date}, end_date={end_date}")
-        Log.logger.info(f"[DEBUG] cash={initial_cash}, benchmark={benchmark}, strategy={strategy_name}")
-        Log.logger.info(f"[DEBUG] ===== 参数值结束 =====")
+        # 命令行参数最高优先级（直接覆盖）
+        if 'market' in cmdline_args:
+            market = cmdline_args['market']
+        if 'freq' in cmdline_args:
+            freq = cmdline_args['freq']
+        if 'start_time' in cmdline_args:
+            start_date = cmdline_args['start_time']
+        if 'end_time' in cmdline_args:
+            end_date = cmdline_args['end_time']
+        if 'cash' in cmdline_args:
+            initial_cash = float(cmdline_args['cash'])
+        if 'benchmark' in cmdline_args:
+            benchmark = cmdline_args['benchmark']
+        if 'strategy' in cmdline_args:
+            strategy_name = cmdline_args['strategy']
 
-        # 调试日志：显示从args读取的freq值
-        Log.logger.info(f"[DEBUG] ===== args属性调试 =====")
-        Log.logger.info(f"[DEBUG] args.__dict__ keys: {list(self.args.__dict__.keys())}")
-        Log.logger.info(f"[DEBUG] args对象中'freq'属性存在: {hasattr(self.args, 'freq')}")
-        Log.logger.info(f"[DEBUG] args对象中'frequency'属性存在: {hasattr(self.args, 'frequency')}")
-        Log.logger.info(f"[DEBUG] args.freq = {getattr(self.args, 'freq', 'NOT_SET')}")
-        Log.logger.info(f"[DEBUG] args.frequency = {getattr(self.args, 'frequency', 'NOT_SET')}")
-        Log.logger.info(f"[DEBUG] 最终使用的freq值: {freq}")
-        Log.logger.info(f"[DEBUG] args中所有与freq相关的值: {[(k,v) for k,v in self.args.__dict__.items() if 'freq' in k.lower()]}")
-        Log.logger.info(f"[DEBUG] ===== args属性调试结束 =====") 
-        start_date = getattr(self.args, 'start_time', '2024-01-01')
-        end_date = getattr(self.args, 'end_time', '2024-12-31')
-        initial_cash = float(getattr(self.args, 'cash', 1000000))
-        benchmark = getattr(self.args, 'benchmark', '000001.SH')
-        strategy_name = getattr(self.args, 'strategy', 'simple_1m_strategy')
-        
+        Log.logger.info(f"[参数] market={market}, freq={freq}, cash={initial_cash}, strategy={strategy_name}")
+        Log.logger.info(f"[参数] start={start_date}, end={end_date}, benchmark={benchmark}")
+        if cmdline_args:
+            Log.logger.info(f"[参数] cmdline_args={cmdline_args}")
+
         # 解析params参数
         params = {}
         if hasattr(self.args, 'params') and self.args.params:
@@ -294,6 +295,76 @@ class BacktestTrader:
         
         Log.logger.info(f"回测上下文初始化完成，ID: {context_id}")
         Log.logger.info(f"回测设置: {market} {freq} {start_date} -> {end_date}")
+
+        # ========== 按市场类型设置默认参数 ==========
+        self._apply_market_defaults(market)
+
+    def _apply_market_defaults(self, market: str):
+        """根据市场类型设置默认参数（仅在用户未显式指定时覆盖）"""
+        settings = self.context['settings']
+        account = self.context['account']
+
+        # 各市场默认值映射（名称与markets/目录下的adapter名称一致）
+        MARKET_DEFAULTS = {
+            'cn_stock': {
+                'currency': 'CNY',
+                'account_type': AccountTypeEnum.CASH,
+                'open_tax': 0.0,
+                'close_tax': 0.001,       # 印花税卖出千一
+                'open_commission': 0.0003, # 佣金万三
+                'close_commission': 0.0003,
+                'min_commission': 5.0,
+                'slip_value': 0.001,
+            },
+            'cn_fund': {
+                'currency': 'CNY',
+                'account_type': AccountTypeEnum.CASH,
+                'open_tax': 0.0,
+                'close_tax': 0.0,          # ETF免印花税
+                'open_commission': 0.0003,
+                'close_commission': 0.0003,
+                'min_commission': 5.0,
+                'slip_value': 0.001,
+            },
+            'cn_future': {
+                'currency': 'CNY',
+                'account_type': AccountTypeEnum.FUTURES,
+                'open_tax': 0.0,           # 期货无印花税
+                'close_tax': 0.0,
+                'open_commission': 0.0001,  # 期货费率较低
+                'close_commission': 0.0001,
+                'min_commission': 5.0,
+                'slip_value': 0.0005,
+            },
+            'global_cryptospot': {
+                'currency': 'USD',
+                'account_type': AccountTypeEnum.CRYPTO,
+                'open_tax': 0.0,           # 加密货币无印花税
+                'close_tax': 0.0,
+                'open_commission': 0.001,  # 0.1% taker费率
+                'close_commission': 0.001,
+                'min_commission': 0.0,     # 加密货币无最低手续费
+                'slip_value': 0.0005,
+            },
+        }
+
+        defaults = MARKET_DEFAULTS.get(market, MARKET_DEFAULTS['cn_stock'])
+
+        # 设置货币和账户类型
+        account['currency'] = defaults['currency']
+        account['account_type'] = defaults['account_type']
+
+        # 设置费率（仅在用户未通过args显式指定时使用默认值）
+        args_dict = self.args.__dict__
+        for fee_key in ['open_tax', 'close_tax', 'open_commission', 'close_commission',
+                        'min_commission', 'slip_value']:
+            # 如果用户通过args传入了值，使用用户的；否则使用市场默认值
+            if fee_key not in args_dict or getattr(self.args, fee_key, None) is None:
+                settings[fee_key] = defaults[fee_key]
+
+        Log.logger.info(f"[市场默认] {market}: currency={defaults['currency']}, "
+                       f"close_tax={settings.get('close_tax')}, "
+                       f"open_commission={settings.get('open_commission')}")
         
     def init_components(self):
         """初始化各个组件"""
@@ -482,6 +553,7 @@ class PriceRelatedSlippage:
         # ========== 定时任务注册函数 ==========
         self.strategy.run_daily = self.run_daily
         self.strategy.run_weekly = self.run_weekly
+        self.strategy.run_monthly = self.run_monthly
         self.strategy.run_interval = self.run_interval
         
         # ========== 数据获取方法 ==========
@@ -845,14 +917,58 @@ class PriceRelatedSlippage:
             Log.logger.debug(f"设置选项: {key} = {value}")
     
     def set_order_cost(self, order_cost, type='stock'):
-        """设置手续费"""
-        Log.logger.debug(f"设置手续费: {type}")
-        # 在回测中，手续费通过TradeCenter配置
-    
+        """设置手续费
+
+        Args:
+            order_cost: OrderCost对象，包含以下属性：
+                open_tax: 买入印花税
+                close_tax: 卖出印花税
+                open_commission: 买入/开仓手续费率
+                close_commission: 卖出/平仓手续费率
+                close_today_commission: 平今手续费率（期货专用）
+                min_commission: 最低手续费
+            type: 市场类型 ('stock', 'fund', 'future', 'crypto')
+        """
+        settings = self.context.get('settings', {})
+
+        if hasattr(order_cost, 'open_commission'):
+            settings['open_commission'] = getattr(order_cost, 'open_commission', 0.0003)
+        if hasattr(order_cost, 'close_commission'):
+            settings['close_commission'] = getattr(order_cost, 'close_commission', 0.0003)
+        if hasattr(order_cost, 'close_today_commission'):
+            settings['close_today_commission'] = getattr(order_cost, 'close_today_commission', 0.0003)
+        if hasattr(order_cost, 'min_commission'):
+            settings['min_commission'] = getattr(order_cost, 'min_commission', 5.0)
+        if hasattr(order_cost, 'open_tax'):
+            settings['open_tax'] = getattr(order_cost, 'open_tax', 0.0)
+        if hasattr(order_cost, 'close_tax'):
+            settings['close_tax'] = getattr(order_cost, 'close_tax', 0.001)
+
+        Log.logger.info(f"设置手续费: open_commission={settings.get('open_commission')}, "
+                       f"close_commission={settings.get('close_commission')}, "
+                       f"close_today_commission={settings.get('close_today_commission')}, "
+                       f"min_commission={settings.get('min_commission')}, "
+                       f"open_tax={settings.get('open_tax')}, close_tax={settings.get('close_tax')}")
+
     def set_slippage(self, slippage, type='stock'):
-        """设置滑点"""
-        Log.logger.debug(f"设置滑点: {type}")
-        # 在回测中，滑点通过TradeCenter配置
+        """设置滑点
+
+        Args:
+            slippage: 滑点值（可以是数值或对象）
+                数值: 按比例滑点（0.001 表示 0.1%）
+                对象: 需有 slip_type 和 slip_value 属性
+            type: 滑点类型 ('pricerelated': 按比例, 'fixed': 固定点数)
+        """
+        settings = self.context.get('settings', {})
+
+        if hasattr(slippage, 'slip_type'):
+            settings['slip_type'] = slippage.slip_type
+            settings['slip_value'] = getattr(slippage, 'slip_value', 0.001)
+        else:
+            settings['slip_type'] = 'pricerelated'
+            settings['slip_value'] = float(slippage) if slippage else 0.001
+
+        Log.logger.info(f"设置滑点: slip_type={settings.get('slip_type')}, slip_value={settings.get('slip_value')}")
     
     # ==================== 定时任务注册函数 ====================
     
@@ -902,6 +1018,22 @@ class PriceRelatedSlippage:
         }
         self.context['scheduled_tasks'].append(task)
         Log.logger.info(f"注册间隔任务: {func.__name__} every {frequency} from {reference_time}")
+
+    def run_monthly(self, func, monthday=1, time="14:50:00"):
+        """注册每月定时任务"""
+        task = {
+            'task_id': f"monthly-D{monthday}-{time}-{func.__name__}",
+            'function_object': func,
+            'function_name': func.__name__,
+            'scheduling_rule': {
+                'type': 'monthly',
+                'monthday': monthday,
+                'time': time
+            },
+            'next_run_time': None
+        }
+        self.context['scheduled_tasks'].append(task)
+        Log.logger.info(f"注册每月任务: {func.__name__} monthday={monthday} at {time}")
     
     def run_backtest_sync(self):
         """运行回测主循环 - 同步版本"""
