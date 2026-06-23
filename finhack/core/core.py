@@ -184,6 +184,17 @@ class Core:
 
         
         
+    @staticmethod
+    def _atomic_write(path, content):
+        # 并行启动多个回测进程时，直接 open(path,'w') 会互相截断同一份生成的
+        # constant.py / global_var.py，导致其它进程在 import 时读到写了一半的文件
+        # （典型现象：ImportError: cannot import name 'LOGS_DIR'）。
+        # 改为先写临时文件再 os.replace 原子替换，保证磁盘上的文件始终完整可用。
+        tmp = path + '.tmp'
+        with open(tmp, 'w') as f:
+            f.write(content)
+        os.replace(tmp, path)
+
     def refresh_runtime(self):
         project_path=self.project_path
         constant=''
@@ -191,16 +202,14 @@ class Core:
             constant = f.read()
             constant=constant.replace('{BASE_DIR}','"'+project_path+'"')
             constant=constant.replace('{FRAMEWORK_DIR}','"'+Utils.get_framework_path()+'"')
-        with open(project_path+"/data/cache/runtime/constant.py", 'w') as f:
-            f.write(constant)
-        
+        self._atomic_write(project_path+"/data/cache/runtime/constant.py", constant)
+
         global_var=''
         with open(project_path+"/data/config/global_var.conf", 'r') as f:
             global_var = f.read()
             global_var=global_var.replace('{BASE_DIR}','"'+project_path+'"')
             global_var=global_var.replace('{FRAMEWORK_DIR}','"'+Utils.get_framework_path()+'"')
-        with open(project_path+"/data/cache/runtime/global_var.py", 'w') as f:
-            f.write(global_var)               
+        self._atomic_write(project_path+"/data/cache/runtime/global_var.py", global_var)
         
     
     def check_project(self):

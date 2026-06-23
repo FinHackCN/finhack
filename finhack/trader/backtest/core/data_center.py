@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 # 期货代码标准化映射表（小写交易所代码到大写）
 _FUTURE_EXCHANGE_SUFFIX_MAP = {
-    'cffex': 'CCFX',
+    'cffex': 'CFFEX',
     'shfe': 'SHFE',
     'dce': 'DCE',
     'czce': 'XZCE',
@@ -34,8 +34,8 @@ _FUTURE_EXCHANGE_SUFFIX_MAP = {
 # 期货品种代码到交易所映射
 _FUTURE_CODE_EXCHANGE_MAP = {
     # 中金所
-    'IF': 'CCFX', 'IH': 'CCFX', 'IC': 'CCFX', 'IM': 'CCFX',
-    'TS': 'CCFX', 'TF': 'CCFX', 'T': 'CCFX', 'TL': 'CCFX',
+    'IF': 'CFFEX', 'IH': 'CFFEX', 'IC': 'CFFEX', 'IM': 'CFFEX',
+    'TS': 'CFFEX', 'TF': 'CFFEX', 'T': 'CFFEX', 'TL': 'CFFEX',
     # 上期所
     'CU': 'SHFE', 'AL': 'SHFE', 'ZN': 'SHFE', 'PB': 'SHFE',
     'NI': 'SHFE', 'SN': 'SHFE', 'AU': 'SHFE', 'AG': 'SHFE',
@@ -67,9 +67,9 @@ def _normalize_future_code(code: str) -> str:
         code: 期货代码，可能带有或不带有交易所后缀
 
     Returns:
-        带有交易所后缀的标准化代码，如 'IF2401.CCFX'
+        带有交易所后缀的标准化代码，如 'IF2401.CFFEX'
     """
-    # 如果已经有后缀，需要统一格式（reference文件中可能用.CFX，数据文件用.CCFX）
+    # 如果已经有后缀，需要统一格式（reference文件中可能用.CFX，数据文件用.CFFEX）
     if '.' in code:
         # 从带后缀的代码中提取品种前缀，重新匹配标准后缀
         base = code.split('.')[0]
@@ -87,7 +87,7 @@ def _normalize_future_code(code: str) -> str:
             return f"{code}.{exchange_suffix}"
 
     # 如果无法识别，默认添加中金所后缀
-    return f"{code}.CCFX"
+    return f"{code}.CFFEX"
 
 
 class DataCenter:
@@ -152,6 +152,31 @@ class DataCenter:
         self._trading_status = {}  # 格式: {symbol: {'status': 'active'/'suspended'/'delisted', 'reason': str, 'since': datetime}}
         self._trading_status_lock = threading.Lock()
 
+        # 【性能优化】分钟级价格快速查找缓存
+        # 格式: {cache_key_minute: {symbol: {'close': float, 'volume': float}}}
+        # 避免每次TRY_MATCH都做DataFrame copy + filter + time slice
+        self._minute_price_cache = {}
+        self._minute_price_cache_key = None  # 当前缓存的月份key
+        self._minute_price_cache_lock = threading.Lock()
+
+        # 【性能优化】日级别K线缓存 - 用于1m频率的快速价格查询
+        # 避免月度缓存未命中时（如crypto>100标的跳过预加载）每次查询都触发磁盘加载
+        # 格式: {(code, freq, date_str): DataFrame}
+        self._daily_klines_cache = {}
+        self._daily_cache_date = None  # 当前缓存对应的日期
+        self._daily_cache_lock = threading.RLock()
+
+        # 【性能优化】每代码首根分钟K线索引 - 解决crypto 00:00(UTC+8)查询时首根K线在08:01的时差问题
+        self._daily_price_first_minute = {}  # {code: minute_key_str}
+
+        # 【性能诊断】数据API计时统计
+        self._perf_api_timings = {}  # {api_name: [total_sec, count]}
+
+        # 【性能优化】分钟级价格字典 - O(1)查找替代DataFrame切片
+        # 格式: {(code, '2023-06-01 10:30'): {'open': float, 'close': float, ...}}
+        self._daily_price_dict = {}
+        self._daily_price_dict_date = None
+
         logger.info(f"数据中心初始化完成: {market} {freq} (使用统一数据接口，支持按月预加载)")
 
     def _get_parquet_metadata(self, parquet_file: str):
@@ -205,15 +230,15 @@ class DataCenter:
         """
         if use_memory_map is not None:
             self._use_memory_map = use_memory_map
-            logger.info(f"[性能配置] 内存映射: {use_memory_map}")
+            logger.debug(f"[性能配置] 内存映射: {use_memory_map}")
 
         if min_rows_for_dtype_opt is not None:
             self._min_rows_for_dtype_opt = min_rows_for_dtype_opt
-            logger.info(f"[性能配置] 数据类型优化阈值: {min_rows_for_dtype_opt:,}行")
+            logger.debug(f"[性能配置] 数据类型优化阈值: {min_rows_for_dtype_opt:,}行")
 
         if parquet_meta_cache_ttl is not None:
             self._parquet_meta_cache_ttl = parquet_meta_cache_ttl
-            logger.info(f"[性能配置] 元数据缓存TTL: {parquet_meta_cache_ttl}秒")
+            logger.debug(f"[性能配置] 元数据缓存TTL: {parquet_meta_cache_ttl}秒")
 
     def update_trading_status(self, symbol: str, status: str, reason: str = ""):
         """更新股票交易状态（停牌/复牌/退市）
@@ -328,16 +353,24 @@ class DataCenter:
 
         # 如果仍然没有universe，则加载全市场数据
         if not universe:
-            logger.info(f"没有提供股票池，将加载 {market} 全市场数据进行预加载")
+            logger.debug(f"没有提供股票池，将加载 {market} 全市场数据进行预加载")
             try:
                 stock_list_df = self.data_interface.get_stock_list(market, use_cache=True)
                 if 'code' in stock_list_df.columns:
                     universe = stock_list_df['code'].tolist()
                 else:
                     universe = stock_list_df.index.tolist()
-                logger.info(f"成功获取 {market} 全市场股票列表，共 {len(universe)} 只")
+                logger.debug(f"成功获取 {market} 全市场股票列表，共 {len(universe)} 只")
             except Exception as e:
                 logger.error(f"获取 {market} 股票列表失败: {e}")
+                return
+
+            # 对于1m数据，如果标的数量过多（如crypto全市场），跳过预加载以避免内存爆炸
+            if frequency == '1m' and len(universe) > 100:
+                logger.debug(f"[预加载] {market} 1m数据标的数 {len(universe)} 超过100，"
+                           f"跳过预加载（改用按需加载）")
+                with self.preload_lock:
+                    self.preloaded_months.setdefault(market, {})[month_key] = datetime.now()
                 return
 
         # 对期货市场代码进行标准化（reference文件中可能用.CFX，数据文件用交易所全称后缀）
@@ -349,12 +382,16 @@ class DataCenter:
 
         import time
         start_time = time.time()
-        logger.info(f"[预加载] 开始预加载 {market} {month_key} 的{frequency}数据，股票数量: {len(universe)}")
+        logger.debug(f"[预加载] 开始预加载 {market} {month_key} 的{frequency}数据，股票数量: {len(universe)}")
         print(f"[预加载] 开始加载 {market} {month_key}，共{len(universe)}只股票", flush=True)
 
         try:
             # 计算月份的开始和结束日期
-            start_date = datetime(year, month, 1, 0, 0, 0)
+            # 对于1m频率，start_date前移1天以捕获前一天文件中的早盘数据
+            if frequency == '1m':
+                start_date = datetime(year, month, 1, 0, 0, 0) - timedelta(days=1)
+            else:
+                start_date = datetime(year, month, 1, 0, 0, 0)
             if month == 12:
                 end_date = datetime(year + 1, 1, 1) - timedelta(days=1)
                 end_date = end_date.replace(hour=23, minute=59, second=59)
@@ -373,7 +410,7 @@ class DataCenter:
 
             if os.path.exists(parquet_file):
                 # 使用Parquet批量加载（推荐方式）
-                logger.info(f"[预加载] 使用Parquet批量加载: {parquet_file}")
+                logger.debug(f"[预加载] 使用Parquet批量加载: {parquet_file}")
                 print(f"[预加载] 使用Parquet批量加载...", flush=True)
 
                 # 定义需要的字段
@@ -390,7 +427,7 @@ class DataCenter:
                     )
                     df = table.to_pandas()
 
-                    logger.info(f"[预加载] Parquet文件大小: {len(df):,}行")
+                    logger.debug(f"[预加载] Parquet文件大小: {len(df):,}行")
 
                     # 移除时区信息
                     if hasattr(df['time'].dt, 'tz') and df['time'].dt.tz is not None:
@@ -413,11 +450,11 @@ class DataCenter:
                         df = df.drop(columns=['_base'])
                     else:
                         df = df[df['code'].isin(universe)]
-                    logger.info(f"[预加载] 代码过滤后: {len(df):,}行")
+                    logger.debug(f"[预加载] 代码过滤后: {len(df):,}行")
 
                     # 再按时间过滤
                     df = df[(df['time'] >= start_date) & (df['time'] <= end_date)]
-                    logger.info(f"[预加载] 时间过滤后: {len(df):,}行")
+                    logger.debug(f"[预加载] 时间过滤后: {len(df):,}行")
 
                     if not df.empty:
                         # 设置MultiIndex
@@ -432,7 +469,7 @@ class DataCenter:
                             # 【线程安全】使用锁保护缓存写入
                             with self._kline_cache_lock:
                                 self.kline_cache[cache_key] = month_df
-                            logger.info(f"[预加载] 缓存月份 {month_group}: {len(month_df):,}行")
+                            logger.debug(f"[预加载] 缓存月份 {month_group}: {len(month_df):,}行")
 
                         total_records = len(df)
 
@@ -443,8 +480,8 @@ class DataCenter:
 
             else:
                 # Parquet文件不存在，使用分批加载CSV的方式
-                logger.info(f"[预加载] Parquet文件不存在: {parquet_file}")
-                logger.info(f"[预加载] 使用CSV分批加载方式")
+                logger.debug(f"[预加载] Parquet文件不存在: {parquet_file}")
+                logger.debug(f"[预加载] 使用CSV分批加载方式")
                 total_records = self._fallback_batch_load(market, universe, frequency, start_date, end_date)
 
             # 标记该月数据已预加载
@@ -485,7 +522,7 @@ class DataCenter:
             batch_size = calculated_batch
 
         batches = [universe[i:i + batch_size] for i in range(0, len(universe), batch_size)]
-        logger.info(f"[预加载] CSV分批加载: {len(batches)}个批次，每批{batch_size}只")
+        logger.debug(f"[预加载] CSV分批加载: {len(batches)}个批次，每批{batch_size}只")
         print(f"[预加载] 分为{len(batches)}个批次进行并行加载", flush=True)
 
         # 使用线程池并行加载
@@ -504,7 +541,7 @@ class DataCenter:
                 result = future.result(timeout=120)
                 total_records += sum(result.values())
                 completed += 1
-                logger.info(f"[预加载] 批次 {completed}/{len(batches)} 完成")
+                logger.debug(f"[预加载] 批次 {completed}/{len(batches)} 完成")
                 print(f"[预加载] 进度: {completed}/{len(batches)} ({completed*100//len(batches)}%)", flush=True)
             except Exception as e:
                 logger.error(f"[预加载] 批次预加载失败: {e}")
@@ -587,9 +624,9 @@ class DataCenter:
             optimal_batch = max(min(optimal_batch, max_batch_size), min_batch_size)
 
             # 记录详细信息
-            logger.info(f"[批次计算] 可用内存: {available_memory_gb:.2f}GB, "
+            logger.debug(f"[批次计算] 可用内存: {available_memory_gb:.2f}GB, "
                        f"CPU核心: {cpu_cores}, 当前CPU使用率: {current_cpu_usage:.1%}")
-            logger.info(f"[批次计算] 内存建议: {candidates[0]}, CPU建议: {candidates[1]}, "
+            logger.debug(f"[批次计算] 内存建议: {candidates[0]}, CPU建议: {candidates[1]}, "
                        f"规模建议: {candidates[2]}, 最终采用: {optimal_batch}")
 
             return optimal_batch
@@ -608,25 +645,25 @@ class DataCenter:
 
     def _preload_batch(self, market: str, batch: List[str], frequency: str,
                       start_date: datetime, end_date: datetime) -> Dict[str, int]:
-        """预加载一批股票的数据
-        
+        """预加载一批股票的数据并缓存到kline_cache
+
         Args:
             market: 市场名称
             batch: 股票代码批次
             frequency: 数据频率
             start_date: 开始日期
             end_date: 结束日期
-            
+
         Returns:
             Dict[str, int]: 每只股票加载的记录数
         """
         import time
         batch_start = time.time()
         results = {}
-        
+
         try:
             logger.debug(f"[预加载批次] 开始加载 {batch}")
-            
+
             # 使用数据接口批量获取K线数据（保留完整时间信息）
             klines_df = self.data_interface.get_klines(
                 codes=batch,
@@ -636,21 +673,38 @@ class DataCenter:
                 end_date=end_date.strftime('%Y-%m-%d %H:%M:%S'),
                 use_cache=True
             )
-            
+
             # 统计每只股票的记录数
             if not klines_df.empty:
                 for symbol in batch:
                     symbol_data = klines_df.xs(symbol, level=1) if symbol in klines_df.index.get_level_values(1) else pd.DataFrame()
                     results[symbol] = len(symbol_data)
+
+                # 缓存到kline_cache（按月份分组）
+                if hasattr(klines_df.index, 'get_level_values') and 'time' in klines_df.index.names:
+                    time_level = klines_df.index.get_level_values('time')
+                    months = time_level.strftime('%Y-%m').unique()
+                    for month_str in months:
+                        cache_key = f"{market}_{frequency}_{month_str}"
+                        month_mask = time_level.strftime('%Y-%m') == month_str
+                        month_df = klines_df[month_mask]
+                        with self._kline_cache_lock:
+                            if cache_key in self.kline_cache:
+                                existing = self.kline_cache[cache_key]
+                                month_df = pd.concat([existing, month_df])
+                                month_df = month_df[~month_df.index.duplicated(keep='last')]
+                                month_df = month_df.sort_index()
+                            self.kline_cache[cache_key] = month_df
+                        logger.debug(f"[预加载] 缓存月份 {month_str}: {len(month_df):,}行")
             else:
                 results = {symbol: 0 for symbol in batch}
-            
+
             elapsed = time.time() - batch_start
             total_records = sum(results.values())
             logger.debug(f"[预加载批次] 完成 {batch}，{total_records}条记录，耗时{elapsed:.2f}秒")
-            
+
             return results
-            
+
         except Exception as e:
             elapsed = time.time() - batch_start
             logger.error(f"[预加载批次] 失败 {batch}，耗时{elapsed:.2f}秒: {e}")
@@ -733,13 +787,13 @@ class DataCenter:
             logger.debug("[预加载] 所有月份都已加载，跳过")
             return
 
-        logger.info(f"[预加载] 按年份组织: {dict(years_months)}")
+        logger.debug(f"[预加载] 按年份组织: {dict(years_months)}")
         print(f"[预加载] 按年份批量加载（避免重复加载Parquet）...", flush=True)
 
         # 串行加载各年份（避免内存爆炸）
         for year in sorted(years_months.keys()):
             months_in_year = years_months[year]
-            logger.info(f"[预加载] 加载 {year} 年，包含 {len(months_in_year)} 个月份")
+            logger.debug(f"[预加载] 加载 {year} 年，包含 {len(months_in_year)} 个月份")
             try:
                 self._load_year_months(market, year, months_in_year, universe, frequency)
 
@@ -748,7 +802,7 @@ class DataCenter:
                 daily_preloaded_key = f"{market}_1d_{year}"
                 with self.preload_lock:
                     if daily_preloaded_key not in self.preloaded_months.get(market, {}):
-                        logger.info(f"[预加载] 同时预加载 {year} 年的日线数据（用于技术指标）")
+                        logger.debug(f"[预加载] 同时预加载 {year} 年的日线数据（用于技术指标）")
                         try:
                             self._load_year_daily_data(market, year, universe)
                             if market not in self.preloaded_months:
@@ -771,10 +825,8 @@ class DataCenter:
     def _cleanup_old_months(self, market: str, keep_months: list, frequency: str = '1m'):
         """清理不再需要的旧月份数据，释放内存
 
-        Args:
-            market: 市场名称
-            keep_months: 需要保留的月份列表 [(year, month), ...]
-            frequency: 数据频率
+        注意：不清除preloaded_months记录，只清kline_cache，
+        避免重复触发Parquet加载。
         """
         import gc
 
@@ -786,6 +838,11 @@ class DataCenter:
             # 同时保留日线数据
             daily_key = f"{market}_1d_{year}-{month:02d}"
             keep_keys.add(daily_key)
+            # 保留preloaded_months标记（防止重复加载）
+            preloaded_1m_key = f"{year}-{month:02d}"
+            preloaded_1d_key = f"{market}_1d_{year}"
+            keep_keys.add(preloaded_1m_key)
+            keep_keys.add(preloaded_1d_key)
 
         # 找出需要删除的缓存key
         keys_to_delete = []
@@ -809,32 +866,22 @@ class DataCenter:
             except Exception as e:
                 logger.debug(f"清理缓存 {key} 失败: {e}")
 
-        # 同时清理 preloaded_months 记录
-        if market in self.preloaded_months:
-            keys_to_remove = []
-            for month_key in list(self.preloaded_months[market].keys()):
-                # 检查是否是月份key (格式: YYYY-MM 或 market_1d_YYYY-MM)
-                if frequency in month_key or '1d' in month_key:
-                    # 提取年月信息
-                    try:
-                        # 尝试匹配 market_freq_YYYY-MM 格式
-                        parts = month_key.split('_')
-                        if len(parts) >= 3:
-                            year_month = parts[-1]
-                            year, month = map(int, year_month.split('-'))
-                            if (year, month) not in keep_months:
-                                keys_to_remove.append(month_key)
-                    except:
-                        pass
-
-            for key in keys_to_remove:
-                self.preloaded_months[market].pop(key, None)
-
         # 强制垃圾回收
         if freed_count > 0:
             gc.collect()
-            logger.info(f"[内存清理] 释放 {freed_count} 个月份缓存，估算内存 {freed_memory_mb:.2f}MB")
+            logger.debug(f"[内存清理] 释放 {freed_count} 个月份缓存，估算内存 {freed_memory_mb:.2f}MB")
             print(f"[内存清理] ✓ 释放 {freed_count} 个月份缓存，估算内存 {freed_memory_mb:.2f}MB", flush=True)
+
+        # 【性能优化】清理过期的日级K线缓存（非当天的）
+        with self._daily_cache_lock:
+            if self._daily_cache_date:
+                keep_date_str = str(self._daily_cache_date)
+                expired_keys = [k for k in self._daily_klines_cache
+                                if k[2] != keep_date_str]
+                for k in expired_keys:
+                    del self._daily_klines_cache[k]
+                if expired_keys:
+                    logger.debug(f"[内存清理] 释放 {len(expired_keys)} 个过期日级缓存条目")
 
         # 打印当前内存状态
         self._log_memory_status()
@@ -848,7 +895,7 @@ class DataCenter:
             cache_mb = 0
             for key, df in self.kline_cache.items():
                 cache_mb += df.memory_usage(deep=True).sum() / (1024 * 1024)
-            logger.info(f"[内存状态] 已用: {mem.used/1024**3:.1f}GB / {mem.total/1024**3:.0f}GB "
+            logger.debug(f"[内存状态] 已用: {mem.used/1024**3:.1f}GB / {mem.total/1024**3:.0f}GB "
                        f"({mem.percent}%), 缓存: {cache_mb:.0f}MB, 可用: {mem.available/1024**3:.1f}GB")
         except Exception as e:
             logger.debug(f"获取内存状态失败: {e}")
@@ -881,7 +928,7 @@ class DataCenter:
 
             new_memory = df.memory_usage(deep=True).sum()
             saved_pct = (original_memory - new_memory) / original_memory * 100
-            logger.info(f"[内存优化] 数据类型优化节省 {saved_pct:.1f}% 内存 ({original_memory/1024**2:.1f}MB -> {new_memory/1024**2:.1f}MB)")
+            logger.debug(f"[内存优化] 数据类型优化节省 {saved_pct:.1f}% 内存 ({original_memory/1024**2:.1f}MB -> {new_memory/1024**2:.1f}MB)")
 
         except Exception as e:
             logger.warning(f"[内存优化] 数据类型优化失败: {e}")
@@ -901,7 +948,7 @@ class DataCenter:
 
         # 如果未提供universe，尝试获取全市场股票列表
         if not universe:
-            logger.info(f"[预加载] 未提供股票池，尝试加载 {market} 全市场日线数据")
+            logger.debug(f"[预加载] 未提供股票池，尝试加载 {market} 全市场日线数据")
             try:
                 stock_list_df = self.data_interface.get_stock_list(market, use_cache=True)
                 if stock_list_df is not None and not stock_list_df.empty:
@@ -909,7 +956,7 @@ class DataCenter:
                         universe = stock_list_df['code'].tolist()
                     else:
                         universe = stock_list_df.index.tolist()
-                    logger.info(f"[预加载] 成功获取 {market} 全市场股票列表: {len(universe)} 只")
+                    logger.debug(f"[预加载] 成功获取 {market} 全市场股票列表: {len(universe)} 只")
                 else:
                     logger.warning(f"[预加载] 无法获取 {market} 股票列表，将加载所有可用数据")
                     universe = None
@@ -917,7 +964,7 @@ class DataCenter:
                 logger.error(f"[预加载] 获取 {market} 股票列表失败: {e}")
                 universe = None
 
-        logger.info(f"[预加载] 开始加载 {year} 年日线数据，共{len(universe) if universe else '全市场'}只股票")
+        logger.debug(f"[预加载] 开始加载 {year} 年日线数据，共{len(universe) if universe else '全市场'}只股票")
         print(f"[预加载] 加载 {year} 年日线数据（技术指标用）...", flush=True)
 
         # Parquet文件路径
@@ -941,7 +988,7 @@ class DataCenter:
             )
             df = table.to_pandas()
 
-            logger.info(f"[预加载] {year}年日线原始数据: {len(df):,}行")
+            logger.debug(f"[预加载] {year}年日线原始数据: {len(df):,}行")
 
             # 移除时区信息
             if hasattr(df['time'].dt, 'tz') and df['time'].dt.tz is not None:
@@ -981,9 +1028,9 @@ class DataCenter:
                         self._load_year_daily_from_csv(market, year, universe, start_time)
                         return
                     df = df[df['code'].isin(universe)]
-                logger.info(f"[预加载] 日线代码过滤后: {len(df):,}行")
+                logger.debug(f"[预加载] 日线代码过滤后: {len(df):,}行")
             else:
-                logger.info(f"[预加载] 未指定universe，加载全市场日线数据: {len(df):,}行")
+                logger.debug(f"[预加载] 未指定universe，加载全市场日线数据: {len(df):,}行")
 
             # 设置索引
             df = df.set_index(['time', 'code'])
@@ -1007,7 +1054,7 @@ class DataCenter:
             gc.collect()
 
             elapsed = time.time() - start_time
-            logger.info(f"[预加载] {year}年日线完成，{total_cached}条记录，耗时{elapsed:.2f}秒")
+            logger.debug(f"[预加载] {year}年日线完成，{total_cached}条记录，耗时{elapsed:.2f}秒")
             print(f"[预加载] ✓ {year}年日线完成！{total_cached}条记录", flush=True)
 
         except Exception as e:
@@ -1028,7 +1075,7 @@ class DataCenter:
 
         # 如果未提供universe，尝试获取全市场股票列表
         if not universe:
-            logger.info(f"[预加载] CSV日线方式未提供股票池，尝试获取 {market} 全市场数据")
+            logger.debug(f"[预加载] CSV日线方式未提供股票池，尝试获取 {market} 全市场数据")
             try:
                 stock_list_df = self.data_interface.get_stock_list(market, use_cache=True)
                 if stock_list_df is not None and not stock_list_df.empty:
@@ -1036,7 +1083,7 @@ class DataCenter:
                         universe = stock_list_df['code'].tolist()
                     else:
                         universe = stock_list_df.index.tolist()
-                    logger.info(f"[预加载] CSV日线方式成功获取 {market} 全市场股票列表: {len(universe)} 只")
+                    logger.debug(f"[预加载] CSV日线方式成功获取 {market} 全市场股票列表: {len(universe)} 只")
                 else:
                     logger.warning(f"[预加载] CSV日线方式无法获取 {market} 股票列表")
                     return
@@ -1044,7 +1091,7 @@ class DataCenter:
                 logger.error(f"[预加载] CSV日线方式获取 {market} 股票列表失败: {e}")
                 return
 
-        logger.info(f"[预加载] 从CSV加载 {year} 年日线数据，共{len(universe)}只股票")
+        logger.debug(f"[预加载] 从CSV加载 {year} 年日线数据，共{len(universe)}只股票")
 
         # CSV目录路径（按年组织）
         year_dir = os.path.join(
@@ -1095,7 +1142,7 @@ class DataCenter:
 
         # 合并所有数据
         df = pd.concat(all_data, ignore_index=True)
-        logger.info(f"[预加载] {year}年日线CSV合并后: {len(df):,}行，来自{loaded_count}只股票")
+        logger.debug(f"[预加载] {year}年日线CSV合并后: {len(df):,}行，来自{loaded_count}只股票")
 
         # 移除时区信息
         if hasattr(df['time'].dt, 'tz') and df['time'].dt.tz is not None:
@@ -1123,7 +1170,7 @@ class DataCenter:
         gc.collect()
 
         elapsed = time.time() - start_time
-        logger.info(f"[预加载] {year}年日线CSV完成，{total_cached}条记录，耗时{elapsed:.2f}秒")
+        logger.debug(f"[预加载] {year}年日线CSV完成，{total_cached}条记录，耗时{elapsed:.2f}秒")
         print(f"[预加载] ✓ {year}年日线CSV完成！{total_cached}条记录", flush=True)
 
     def _load_year_months(self, market: str, year: int, months_to_load: List[tuple],
@@ -1145,9 +1192,22 @@ class DataCenter:
         import time
         start_time = time.time()
 
-        # 如果未提供universe，尝试获取全市场股票列表
+        # 如果未提供universe，先从context获取策略universe，再回退到全市场
         if not universe:
-            logger.info(f"[预加载] 未提供股票池，尝试加载 {market} 全市场数据")
+            # 优先从context获取策略设置的universe（通常只有少量标的）
+            if self.context:
+                context_universe = self.context.get('universe', None)
+                if context_universe:
+                    if isinstance(context_universe, dict):
+                        if market in context_universe:
+                            universe = context_universe[market]
+                    else:
+                        universe = context_universe
+                    if universe:
+                        logger.debug(f"[预加载] 使用策略universe: {len(universe)} 只标的")
+
+        if not universe:
+            logger.debug(f"[预加载] 未提供股票池，尝试加载 {market} 全市场数据")
             try:
                 stock_list_df = self.data_interface.get_stock_list(market, use_cache=True)
                 if stock_list_df is not None and not stock_list_df.empty:
@@ -1155,7 +1215,12 @@ class DataCenter:
                         universe = stock_list_df['code'].tolist()
                     else:
                         universe = stock_list_df.index.tolist()
-                    logger.info(f"[预加载] 成功获取 {market} 全市场股票列表: {len(universe)} 只")
+                    logger.debug(f"[预加载] 成功获取 {market} 全市场股票列表: {len(universe)} 只")
+                    # 对于1m数据，如果标的数量过多则跳过预加载
+                    if frequency == '1m' and len(universe) > 100:
+                        logger.debug(f"[预加载] {market} 1m数据标的数 {len(universe)} 超过100，"
+                                   f"跳过预加载（改用按需加载）")
+                        return
                 else:
                     logger.warning(f"[预加载] 无法获取 {market} 股票列表，将加载所有可用数据")
                     universe = None
@@ -1164,7 +1229,7 @@ class DataCenter:
                 universe = None
 
         month_strs = [f"{m:02d}" for _, m in months_to_load]
-        logger.info(f"[预加载] 开始加载 {year} 年份: {month_strs}，共{len(universe) if universe else '全市场'}只股票")
+        logger.debug(f"[预加载] 开始加载 {year} 年份: {month_strs}，共{len(universe) if universe else '全市场'}只股票")
         print(f"[预加载] 开始加载 {year} ({','.join(month_strs)})，共{len(universe) if universe else '全市场'}只股票", flush=True)
 
         # Parquet文件路径
@@ -1182,7 +1247,7 @@ class DataCenter:
         # 【优化1】使用Parquet元数据缓存
         metadata = self._get_parquet_metadata(parquet_file)
         if metadata:
-            logger.info(f"[预加载] Parquet文件: {metadata.num_rows:,}行, {metadata.num_columns}列, "
+            logger.debug(f"[预加载] Parquet文件: {metadata.num_rows:,}行, {metadata.num_columns}列, "
                        f"{metadata.num_row_groups}个row groups")
 
         # 【优化2】使用多线程和过滤条件下推加载
@@ -1209,14 +1274,14 @@ class DataCenter:
         try:
             # 【优化3】使用多线程读取（暂不使用过滤条件下推，因为时间类型匹配复杂）
             # 注意：PyArrow的filters对带时区的时间戳支持有限，暂时回退到加载后过滤
-            logger.info(f"[预加载] 使用多线程读取Parquet")
+            logger.debug(f"[预加载] 使用多线程读取Parquet")
             table = pq.read_table(
                 parquet_file,
                 columns=required_columns,
                 use_threads=True  # 【优化】启用多线程
             )
             df = table.to_pandas()
-            logger.info(f"[预加载] {year}年Parquet原始数据: {len(df):,}行")
+            logger.debug(f"[预加载] {year}年Parquet原始数据: {len(df):,}行")
 
             # 在DataFrame层面进行时间和代码过滤（更可靠）
             # 移除时区信息
@@ -1227,7 +1292,7 @@ class DataCenter:
             before_filter = len(df)
             df = df[(df['time'] >= start_date) & (df['time'] < end_date)]
             if len(df) < before_filter:
-                logger.info(f"[预加载] 时间过滤: {before_filter:,} -> {len(df):,}行")
+                logger.debug(f"[预加载] 时间过滤: {before_filter:,} -> {len(df):,}行")
 
             # 代码过滤
             if universe:
@@ -1249,7 +1314,7 @@ class DataCenter:
                 else:
                     df = df[df['code'].isin(universe)]
                 if len(df) < before_filter:
-                    logger.info(f"[预加载] 代码过滤: {before_filter:,} -> {len(df):,}行")
+                    logger.debug(f"[预加载] 代码过滤: {before_filter:,} -> {len(df):,}行")
 
         except Exception as e:
             # 读取失败
@@ -1270,7 +1335,7 @@ class DataCenter:
         # 如果使用了过滤，这里可能不需要再次过滤
         if not universe and universe is not None:
             df = df[df['code'].isin(universe)]
-            logger.info(f"[预加载] 代码过滤后: {len(df):,}行")
+            logger.debug(f"[预加载] 代码过滤后: {len(df):,}行")
 
         # 设置索引方便后续操作
         df = df.set_index(['time', 'code'])
@@ -1307,7 +1372,14 @@ class DataCenter:
                         self.preloaded_months[market] = {}
                     self.preloaded_months[market][month_key] = datetime.now()
 
-                logger.info(f"[预加载] 缓存 {month_key}: {len(month_df):,}行")
+                logger.debug(f"[预加载] 缓存 {month_key}: {len(month_df):,}行")
+            else:
+                # 数据为空也要标记为已加载，避免反复扫描Parquet
+                with self.preload_lock:
+                    if market not in self.preloaded_months:
+                        self.preloaded_months[market] = {}
+                    self.preloaded_months[market][month_key] = datetime.now()
+                logger.debug(f"[预加载] {month_key} 数据为空，已标记为已加载")
 
         # 主动释放内存
         del df, table
@@ -1321,10 +1393,10 @@ class DataCenter:
         try:
             import psutil
             mem = psutil.virtual_memory()
-            logger.info(f"[预加载] {year}年完成，共{total_cached}条记录，"
+            logger.debug(f"[预加载] {year}年完成，共{total_cached}条记录，"
                        f"耗时{elapsed:.2f}秒，内存使用: {mem.percent}%")
         except:
-            logger.info(f"[预加载] {year}年完成，共{total_cached}条记录，耗时{elapsed:.2f}秒")
+            logger.debug(f"[预加载] {year}年完成，共{total_cached}条记录，耗时{elapsed:.2f}秒")
         print(f"[预加载] ✓ {year}年完成！{total_cached}条记录，耗时{elapsed:.2f}秒", flush=True)
 
     def _load_single_month_from_csv(self, market: str, year: int, month: int,
@@ -1342,11 +1414,16 @@ class DataCenter:
         import time
         start_time = time.time()
 
-        logger.info(f"[预加载] CSV加载 {market} {month_key}")
+        logger.debug(f"[预加载] CSV加载 {market} {month_key}")
         print(f"[预加载] CSV加载 {market} {month_key}...", flush=True)
 
         # 计算月份的开始和结束日期
-        start_date = datetime(year, month, 1, 0, 0, 0)
+        # 对于1m频率，start_date前移1天以捕获前一天文件中的早盘数据
+        # （加密货币等24h市场：每日文件覆盖08:00~次日07:59，需要加载前一天文件获取00:00-07:59数据）
+        if frequency == '1m':
+            start_date = datetime(year, month, 1, 0, 0, 0) - timedelta(days=1)
+        else:
+            start_date = datetime(year, month, 1, 0, 0, 0)
         if month == 12:
             end_date = datetime(year + 1, 1, 1) - timedelta(days=1)
             end_date = end_date.replace(hour=23, minute=59, second=59)
@@ -1356,7 +1433,7 @@ class DataCenter:
 
         # 如果未提供universe，尝试获取全市场股票列表
         if not universe:
-            logger.info(f"[预加载] CSV方式未提供股票池，尝试获取 {market} 全市场数据")
+            logger.debug(f"[预加载] CSV方式未提供股票池，尝试获取 {market} 全市场数据")
             try:
                 stock_list_df = self.data_interface.get_stock_list(market, use_cache=True)
                 if stock_list_df is not None and not stock_list_df.empty:
@@ -1364,7 +1441,7 @@ class DataCenter:
                         universe = stock_list_df['code'].tolist()
                     else:
                         universe = stock_list_df.index.tolist()
-                    logger.info(f"[预加载] CSV方式成功获取 {market} 全市场股票列表: {len(universe)} 只")
+                    logger.debug(f"[预加载] CSV方式成功获取 {market} 全市场股票列表: {len(universe)} 只")
                 else:
                     logger.warning(f"[预加载] CSV方式无法获取 {market} 股票列表")
                     return
@@ -1388,7 +1465,7 @@ class DataCenter:
             self.preloaded_months[market][month_key] = datetime.now()
 
         elapsed = time.time() - start_time
-        logger.info(f"[预加载] {month_key} CSV加载完成，{total_records}条记录，耗时{elapsed:.2f}秒")
+        logger.debug(f"[预加载] {month_key} CSV加载完成，{total_records}条记录，耗时{elapsed:.2f}秒")
         print(f"[预加载] ✓ {month_key} 完成！{total_records}条记录", flush=True)
     
     def preload_data(self, market: str, start_date: str, end_date: str, 
@@ -1402,7 +1479,7 @@ class DataCenter:
             universe: 股票池，如果为空则加载全部
             frequency: 数据频率
         """
-        logger.info(f"开始预加载数据: market={market}, freq={frequency}, "
+        logger.debug(f"开始预加载数据: market={market}, freq={frequency}, "
                    f"date_range={start_date}~{end_date}, universe_size={len(universe) if universe else 'all'}")
         
         try:
@@ -1445,7 +1522,7 @@ class DataCenter:
             else:
                 # 其他频率，使用原有预加载逻辑
                 if universe:
-                    logger.info(f"预加载universe中的K线数据: {len(universe)} 只股票")
+                    logger.debug(f"预加载universe中的K线数据: {len(universe)} 只股票")
                     # 预加载universe中股票的K线数据到缓存
                     self.data_interface.get_klines(
                         codes=universe,
@@ -1456,9 +1533,9 @@ class DataCenter:
                         use_cache=True
                     )
                 else:
-                    logger.info("智能预加载模式：universe为空，将按需加载数据")
+                    logger.debug("智能预加载模式：universe为空，将按需加载数据")
             
-            logger.info("数据预加载完成")
+            logger.debug("数据预加载完成")
                 
         except Exception as e:
             logger.error(f"数据预加载失败: {e}")
@@ -1470,6 +1547,7 @@ class DataCenter:
                   time: datetime = None, fields: List[str] = None,
                   adj_type: str = 'none') -> pd.DataFrame:
         """获取指定时间点的行情数据
+        【性能诊断】包裹计时
 
         Args:
             codes: 股票代码或代码列表
@@ -1485,6 +1563,10 @@ class DataCenter:
             当指定时间点没有数据时，会自动使用最近的历史交易日数据
             会自动过滤超过回测当前时间的数据，防止未来函数
         """
+        # 【性能诊断】计时
+        import time as _time
+        _t0 = _time.perf_counter()
+
         if time is None and self.context:
             time = self.context.get('current_dt')
 
@@ -1502,29 +1584,463 @@ class DataCenter:
             logger.debug(f"[时间约束] 限制查询时间 {time} -> {backtest_time}")
             time = backtest_time
 
-        # 使用统一数据接口获取行情数据
-        result = self.data_interface.get_quotes(
-            codes=codes,
-            market=market,
-            freq=freq,
-            time=time,
-            fields=fields,
-            adj_type=adj_type,
-            use_cache=True
-        )
+        # 【性能优化】对1m频率，优先使用O(1)价格字典查找
+        if freq == '1m' and self._daily_price_dict:
+            minute_key = time.strftime('%Y-%m-%d %H:%M')
+            results = {}
+            if isinstance(codes, str):
+                codes_list = [codes]
+            else:
+                codes_list = codes
+            for code in codes_list:
+                price = self._daily_price_dict.get((code, minute_key))
+                if price:
+                    results[code] = {f: price[f] for f in fields if f in price}
+                else:
+                    # 精确分钟未命中，回退查找最近的历史分钟（向后10分钟）
+                    found = False
+                    for offset in range(1, 11):
+                        prev_key = (time - pd.Timedelta(minutes=offset)).strftime('%Y-%m-%d %H:%M')
+                        price = self._daily_price_dict.get((code, prev_key))
+                        if price:
+                            results[code] = {f: price[f] for f in fields if f in price}
+                            found = True
+                            break
+                    # 向后搜索失败时（如00:00无前日数据），使用首根K线
+                    # 适用于7x24市场（crypto UTC+8数据首根在08:01）
+                    if not found:
+                        first_min = self._daily_price_first_minute.get(code)
+                        if first_min:
+                            price = self._daily_price_dict.get((code, first_min))
+                            if price:
+                                results[code] = {f: price[f] for f in fields if f in price}
+            if results:
+                import pandas as _pd
+                result_df = _pd.DataFrame.from_dict(results, orient='index')
+                result_df.index.name = 'code'
+                # 【性能诊断】
+                _dt = _time.perf_counter() - _t0
+                _key = 'get_quotes(price_dict)'
+                if _key not in self._perf_api_timings:
+                    self._perf_api_timings[_key] = [0.0, 0]
+                self._perf_api_timings[_key][0] += _dt
+                self._perf_api_timings[_key][1] += 1
+                return result_df
 
-        # 调试：记录原始返回数据
-        if result.empty:
-            logger.debug(f"[get_quotes] 数据接口返回空数据: codes={codes}, market={market}, freq={freq}, time={time}")
+        # 【性能优化】对1m频率，字典未命中时使用日级缓存（避免月度缓存未命中时的重复磁盘加载）
+        if freq == '1m':
+            daily_result = self._get_or_load_daily_klines(
+                codes, market, freq, time, fields
+            )
+            if daily_result is not None and not daily_result.empty:
+                # 从日级缓存数据中提取目标时间点的价格
+                try:
+                    time_level = daily_result.index.get_level_values('time')
+                    before_or_at = daily_result[time_level <= time]
+                    if not before_or_at.empty:
+                        matching_data = before_or_at.groupby(level='code').tail(1)
+                    else:
+                        # 00:00等场景：请求时间早于首根K线（如crypto UTC+8首根在08:01）
+                        # 使用每只代码的首根K线作为当前价格
+                        matching_data = daily_result.groupby(level='code').head(1)
+                    result = matching_data.reset_index(level='time', drop=True).reset_index()
+                    if 'code' in result.columns:
+                        result = result.set_index('code')
+                    if fields:
+                        available = [f for f in fields if f in result.columns]
+                        result = result[available]
+                        # 【性能诊断】记录耗时
+                        _dt = _time.perf_counter() - _t0
+                        _key = 'get_quotes(daily_cache)'
+                        if _key not in self._perf_api_timings:
+                            self._perf_api_timings[_key] = [0.0, 0]
+                        self._perf_api_timings[_key][0] += _dt
+                        self._perf_api_timings[_key][1] += 1
+                        return result
+                except Exception as e:
+                    logger.debug(f"[get_quotes] 日级缓存提取失败，回退到原有逻辑: {e}")
+
+        # 【性能诊断】记录fallback调用的freq和codes（仅前5次）
+        _fallback_key = f'get_quotes(fallback,freq={freq})'
+
+        # 【性能优化】优先从预加载缓存获取数据，避免绕过缓存直接调用DataInterface
+        result = self._get_quotes_from_cache(codes, market, freq, time, fields, adj_type)
+
+        if result is None:
+            # 缓存未命中，使用DataInterface获取
+            result = self.data_interface.get_quotes(
+                codes=codes,
+                market=market,
+                freq=freq,
+                time=time,
+                fields=fields,
+                adj_type=adj_type,
+                use_cache=True
+            )
+
+            if result.empty:
+                logger.debug(f"[get_quotes] 数据接口返回空数据: codes={codes}, market={market}, freq={freq}, time={time}")
+            else:
+                logger.debug(f"[get_quotes] 数据接口返回数据: shape={result.shape}")
         else:
-            logger.debug(f"[get_quotes] 数据接口返回数据: shape={result.shape}, index类型={type(result.index)}, "
-                        f"index前3个={result.index[:3].tolist() if len(result.index) >= 3 else result.index.tolist()}")
+            logger.debug(f"[get_quotes] 从缓存获取数据: shape={result.shape}")
 
         # 双重保险：过滤可能超过回测时间的数据
-        filtered = self._filter_future_data(result, backtest_time)
-        if filtered.empty and not result.empty:
-            logger.warning(f"[get_quotes] 过滤后数据为空！原始shape={result.shape}, backtest_time={backtest_time}")
-        return filtered
+        if hasattr(result, 'index') and hasattr(result.index, 'names') and 'time' in getattr(result.index, 'names', []):
+            filtered = self._filter_future_data(result, backtest_time)
+            if filtered.empty and not result.empty:
+                logger.warning(f"[get_quotes] 过滤后数据为空！原始shape={result.shape}, backtest_time={backtest_time}")
+            # 【性能诊断】记录耗时
+            _dt = _time.perf_counter() - _t0
+            _key = f'get_quotes(fallback,freq={freq})'
+            if _key not in self._perf_api_timings:
+                self._perf_api_timings[_key] = [0.0, 0]
+            self._perf_api_timings[_key][0] += _dt
+            self._perf_api_timings[_key][1] += 1
+            return filtered
+        # 【性能诊断】记录耗时
+        _dt = _time.perf_counter() - _t0
+        _key = f'get_quotes(fallback,freq={freq})'
+        if _key not in self._perf_api_timings:
+            self._perf_api_timings[_key] = [0.0, 0]
+        self._perf_api_timings[_key][0] += _dt
+        self._perf_api_timings[_key][1] += 1
+        return result
+
+    def _get_or_load_daily_klines(self, codes, market, freq, time_point, fields):
+        """日级别K线缓存 - 对同一代码同一天的1m查询复用已加载数据
+
+        解决crypto等标的数>100时预加载被跳过、月度缓存为空、
+        每次get_quotes都触发Timebased磁盘加载的性能问题。
+
+        缓存粒度: (code, freq, date) — 同一代码同一天仅首次查询触发磁盘加载。
+
+        Args:
+            codes: 股票代码列表
+            market: 市场名称
+            freq: 数据频率
+            time_point: 查询时间点
+            fields: 需要的字段列表
+
+        Returns:
+            pd.DataFrame: 合并后的K线数据(MultiIndex(time,code))，失败返回None
+        """
+        if freq != '1m':
+            return None
+
+        current_date = time_point.date()
+        day_start = time_point.replace(hour=0, minute=0, second=0, microsecond=0)
+        day_end = time_point.replace(hour=23, minute=59, second=59, microsecond=0)
+
+        if isinstance(codes, str):
+            codes = [codes]
+
+        all_data = []
+        missing_codes = []
+
+        with self._daily_cache_lock:
+            # 日期切换时清空缓存
+            if self._daily_cache_date != current_date:
+                self._daily_klines_cache.clear()
+                self._daily_cache_date = current_date
+                self._daily_price_dict.clear()
+                self._daily_price_dict_date = current_date
+                self._daily_price_first_minute.clear()
+
+            # 检查哪些代码已缓存
+            for code in codes:
+                cache_key = (code, freq, str(current_date))
+                if cache_key in self._daily_klines_cache:
+                    cached = self._daily_klines_cache[cache_key]
+                    if not cached.empty:
+                        all_data.append(cached)
+                else:
+                    missing_codes.append(code)
+
+        # 加载缺失的代码（锁外执行，避免阻塞其他查询）
+        if missing_codes:
+            try:
+                loaded = self.data_interface.get_klines(
+                    codes=missing_codes, market=market, freq=freq,
+                    start_date=day_start.strftime('%Y-%m-%d %H:%M:%S'),
+                    end_date=day_end.strftime('%Y-%m-%d %H:%M:%S'),
+                    fields=fields, use_cache=True
+                )
+                if not loaded.empty:
+                    with self._daily_cache_lock:
+                        # 按代码拆分并缓存
+                        if hasattr(loaded.index, 'get_level_values') and 'code' in loaded.index.names:
+                            code_level = loaded.index.get_level_values('code')
+                            for code in missing_codes:
+                                code_data = loaded[code_level == code]
+                                cache_key = (code, freq, str(current_date))
+                                self._daily_klines_cache[cache_key] = code_data
+                                if not code_data.empty:
+                                    all_data.append(code_data)
+                                    # 【性能优化】构建分钟级价格字典
+                                    self._build_price_dict(code, code_data)
+                        else:
+                            # 索引结构异常，整体缓存
+                            all_data.append(loaded)
+
+                    # 【性能优化】回填月度kline_cache，使get_minute_prices后续可直接命中
+                    # 解决：preload的月度缓存可能不包含策略所需的codes，
+                    # 导致日切后daily_cache清空、monthly_cache未命中、get_minute_prices回退慢路径
+                    try:
+                        month_key = current_date.strftime('%Y-%m')
+                        kc_key = f"{market}_{freq}_{month_key}"
+                        if hasattr(loaded.index, 'get_level_values') and 'code' in loaded.index.names:
+                            with self._kline_cache_lock:
+                                if kc_key in self.kline_cache:
+                                    existing = self.kline_cache[kc_key]
+                                    loaded_codes = set(loaded.index.get_level_values('code'))
+                                    existing_codes = set(existing.index.get_level_values('code'))
+                                    new_codes = loaded_codes - existing_codes
+                                    if new_codes:
+                                        new_data = loaded[loaded.index.get_level_values('code').isin(new_codes)]
+                                        combined = pd.concat([existing, new_data])
+                                        combined = combined.sort_index()
+                                        self.kline_cache[kc_key] = combined
+                                else:
+                                    self.kline_cache[kc_key] = loaded
+                    except Exception as e:
+                        logger.debug(f"[日级缓存] 回填kline_cache失败: {e}")
+            except Exception as e:
+                logger.warning(f"[日级缓存] 加载失败: {e}")
+
+        if not all_data:
+            return None
+
+        try:
+            return pd.concat(all_data)
+        except Exception as e:
+            logger.warning(f"[日级缓存] 合并数据失败: {e}")
+            return None
+
+    def _build_price_dict(self, code, code_data):
+        """从单个代码的日K线DataFrame构建分钟级价格字典
+
+        格式: {(code, '2023-06-01 10:30'): {'open': float, 'close': float, ...}}
+        用于get_quotes的O(1)快速查找路径。
+        """
+        try:
+            if code_data.empty:
+                return
+            cols = set(code_data.columns)
+            needed = {'close'}
+            if not needed.issubset(cols):
+                return
+
+            time_idx = code_data.index.get_level_values('time')
+            has_open = 'open' in cols
+            has_high = 'high' in cols
+            has_low = 'low' in cols
+            has_volume = 'volume' in cols
+
+            first_minute = None
+            for t, row in zip(time_idx, code_data.itertuples()):
+                minute_key = pd.Timestamp(t).strftime('%Y-%m-%d %H:%M')
+                entry = {'close': float(row.close) if hasattr(row, 'close') else 0.0}
+                if has_open:
+                    entry['open'] = float(row.open) if hasattr(row, 'open') else 0.0
+                if has_high:
+                    entry['high'] = float(row.high) if hasattr(row, 'high') else 0.0
+                if has_low:
+                    entry['low'] = float(row.low) if hasattr(row, 'low') else 0.0
+                if has_volume:
+                    entry['volume'] = float(row.volume) if hasattr(row, 'volume') else 0.0
+                self._daily_price_dict[(code, minute_key)] = entry
+                # 记录首根K线（time_idx已排序，第一个就是最早的）
+                if first_minute is None:
+                    first_minute = minute_key
+
+            # 记录该code的首根分钟K线时间
+            if first_minute:
+                existing = self._daily_price_first_minute.get(code)
+                if existing is None or first_minute < existing:
+                    self._daily_price_first_minute[code] = first_minute
+        except Exception as e:
+            logger.debug(f"[价格字典] 构建{code}价格字典失败: {e}")
+
+    def _get_quotes_from_cache(self, codes: Union[str, List[str]], market: str,
+                                freq: str, time: datetime, fields: List[str],
+                                adj_type: str) -> Optional[pd.DataFrame]:
+        """从预加载缓存获取行情数据
+
+        通过DataCenter.get_klines()利用预加载的月度缓存，
+        避免每次调用都绕过缓存直接访问DataInterface。
+
+        Returns:
+            pd.DataFrame or None: 如果缓存命中返回行情数据(index=code)，否则返回None
+        """
+        if isinstance(codes, str):
+            codes = [codes]
+
+        try:
+            # 根据频率确定查询时间范围
+            if freq == '1d':
+                start_time = (time - timedelta(days=30)).strftime('%Y-%m-%d 00:00:00')
+                end_time = (time + timedelta(days=7)).strftime('%Y-%m-%d 23:59:59')
+            else:
+                start_time = time.strftime('%Y-%m-%d 00:00:00')
+                end_time = time.strftime('%Y-%m-%d 23:59:59')
+
+            # 通过get_klines获取数据（会使用预加载缓存）
+            klines_df = self.get_klines(
+                codes=codes, freq=freq,
+                start_time=start_time, end_time=end_time,
+                fields=fields, adj_type=adj_type
+            )
+
+            if klines_df.empty:
+                return None
+
+            # 提取目标时间点的数据
+            time_index = klines_df.index.get_level_values('time')
+
+            if freq == '1d':
+                target_date = time.date()
+                if hasattr(time_index, 'date'):
+                    exact_match = klines_df[time_index.date == target_date]
+                else:
+                    exact_match = klines_df[time_index == pd.Timestamp(time)]
+
+                if not exact_match.empty:
+                    matching_data = exact_match
+                    matched_codes = set(matching_data.index.get_level_values('code'))
+                    missing_codes = [c for c in codes if c not in matched_codes]
+                    if missing_codes and hasattr(time_index, 'date'):
+                        before_target = klines_df[time_index.date < target_date]
+                        for code in missing_codes:
+                            code_before = before_target[before_target.index.get_level_values('code') == code]
+                            if not code_before.empty:
+                                latest = code_before.groupby(level='code').tail(1)
+                                matching_data = pd.concat([matching_data, latest])
+                else:
+                    matching_data = klines_df.groupby(level='code').tail(1)
+            else:
+                before_or_at = klines_df[time_index <= time]
+                if not before_or_at.empty:
+                    matching_data = before_or_at.groupby(level='code').tail(1)
+                else:
+                    matching_data = pd.DataFrame()
+
+            if matching_data.empty:
+                return None
+
+            # 转换为quotes格式 (index=code)
+            quotes_df = matching_data.reset_index(level='time', drop=True).reset_index()
+            if 'code' in quotes_df.columns:
+                quotes_df = quotes_df.set_index('code')
+
+            return quotes_df
+
+        except Exception as e:
+            logger.debug(f"[get_quotes] 缓存查询失败，将回退到DataInterface: {e}")
+            return None
+
+    def get_minute_prices(self, codes: List[str], market: str, freq: str,
+                          current_time: datetime) -> Dict[str, Dict[str, float]]:
+        """快速获取当前分钟的价格数据（用于撮合引擎）
+
+        相比get_klines，避免了DataFrame copy + filter + time slice的开销。
+        直接从预加载缓存中按索引查找，时间复杂度O(1)。
+
+        Returns:
+            Dict[symbol, {'close': float, 'volume': float}]
+        """
+        if freq != '1m':
+            return {}
+
+        result = {}
+        minute_key = current_time.strftime('%Y-%m-%d %H:%M')
+        month_key = current_time.strftime('%Y-%m')
+        cache_key = f"{market}_{freq}_{month_key}"
+
+        with self._kline_cache_lock:
+            if cache_key not in self.kline_cache:
+                return {}
+
+            month_df = self.kline_cache[cache_key]
+            if month_df.empty:
+                return {}
+
+            try:
+                # 直接用loc精确查找当前分钟的数据，避免copy整个月份数据
+                if hasattr(month_df.index, 'get_level_values') and 'time' in month_df.index.names:
+                    time_level = month_df.index.get_level_values('time')
+                    # 使用searchsorted快速定位时间范围
+                    minute_start = pd.Timestamp(current_time.strftime('%Y-%m-%d %H:%M:00'))
+                    minute_end = minute_start + pd.Timedelta(minutes=1) - pd.Timedelta(seconds=1)
+
+                    left = time_level.searchsorted(minute_start, side='left')
+                    right = time_level.searchsorted(minute_end, side='right')
+
+                    if left < right and left < len(month_df):
+                        minute_slice = month_df.iloc[left:right]
+                        code_level = minute_slice.index.get_level_values('code')
+
+                        for code in codes:
+                            base_code = code.split('.')[0] if '.' in code else code
+                            mask = code_level.str.split('.').str[0] == base_code
+                            matched = minute_slice[mask]
+                            if not matched.empty:
+                                last_row = matched.iloc[-1]
+                                result[code] = {
+                                    'close': float(last_row.get('close', 0)),
+                                    'volume': float(last_row.get('volume', 0)),
+                                }
+            except Exception:
+                pass
+
+        # 【性能优化】优先使用 price_dict O(1)查找，避免DataFrame操作
+        if not result and self._daily_price_dict:
+            minute_key_str = current_time.strftime('%Y-%m-%d %H:%M')
+            for code in codes:
+                price = self._daily_price_dict.get((code, minute_key_str))
+                if price:
+                    result[code] = {
+                        'close': price.get('close', 0.0),
+                        'volume': price.get('volume', 0.0),
+                    }
+                else:
+                    # 向前回溯10分钟
+                    found = False
+                    for offset in range(1, 11):
+                        prev_key = (current_time - pd.Timedelta(minutes=offset)).strftime('%Y-%m-%d %H:%M')
+                        price = self._daily_price_dict.get((code, prev_key))
+                        if price:
+                            result[code] = {
+                                'close': price.get('close', 0.0),
+                                'volume': price.get('volume', 0.0),
+                            }
+                            found = True
+                            break
+                    # 仍未找到：使用该code的首根K线价格（解决crypto 00:00无数据问题）
+                    if not found:
+                        first_min = self._daily_price_first_minute.get(code)
+                        if first_min:
+                            price = self._daily_price_dict.get((code, first_min))
+                            if price:
+                                result[code] = {
+                                    'close': price.get('close', 0.0),
+                                    'volume': price.get('volume', 0.0),
+                                }
+
+        # price_dict也未命中（当天首次调用），触发日级缓存加载
+        # 加载后会级联构建price_dict和回填kline_cache，后续调用直接走price_dict路径
+        if not result:
+            try:
+                self._get_or_load_daily_klines(
+                    codes, market, freq, current_time, ['close', 'volume']
+                )
+                # 加载后price_dict已构建，递归调用自身获取数据
+                # 递归深度最多1层（price_dict已填充）
+                return self.get_minute_prices(codes, market, freq, current_time)
+            except Exception:
+                pass
+
+        return result
 
     def _get_from_cache(self, codes: Union[str, List[str]], market: str, freq: str,
                        start_time: Union[str, datetime], end_time: Union[str, datetime],
@@ -1566,29 +2082,53 @@ class DataCenter:
             with self._kline_cache_lock:
                 if cache_key not in self.kline_cache:
                     logger.debug(f"[缓存] 缓存未命中: {cache_key}")
-                    return None  # 缓存不完整，回退到磁盘加载
+                    return None
 
-                month_df = self.kline_cache[cache_key].copy()  # 复制数据避免在锁内修改
+                cached_df = self.kline_cache[cache_key]
+                logger.debug(f"[缓存] 命中: {cache_key}, {len(cached_df)}行, codes查询: {codes[:3]}")
+
+                cached_df = self.kline_cache[cache_key]
 
             # 检查索引结构是否正确
-            if not hasattr(month_df.index, 'names') or 'code' not in month_df.index.names:
+            if not hasattr(cached_df.index, 'names') or 'code' not in cached_df.index.names:
                 logger.warning(f"[缓存] {cache_key} 索引结构不正确，尝试修复")
-                # 尝试修复索引结构
-                if 'code' in month_df.columns and 'time' in month_df.columns:
-                    month_df = month_df.set_index(['time', 'code'])
-                elif 'code' in month_df.columns:
-                    month_df = month_df.set_index('code')
-                # 修复后重新存入缓存（使用锁保护）
                 with self._kline_cache_lock:
-                    self.kline_cache[cache_key] = month_df
+                    if 'code' in cached_df.columns and 'time' in cached_df.columns:
+                        cached_df = cached_df.set_index(['time', 'code'])
+                    elif 'code' in cached_df.columns:
+                        cached_df = cached_df.set_index('code')
+                    self.kline_cache[cache_key] = cached_df
 
-            # 过滤股票代码和时间范围
-            # 对于期货市场，使用base code匹配（去掉交易所后缀）
+            # 【性能优化】先用searchsorted定位时间范围，再slice，避免copy整个月份数据
+            month_start_dt = current.replace(day=1, hour=0, minute=0, second=0)
+            if current.month == 12:
+                month_end_dt = current.replace(year=current.year + 1, month=1, day=1) - pd.Timedelta(seconds=1)
+            else:
+                month_end_dt = current.replace(month=current.month + 1, day=1) - pd.Timedelta(seconds=1)
+
+            query_start = max(month_start_dt, start_time)
+            query_end = min(month_end_dt, end_time)
+
+            try:
+                if hasattr(cached_df.index, 'get_level_values') and 'time' in cached_df.index.names:
+                    time_level = cached_df.index.get_level_values('time')
+                    left = time_level.searchsorted(pd.Timestamp(query_start), side='left')
+                    right = time_level.searchsorted(pd.Timestamp(query_end), side='right')
+                    month_df = cached_df.iloc[left:right].copy()
+                else:
+                    month_df = cached_df.loc[query_start:query_end].copy()
+            except Exception:
+                month_df = cached_df.copy()
+
+            if month_df.empty:
+                current = month_end_dt + timedelta(seconds=1)
+                continue
+
+            # 过滤股票代码
             if market == 'cn_future':
                 base_codes = set(c.split('.')[0] if '.' in c else c for c in codes)
                 cache_base = month_df.index.get_level_values('code').str.split('.').str[0]
                 month_df = month_df[cache_base.isin(base_codes)]
-                # 统一code格式：reset_index → map → set_index 避免set_levels的内部codes不一致问题
                 code_map = {}
                 for c in codes:
                     base = c.split('.')[0] if '.' in c else c
@@ -1601,28 +2141,11 @@ class DataCenter:
             else:
                 month_df = month_df[month_df.index.get_level_values('code').isin(codes)]
 
-            # 获取该月的起始和结束时间
-            month_start = current.replace(day=1, hour=0, minute=0, second=0)
-            if current.month == 12:
-                month_end = current.replace(year=current.year + 1, month=1, day=1) - pd.Timedelta(seconds=1)
-            else:
-                month_end = current.replace(month=current.month + 1, day=1) - pd.Timedelta(seconds=1)
-
-            # 限制在查询时间范围内
-            month_start = max(month_start, start_time)
-            month_end = min(month_end, end_time)
-
-            # 从缓存中提取时间范围数据
-            month_df = month_df.loc[month_start:month_end]
-
             if not month_df.empty:
                 all_data.append(month_df)
 
             # 移动到下个月
-            if current.month == 12:
-                current = current.replace(year=current.year + 1, month=1, day=1)
-            else:
-                current = current.replace(month=current.month + 1, day=1)
+            current = month_end_dt + timedelta(seconds=1)
 
         if not all_data:
             return None
@@ -1636,6 +2159,55 @@ class DataCenter:
             result = result[available_fields]
 
         return result
+
+    def _write_back_to_cache(self, data: pd.DataFrame, market: str, freq: str):
+        """【O1优化】将按需加载的数据写回月度缓存，避免后续重复从磁盘加载
+
+        场景：crypto 1m 预加载跳过（>100标的），导致每次 get_klines 缓存未命中，
+        重复读磁盘。写回后，同一月份数据的后续查询直接命中缓存。
+
+        Args:
+            data: 从 data_interface 加载的完整数据（未过滤未来数据），MultiIndex(time, code)
+            market: 市场名称
+            freq: 数据频率
+        """
+        if data.empty:
+            return
+        if not hasattr(data.index, 'names') or 'time' not in data.index.names:
+            return
+
+        try:
+            time_level = data.index.get_level_values('time')
+            # 按月份分组
+            periods = time_level.to_period('M')
+            unique_months = periods.unique()
+
+            for period in unique_months:
+                month_key = f"{period.year}-{period.month:02d}"
+                cache_key = f"{market}_{freq}_{month_key}"
+
+                # 筛选该月数据
+                month_mask = (periods == period)
+                month_data = data[month_mask].copy()
+
+                if month_data.empty:
+                    continue
+
+                with self._kline_cache_lock:
+                    if cache_key in self.kline_cache:
+                        # 合并到已有缓存（去重+排序，保持searchsorted正确性）
+                        existing = self.kline_cache[cache_key]
+                        combined = pd.concat([existing, month_data])
+                        combined = combined[~combined.index.duplicated(keep='last')]
+                        combined = combined.sort_index()
+                        self.kline_cache[cache_key] = combined
+                        logger.debug(f"[缓存回写] 合并: {cache_key}, "
+                                   f"新增{len(month_data)}行, 总计{len(combined)}行")
+                    else:
+                        self.kline_cache[cache_key] = month_data
+                        logger.debug(f"[缓存回写] 新建: {cache_key}, {len(month_data)}行")
+        except Exception as e:
+            logger.debug(f"[缓存回写] 写回缓存失败（不影响正常流程）: {e}")
 
     def get_klines(self, codes: Union[str, List[str]], freq: str = '1d',
                   start_time: Union[str, datetime] = None, end_time: Union[str, datetime] = None,
@@ -1656,6 +2228,10 @@ class DataCenter:
         Note:
             会自动限制end_time不超过回测当前时间，防止未来函数
         """
+        # 【性能诊断】计时
+        import time as _time
+        _t0 = _time.perf_counter()
+
         if fields is None:
             fields = ['open', 'high', 'low', 'close', 'volume']
 
@@ -1664,13 +2240,34 @@ class DataCenter:
         # 获取回测当前时间作为硬性上限
         backtest_time = self._get_backtest_time()
 
-        # 限制 end_time 不超过回测当前时间
+        # 限制 end_time 不超过回测当前时间（加缓冲避免双重截断丢K线）
         if backtest_time and end_time:
-            end_time = self._min_time(end_time, backtest_time)
-            if end_time == backtest_time:
-                logger.debug(f"[时间约束] 限制end_time <= {backtest_time}")
+            # 添加1个bar的缓冲，避免 end_time 截断 + _filter_future_data 双重过滤
+            # 导致 backtest_time 处的K线因数据加载的exclusive边界而丢失
+            if freq and freq.endswith('m'):
+                buffer = pd.Timedelta(minutes=int(freq[:-1]))
+            else:
+                buffer = pd.Timedelta(hours=1)
+            end_time = self._min_time(end_time, backtest_time + buffer)
+            logger.debug(f"[时间约束] 限制end_time <= {backtest_time}")
 
-        logger.info(f"[DataCenter] get_klines调用: market={market}, freq={freq}, "
+        # 扩展 start_time 以提供盘前"最近一根完整K线"功能
+        # 策略在盘前（如09:00）查询分钟线时，当天数据尚未生成（09:30开始）
+        # 对于分钟线，回溯1天确保包含前一交易日的收盘K线
+        # 对于日线，回溯2天确保包含前一交易日的K线
+        if backtest_time and freq:
+            if freq.endswith('m'):
+                lookback_start = backtest_time - pd.Timedelta(days=1)
+            elif freq.endswith('d'):
+                lookback_start = backtest_time - pd.Timedelta(days=2)
+            else:
+                lookback_start = backtest_time - pd.Timedelta(days=1)
+            # start_time为None或晚于lookback时，扩展到lookback_start
+            if start_time is None or pd.to_datetime(start_time) > lookback_start:
+                logger.debug(f"[时间约束] 扩展start_time至{lookback_start}以提供盘前数据")
+                start_time = lookback_start
+
+        logger.debug(f"[DataCenter] get_klines调用: market={market}, freq={freq}, "
                    f"codes_count={len(codes) if isinstance(codes, list) else 1}, "
                    f"start={start_time}, end={end_time}")
 
@@ -1688,9 +2285,67 @@ class DataCenter:
             logger.debug(f"[DataCenter] 从缓存获取数据: shape={cached_result.shape}")
             # 仍然需要过滤未来数据
             filtered = self._filter_future_data(cached_result, backtest_time)
+            logger.debug(f"[缓存] get_klines缓存命中: {len(filtered)}行")
+            # 【性能诊断】
+            _dt = _time.perf_counter() - _t0
+            _key = 'get_klines(monthly_cache)'
+            if _key not in self._perf_api_timings:
+                self._perf_api_timings[_key] = [0.0, 0]
+            self._perf_api_timings[_key][0] += _dt
+            self._perf_api_timings[_key][1] += 1
             return filtered
 
+        logger.debug(f"[缓存] get_klines缓存未命中: {market} {freq} codes={codes[:3] if isinstance(codes, list) else codes} start={start_time} end={end_time}")
+
+        # 【性能优化】月度缓存miss时，对1m频率尝试日级缓存
+        if freq == '1m':
+            daily_result = self._get_or_load_daily_klines(
+                codes, market, freq, backtest_time or pd.Timestamp.now(), fields
+            )
+            if daily_result is not None and not daily_result.empty:
+                # 按请求的时间范围截取
+                try:
+                    if isinstance(start_time, str):
+                        start_time_pd = pd.to_datetime(start_time)
+                    else:
+                        start_time_pd = pd.Timestamp(start_time) if start_time else None
+                    if isinstance(end_time, str):
+                        end_time_pd = pd.to_datetime(end_time)
+                    else:
+                        end_time_pd = pd.Timestamp(end_time) if end_time else None
+
+                    time_level = daily_result.index.get_level_values('time')
+                    if start_time_pd and end_time_pd:
+                        mask = (time_level >= start_time_pd) & (time_level <= end_time_pd)
+                        sliced = daily_result[mask]
+                    elif end_time_pd:
+                        sliced = daily_result[time_level <= end_time_pd]
+                    else:
+                        sliced = daily_result
+
+                    if not sliced.empty:
+                        filtered = self._filter_future_data(sliced, backtest_time)
+                        # 【性能诊断】
+                        _dt = _time.perf_counter() - _t0
+                        _key = 'get_klines(daily_cache)'
+                        if _key not in self._perf_api_timings:
+                            self._perf_api_timings[_key] = [0.0, 0]
+                        self._perf_api_timings[_key][0] += _dt
+                        self._perf_api_timings[_key][1] += 1
+                        return filtered
+                except Exception as e:
+                    logger.debug(f"[get_klines] 日级缓存截取失败，回退到data_interface: {e}")
+
         # 缓存未命中，使用统一数据接口获取K线数据
+        # 【性能诊断】辅助函数：记录 data_interface 路径耗时
+        def _record_klines_perf():
+            _dt = _time.perf_counter() - _t0
+            _key = 'get_klines(data_interface)'
+            if _key not in self._perf_api_timings:
+                self._perf_api_timings[_key] = [0.0, 0]
+            self._perf_api_timings[_key][0] += _dt
+            self._perf_api_timings[_key][1] += 1
+
         # 对期货代码进行标准化（添加交易所后缀），确保与数据文件名匹配
         query_codes = codes
         if market == 'cn_future':
@@ -1713,13 +2368,54 @@ class DataCenter:
                    f"empty={result.empty}")
 
         if result.empty:
-            logger.warning(f"[DataCenter] ⚠️ 返回空DataFrame！参数: codes={codes[:3] if isinstance(codes, list) else codes}, "
+            display_codes = query_codes[:3] if isinstance(query_codes, list) else query_codes
+            logger.debug(f"[DataCenter] ⚠️ 返回空DataFrame！参数: codes={display_codes}, "
                          f"start={start_time}, end={end_time}")
+
+        # 【O1优化】将加载的数据写回月度缓存，避免后续重复从磁盘加载
+        # 注意：使用未过滤的result，因为缓存应包含完整月份数据
+        if not result.empty:
+            self._write_back_to_cache(result, market, freq)
 
         # 双重保险：过滤可能超过回测时间的数据
         filtered = self._filter_future_data(result, backtest_time)
         if filtered.empty and not result.empty:
+            # 盘前场景：所有加载数据都在backtest_time之后（如09:20查询，数据从09:30开始）
+            # 尝试回溯加载前一个交易日的数据
+            if backtest_time and freq and freq.endswith('m'):
+                retry_start = (backtest_time - pd.Timedelta(days=5)).strftime('%Y-%m-%d 00:00:00')
+                retry_end = backtest_time.strftime('%Y-%m-%d 23:59:59')
+                try:
+                    retry_result = self.data_interface.get_klines(
+                        codes=query_codes, market=market, freq=freq,
+                        start_date=retry_start, end_date=retry_end,
+                        fields=fields, adj_type=adj_type, use_cache=True
+                    )
+                    # 【O1优化】盘前回退数据也写回缓存
+                    if not retry_result.empty:
+                        self._write_back_to_cache(retry_result, market, freq)
+                    retry_filtered = self._filter_future_data(retry_result, backtest_time)
+                    if not retry_filtered.empty:
+                        logger.info(f"[get_klines] 盘前回退成功: 获取到{len(retry_filtered)}行历史K线")
+                        _record_klines_perf()
+                        return retry_filtered
+                except Exception as e:
+                    logger.debug(f"[get_klines] 盘前回退查询失败: {e}")
+
+            # 最终回退：返回当天第一根K线作为参考（盘前场景下的近似方案）
+            # 注：这包含约10-30分钟的前瞻，但比返回空数据导致策略异常更好
+            if backtest_time and not result.empty:
+                if isinstance(result.index, pd.MultiIndex):
+                    first_bar = result.head(1)
+                else:
+                    first_bar = result.head(1)
+                logger.info(f"[get_klines] 盘前参考: 返回当日首根K线作为参考 "
+                           f"(backtest_time={backtest_time}, 首根时间={result.index[0] if len(result) > 0 else 'N/A'})")
+                _record_klines_perf()
+                return first_bar
+
             logger.warning(f"[get_klines] 过滤后数据为空！原始shape={result.shape}, backtest_time={backtest_time}")
+        _record_klines_perf()
         return filtered
     
     def _aggregate_klines(self, codes: Union[str, List[str]], source_freq: str, target_freq: str,
@@ -1739,16 +2435,16 @@ class DataCenter:
         Returns:
             pd.DataFrame: 聚合后的K线数据
         """
-        # 获取1m数据
-        df_1m = self.data_interface.get_klines(
+        # 获取1m数据 - 通过get_klines利用预加载缓存
+        market = self._get_market_from_context()
+
+        df_1m = self.get_klines(
             codes=codes,
-            market=self._get_market_from_context(),
             freq=source_freq,
-            start_date=start_time,
-            end_date=end_time,
+            start_time=start_time,
+            end_time=end_time,
             fields=fields,
-            adj_type=adj_type,
-            use_cache=True
+            adj_type=adj_type
         )
         
         if df_1m.empty:
@@ -1786,24 +2482,29 @@ class DataCenter:
         
         return df_agg
     
-    def get_factors(self, factor_names: Union[str, List[str]], codes: Union[str, List[str]] = None,
-                   freq: str = '1d', start_date: Union[str, datetime] = None, 
-                   end_date: Union[str, datetime] = None) -> pd.DataFrame:
+    def get_factors(self, factor_names: Union[str, List[str]] = None, codes: Union[str, List[str]] = None,
+                   freq: str = '1d', start_date: Union[str, datetime] = None,
+                   end_date: Union[str, datetime] = None,
+                   factor_list: Union[str, List[str]] = None,
+                   **kwargs) -> pd.DataFrame:
         """获取因子数据 (matrix格式)
-        
+
         Args:
             factor_names: 因子名称或名称列表
             codes: 股票代码列表，如果为None则获取所有
             freq: 数据频率
             start_date: 开始日期
             end_date: 结束日期
-        
-        Returns:
-            pd.DataFrame: 因子数据，MultiIndex(date, code)
+            factor_list: 因子名称或名称列表（兼容旧参数名，与factor_names等效）
         """
+        # 兼容旧参数名 factor_list
+        if factor_names is None and factor_list is not None:
+            factor_names = factor_list
+        if factor_names is None:
+            return pd.DataFrame()
+
         market = self._get_market_from_context()
-        
-        # 使用统一数据接口获取因子数据
+
         return self.data_interface.get_factors(
             factor_names=factor_names,
             codes=codes,
@@ -1815,18 +2516,70 @@ class DataCenter:
             use_cache=True
         )
     
-    def get_trading_calendar(self, market: str, start_date: date, end_date: date) -> List[date]:
+    def get_trading_calendar(self, market: str = None, start_date=None, end_date=None, **kwargs) -> List[date]:
         """获取交易日历
-        
+
+        优先使用引擎已生成的完整日历（context['calendar']），
+        避免策略API走DataInterface fallback导致结果不一致。
+        当请求范围超出缓存日历时，自动补充DataInterface结果。
+
         Args:
-            market: 市场名称
-            start_date: 开始日期
-            end_date: 结束日期
-            
+            market: 市场名称（可选，默认使用当前回测市场）
+            start_date: 开始日期（可选，不传则返回完整日历）
+            end_date: 结束日期（可选，不传则返回完整日历）
+
         Returns:
             List[date]: 交易日期列表
         """
-        # 使用统一数据接口获取交易日历
+        if market is None:
+            market = self._get_market_from_context()
+
+        # 优先使用引擎已生成的完整日历
+        cached_calendar = self.context.get('calendar') if self.context else None
+        if cached_calendar:
+            # engine calendar 是 datetime 列表，转为 date
+            all_dates = [dt.date() if hasattr(dt, 'date') and callable(dt.date) else dt
+                         for dt in cached_calendar]
+
+            if not start_date and not end_date:
+                # 不传日期，返回完整日历
+                return list(all_dates)
+
+            # 解析过滤边界
+            sd = pd.to_datetime(start_date).date() if start_date else all_dates[0]
+            ed = pd.to_datetime(end_date).date() if end_date else all_dates[-1]
+
+            # 从缓存日历中过滤
+            cached_result = [d for d in all_dates if sd <= d <= ed]
+
+            # 检查请求范围是否超出缓存日历，需要补充
+            cal_start = all_dates[0] if all_dates else None
+            cal_end = all_dates[-1] if all_dates else None
+            need_before = cal_start and sd < cal_start
+            need_after = cal_end and ed > cal_end
+
+            if not need_before and not need_after:
+                # 请求范围完全在缓存内
+                return cached_result
+
+            # 部分超出，补充缺失段
+            supplement = []
+            try:
+                supplement = self.data_interface.get_trading_calendar(
+                    market=market, start_date=start_date, end_date=end_date,
+                    use_cache=True
+                )
+            except Exception:
+                pass
+
+            if not supplement:
+                return cached_result if cached_result else []
+
+            # 合并去重
+            merged = sorted(set(cached_result) | set(supplement))
+            return merged
+
+        # fallback: 无缓存日历，走DataInterface
         return self.data_interface.get_trading_calendar(
             market=market,
             start_date=start_date,
@@ -2070,14 +2823,14 @@ class DataCenter:
             try:
                 if price_field == 'ohlc':
                     result = func(
-                        symbol_data['high'].values,
-                        symbol_data['low'].values,
-                        symbol_data['open'].values,
-                        symbol_data['close'].values,
+                        symbol_data['high'].values.astype('float64'),
+                        symbol_data['low'].values.astype('float64'),
+                        symbol_data['open'].values.astype('float64'),
+                        symbol_data['close'].values.astype('float64'),
                         **kwargs
                     )
                 else:
-                    prices = symbol_data['close'].values
+                    prices = symbol_data['close'].values.astype('float64')
                     result = func(prices, **kwargs)
 
                 # 处理结果

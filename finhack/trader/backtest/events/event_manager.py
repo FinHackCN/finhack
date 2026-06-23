@@ -364,9 +364,13 @@ class EventManager:
     def _handle_delisting(self, event: BaseEvent) -> bool:
         """处理退市事件"""
         try:
-            symbol = event.data.get('symbol')
+            # 兼容 DelistingEvent 和 BaseEvent data dict
+            if hasattr(event, 'symbol') and event.symbol:
+                symbol = event.symbol
+            else:
+                symbol = event.data.get('symbol')
             delisting_date = event.data.get('delisting_date')
-            
+
             self.logger.info(f"处理退市事件: {symbol}, 退市日期: {delisting_date}")
 
             # 更新股票状态为退市
@@ -380,24 +384,26 @@ class EventManager:
             # 强制清仓
             if self.context and hasattr(self.context, 'portfolio'):
                 portfolio = self.context.portfolio
-                
+
                 if symbol in portfolio.positions:
                     position = portfolio.positions[symbol]
-                    shares = position.get('shares', 0)
-                    
+                    # Position是dataclass，使用属性访问
+                    shares = position.volume
+
                     if shares > 0:
                         # 按最后价格清仓
-                        last_price = position.get('last_price', 0)
+                        last_price = position.last_price
                         liquidation_value = shares * last_price
-                        
+
                         # 更新现金和持仓
                         portfolio.cash += liquidation_value
                         del portfolio.positions[symbol]
-                        
-                        self.logger.info(f"退市强制清仓: {symbol}, 数量: {shares}, 价值: {liquidation_value}")
-            
+
+                        self.logger.info(f"[退市处理] 强制清仓: {symbol}, 数量: {shares}, "
+                                        f"清算价格: {last_price}, 清算价值: {liquidation_value:.2f}")
+
             return True
-            
+
         except Exception as e:
             self.logger.error(f"处理退市事件失败: {str(e)}")
             return False

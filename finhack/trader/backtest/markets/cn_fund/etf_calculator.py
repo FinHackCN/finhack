@@ -415,7 +415,7 @@ class ETFCommissionCalculator:
                     'commission_rate': 0.0003,
                     'min_commission': 5.0,
                     'stamp_tax_buy': 0.0,
-                    'stamp_tax_sell': 0.001,
+                    'stamp_tax_sell': 0.0,  # ETF免征印花税
                 }
 
         # 根据ETF类型返回规则
@@ -428,7 +428,7 @@ class ETFCommissionCalculator:
             'commission_rate': 0.0003,
             'min_commission': 5.0,
             'stamp_tax_buy': 0.0,
-            'stamp_tax_sell': 0.001,
+            'stamp_tax_sell': 0.0,  # ETF免征印花税
         })
 
         # 根据ETF类型调整印花税

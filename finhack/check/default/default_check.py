@@ -1390,8 +1390,109 @@ class DefaultCheck:
                 freshness_str = f", 新鲜度 {freshness_days} 天" if freshness_days else ""
                 print(f"    {name}-{freq}: 覆盖率 {coverage:.1f}%, 缺失 {len(missing_dates)} 天{freshness_str}")
 
+        # 检查 timebased 目录的 CSV 文件命名完整性（raw文件存在但merged文件缺失）
+        self._check_timebased_naming_integrity()
+
         # 检查 codebased 目录的 CSV 数据完整性
         self._check_codebased_csv_integrity()
+
+    def _check_timebased_naming_integrity(self):
+        """检查 timebased 目录的 CSV 文件命名完整性
+
+        检测存在raw文件（如 _bn.csv, _tushare.csv）但缺少 merged 文件的日期目录。
+        正确的数据流程是: raw文件 → merge → {market}_kline_merged.csv
+        如果只有raw文件没有merged文件，说明merge步骤缺失或失败。
+        """
+        print("\n  检查 timebased CSV 文件命名完整性...")
+        kline_dir = KLINE_DIR if 'KLINE_DIR' in dir() else os.path.join(DATA_DIR, 'market', 'kline')
+        timebased_dir = os.path.join(kline_dir, 'timebased')
+
+        if not os.path.exists(timebased_dir):
+            return
+
+        # 已知的raw文件后缀（未经过merge的源文件）
+        raw_suffixes = ('_bn.csv', '_tushare.csv', '_iquant.csv', '_yfinance.csv')
+
+        for market_dir in os.listdir(timebased_dir):
+            market_path = os.path.join(timebased_dir, market_dir)
+            if not os.path.isdir(market_path):
+                continue
+
+            market = market_dir
+            name = self._get_market_name(market)
+
+            for freq in ['1d', '1m']:
+                csv_dir = os.path.join(market_path, freq)
+                if not os.path.exists(csv_dir):
+                    continue
+
+                raw_only_dates = []  # 只有raw文件没有merged文件的日期
+                merged_ok_dates = 0  # 有merged文件的日期数
+
+                try:
+                    for year_dir in os.listdir(csv_dir):
+                        year_path = os.path.join(csv_dir, year_dir)
+                        if not os.path.isdir(year_path) or not year_dir.isdigit():
+                            continue
+
+                        for month_dir in os.listdir(year_path):
+                            month_path = os.path.join(year_path, month_dir)
+                            if not os.path.isdir(month_path) or not month_dir.isdigit():
+                                continue
+
+                            for day_dir in os.listdir(month_path):
+                                day_path = os.path.join(month_path, day_dir)
+                                if not os.path.isdir(day_path) or not day_dir.isdigit():
+                                    continue
+
+                                csv_files = [f for f in os.listdir(day_path) if f.endswith('.csv')]
+
+                                has_merged = any(
+                                    f == f'{market}_kline_merged.csv' or f == f'{market}_kline_{freq}.csv'
+                                    for f in csv_files
+                                )
+                                has_raw = any(f.endswith(s) for f in csv_files for s in raw_suffixes)
+
+                                if has_merged:
+                                    merged_ok_dates += 1
+                                elif has_raw:
+                                    date_str = f"{year_dir}{month_dir.zfill(2)}{day_dir.zfill(2)}"
+                                    raw_files = [f for f in csv_files if any(f.endswith(s) for s in raw_suffixes)]
+                                    raw_only_dates.append((date_str, raw_files))
+                except Exception:
+                    continue
+
+                total = merged_ok_dates + len(raw_only_dates)
+                if total == 0:
+                    continue
+
+                raw_pct = len(raw_only_dates) / total * 100
+
+                if raw_only_dates:
+                    # 按日期排序，取最近的样例
+                    raw_only_dates.sort(key=lambda x: x[0], reverse=True)
+                    sample = raw_only_dates[:10]
+
+                    self._add_anomaly(
+                        'warning', 'csv_integrity', f"{name}-{freq}",
+                        f"存在 {len(raw_only_dates)} 天仅有raw文件（未merge），占比 {raw_pct:.1f}%，"
+                        f"已merge {merged_ok_dates} 天",
+                        {
+                            'raw_only_count': len(raw_only_dates),
+                            'merged_count': merged_ok_dates,
+                            'raw_percentage': round(raw_pct, 1),
+                            'sample_dates': [(d, files) for d, files in sample],
+                            'raw_file_types': list(set(
+                                f.split('_')[-1].replace('.csv', '')
+                                for _, files in raw_only_dates for f in files
+                            ))
+                        }
+                    )
+                    print(f"    {name}-{freq}: ⚠ {len(raw_only_dates)} 天仅raw未merge ({raw_pct:.1f}%), "
+                          f"已merge {merged_ok_dates} 天, "
+                          f"样例: {sample[0][0]} {sample[0][1]}")
+                else:
+                    print(f"    {name}-{freq}: ✓ 全部 {merged_ok_dates} 天均有merged文件")
 
     def _check_codebased_csv_integrity(self):
         """检查 codebased 目录下的 CSV 文件数据完整性

@@ -16,6 +16,18 @@ import numpy as np
 
 import finhack.library.log as Log
 
+from ..constants import (
+    SHORT_POSITION_SUFFIX,
+    ANNUAL_TRADING_DAYS,
+    DEFAULT_INITIAL_CASH,
+    DEFAULT_RISK_FREE_RATE,
+    MIN_ORDER_QUANTITY,
+    ABNORMAL_DAILY_RETURN_THRESHOLD,
+    DEFAULT_CRYPTO_MARGIN_RATIO,
+    POSITION_DUST_THRESHOLD,
+    ZOMBIE_ORDER_THRESHOLD,
+)
+
 
 # ========== 性能优化工具类 ==========
 
@@ -78,14 +90,34 @@ def _match_quote_symbols(quote_df: pd.DataFrame, symbols_list: List[str]) -> Dic
         base = idx.split('.')[0] if '.' in str(idx) else str(idx)
         index_base_map[base] = idx
     for symbol in symbols_list:
+        row = None
         if symbol in quote_df.index:
-            market_data[symbol] = quote_df.loc[symbol].to_dict()
+            row = quote_df.loc[symbol]
         else:
             base = symbol.split('.')[0] if '.' in symbol else symbol
             if base in index_base_map:
-                market_data[symbol] = quote_df.loc[index_base_map[base]].to_dict()
+                row = quote_df.loc[index_base_map[base]]
+        if row is not None:
+            # 处理MultiIndex情况：loc可能返回DataFrame
+            if isinstance(row, pd.DataFrame):
+                row = row.iloc[-1]
+            result = row.to_dict()
+            # 确保所有值都是标量，而非Series
+            market_data[symbol] = {
+                k: float(v.iloc[-1]) if isinstance(v, pd.Series) else v
+                for k, v in result.items()
+            }
     return market_data
 
+
+def _safe_float(val, default=0.0):
+    """安全转换为float，处理pd.NA/NaN等异常值"""
+    try:
+        if val is pd.NA or pd.isna(val):
+            return default
+        return float(val)
+    except (TypeError, ValueError):
+        return default
 
 def extract_latest_prices_batch(klines_df: pd.DataFrame, symbols: List[str]) -> Dict[str, Dict]:
     """
@@ -131,8 +163,8 @@ def extract_latest_prices_batch(klines_df: pd.DataFrame, symbols: List[str]) -> 
                 if symbol in latest.index:
                     row = latest.loc[symbol]
                     result[symbol] = {
-                        'close': row['close'],
-                        'volume': row['volume'] if has_volume else 0
+                        'close': _safe_float(row['close']),
+                        'volume': _safe_float(row['volume']) if has_volume else 0
                     }
                 else:
                     # 模糊匹配：通过base code
@@ -141,8 +173,8 @@ def extract_latest_prices_batch(klines_df: pd.DataFrame, symbols: List[str]) -> 
                         idx_key = index_base_map[base]
                         row = latest.loc[idx_key]
                         result[symbol] = {
-                            'close': row['close'],
-                            'volume': row['volume'] if has_volume else 0
+                            'close': _safe_float(row['close']),
+                            'volume': _safe_float(row['volume']) if has_volume else 0
                         }
             except (KeyError, IndexError):
                 continue
@@ -155,8 +187,8 @@ def extract_latest_prices_batch(klines_df: pd.DataFrame, symbols: List[str]) -> 
                 symbol_data = klines_df.xs(symbol, level='code')
                 if not symbol_data.empty:
                     result[symbol] = {
-                        'close': symbol_data['close'].iloc[-1],
-                        'volume': symbol_data['volume'].iloc[-1] if 'volume' in symbol_data.columns else 0
+                        'close': _safe_float(symbol_data['close'].iloc[-1]),
+                        'volume': _safe_float(symbol_data['volume'].iloc[-1]) if 'volume' in symbol_data.columns else 0
                     }
             except (KeyError, IndexError):
                 continue
@@ -236,11 +268,7 @@ class TradeCenter:
                 pass
         # 默认值：根据市场类型返回
         market = self.context.get('settings', {}).get('market', 'cn_stock')
-        if market == 'global_cryptospot':
-            return 0.0  # 加密货币支持小数
-        elif market == 'cn_future':
-            return 1.0  # 期货最小1手
-        return 100.0  # 默认A股
+        return MIN_ORDER_QUANTITY.get(market, 100.0)
 
     def _get_min_fill_volume(self, symbol: str) -> float:
         """获取最小成交量"""
@@ -253,15 +281,69 @@ class TradeCenter:
             return volume  # 支持小数（如加密货币）
         return (volume // lot_size) * lot_size
 
-    def _is_t_plus_one(self) -> bool:
-        """判断当前市场是否T+1"""
+    def _is_t_plus_one(self, symbol: str = None) -> bool:
+        """判断当前市场是否T+1
+
+        Args:
+            symbol: 证券代码（可选），传入时按具体产品类型判断T+0/T+1
+        """
         if self.market_adapter:
+            # 优先使用按代码动态判断的方法
+            if symbol and hasattr(self.market_adapter, 'is_t_plus_one'):
+                return self.market_adapter.is_t_plus_one(symbol)
             if hasattr(self.market_adapter, 't_plus_one'):
                 return self.market_adapter.t_plus_one
             if hasattr(self.market_adapter, 'is_t_plus_zero_allowed'):
                 return not self.market_adapter.is_t_plus_zero_allowed('')
         market = self.context.get('settings', {}).get('market', 'cn_stock')
-        return market in ('cn_stock', 'cn_fund')
+        return market == 'cn_stock'
+
+    def _is_cn_future(self):
+        """检查当前市场是否为期货"""
+        market = self.context.get('settings', {}).get('market', '')
+        return market == 'cn_future'
+
+    def _is_crypto_swap(self):
+        """检查当前市场是否为加密货币永续合约"""
+        market = self.context.get('settings', {}).get('market', '')
+        return market == 'global_cryptoswap'
+
+    def _uses_margin(self):
+        """检查当前市场是否使用保证金模式"""
+        return self._is_cn_future() or self._is_crypto_swap()
+
+    def _get_contract_size(self, symbol):
+        """获取合约乘数"""
+        if not self._is_cn_future() and not self._is_crypto_swap():
+            return 1
+        try:
+            if self.market_adapter and hasattr(self.market_adapter, 'get_contract_size'):
+                return self.market_adapter.get_contract_size(symbol)
+        except Exception as e:
+            Log.logger.warning(f"[乘数] {symbol} 获取合约乘数失败: {e}")
+        return 1
+
+    def _get_margin_ratio(self, symbol):
+        """获取保证金比例"""
+        if not self._uses_margin():
+            return 1.0
+        try:
+            if hasattr(self.market_adapter, 'get_margin_ratio'):
+                return self.market_adapter.get_margin_ratio(symbol)
+        except Exception:
+            pass
+        return 0.12 if self._is_cn_future() else DEFAULT_CRYPTO_MARGIN_RATIO
+
+    def _get_futures_contract_value(self, symbol, volume, price):
+        """计算合约价值（含乘数）"""
+        contract_size = self._get_contract_size(symbol)
+        return volume * price * contract_size
+
+    def _get_futures_margin(self, symbol, volume, price):
+        """计算保证金"""
+        contract_value = self._get_futures_contract_value(symbol, volume, price)
+        margin_ratio = self._get_margin_ratio(symbol)
+        return contract_value * margin_ratio
 
     def set_event_center(self, event_center):
         """设置事件中心
@@ -270,7 +352,152 @@ class TradeCenter:
             event_center: 事件中心实例
         """
         self.event_center = event_center
-        
+
+    def validate_order_sync(self, order: Order) -> bool:
+        """同步版本的订单验证（供place_order_sync调用）
+
+        包含：资金充足性、交割月检查、持仓充足性、手数/市场规则验证
+        """
+        if order.volume <= 0:
+            return False
+
+        if order.order_type == OrderType.LIMIT and (not order.price or order.price <= 0):
+            return False
+
+        # 退市/停牌状态检查
+        if hasattr(self, 'data_center') and self.data_center:
+            if hasattr(self.data_center, 'is_tradable') and not self.data_center.is_tradable(order.symbol):
+                status_info = self.data_center.get_trading_status(order.symbol) if hasattr(self.data_center, 'get_trading_status') else {}
+                Log.logger.warning(
+                    f"订单被拒绝: {order.symbol} 不可交易, 状态: {status_info.get('status', 'unknown')}, "
+                    f"原因: {status_info.get('reason', 'unknown')}"
+                )
+                return False
+
+        # 期货合约到期检查：拒绝交割月合约的新订单
+        if self._is_cn_future() and self.market_adapter and hasattr(self.market_adapter, 'get_delivery_info'):
+            try:
+                delivery_info = self.market_adapter.get_delivery_info(order.symbol)
+                natural_person_ban = delivery_info.get('natural_person_ban', {})
+                if natural_person_ban.get('is_banned', False):
+                    reason = natural_person_ban.get('reason', '合约已到期')
+                    Log.logger.warning(f"订单被拒绝: {order.symbol} {reason}")
+                    return False
+            except Exception:
+                pass
+
+        # 手数验证（仅整数手数的市场，如股票/期货）
+        lot_size = self._get_lot_size(order.symbol)
+        if lot_size >= 1 and order.side in (Side.BUY, Side.SHORT_OPEN):
+            from ..utils.float_validation import is_valid_volume
+            if not is_valid_volume(order.volume, lot_size):
+                Log.logger.warning(f"订单数量必须是{lot_size}的整数倍: {order.volume}")
+                return False
+
+        # 市场规则验证（限价单才检查价格，市价单由撮合引擎定价）
+        if self.market_adapter and hasattr(self.market_adapter, 'validate_order'):
+            try:
+                validation_price = order.price if (order.order_type == OrderType.LIMIT and order.price) else -1
+                is_valid, msg = self.market_adapter.validate_order(
+                    order.symbol, order.volume,
+                    validation_price, order.side.value
+                )
+                if not is_valid and validation_price > 0:
+                    Log.logger.warning(f"市场规则验证失败: {msg}")
+                    return False
+            except Exception:
+                pass
+
+        # 期货/永续合约买入/开空仓：检查保证金充足性并冻结资金
+        if self._uses_margin() and order.side in (Side.BUY, Side.SHORT_OPEN):
+            if order.order_type == OrderType.LIMIT and order.price:
+                estimated_price = order.price
+            else:
+                estimated_price = self._get_last_price(order.symbol)
+                if estimated_price <= 0:
+                    return True
+
+            estimated_amount = order.volume * estimated_price
+            contract_value = self._get_futures_contract_value(order.symbol, order.volume, estimated_price)
+            estimated_commission = self._calculate_commission(contract_value, order.side)
+            estimated_tax = self._calculate_tax(estimated_amount, order.side)
+            margin = self._get_futures_margin(order.symbol, order.volume, estimated_price)
+            total_required = margin + estimated_commission + estimated_tax
+
+            if not self.account.freeze_cash(total_required):
+                action = "开空仓" if order.side == Side.SHORT_OPEN else ""
+                Log.logger.warning(
+                    f"资金不足，{action}订单被拒绝: {order.symbol} {order.side} {order.volume} "
+                    f"需要{total_required:.2f}元，可用{self.account.cash_available:.2f}元"
+                )
+                return False
+            order._frozen_amount = total_required
+
+        # 非保证金市场（A股/基金等）：限价买单冻结资金
+        # 防止挂多个限价单导致资金超额占用
+        elif not self._uses_margin() and order.side == Side.BUY and order.order_type == OrderType.LIMIT:
+            estimated_price = order.price if order.price else self._get_last_price(order.symbol)
+            if estimated_price and estimated_price > 0:
+                estimated_amount = order.volume * estimated_price
+                estimated_commission = self._calculate_commission(estimated_amount, order.side, order.symbol)
+                estimated_tax = self._calculate_tax(estimated_amount, order.side)
+                total_required = estimated_amount + estimated_commission + estimated_tax
+
+                if not self.account.freeze_cash(total_required):
+                    Log.logger.warning(
+                        f"资金不足，限价买单被拒绝: {order.symbol} BUY {order.volume} "
+                        f"需要{total_required:.2f}元，可用{self.account.cash_available:.2f}元"
+                    )
+                    return False
+                order._frozen_amount = total_required
+
+        # 卖出：持仓充足性由place_order_sync中的T+1检查处理，此处不再重复验证
+        # 但期货市场无多头持仓时，SELL会转为SHORT_OPEN，需要冻结保证金
+        elif order.side == Side.SELL and self._uses_margin():
+            position = self.positions.get(order.symbol)
+            available_volume = position.available_volume if position else 0
+            if available_volume < order.volume:
+                # 可能转为开空仓，需要冻结保证金
+                if order.order_type == OrderType.LIMIT and order.price:
+                    estimated_price = order.price
+                else:
+                    estimated_price = self._get_last_price(order.symbol)
+                    if estimated_price <= 0:
+                        return True
+                contract_value = self._get_futures_contract_value(order.symbol, order.volume, estimated_price)
+                estimated_commission = self._calculate_commission(contract_value, Side.SHORT_OPEN)
+                estimated_tax = self._calculate_tax(order.volume * estimated_price, Side.SHORT_OPEN)
+                margin = self._get_futures_margin(order.symbol, order.volume, estimated_price)
+                total_required = margin + estimated_commission + estimated_tax
+                if not self.account.freeze_cash(total_required):
+                    Log.logger.warning(
+                        f"资金不足，卖出转开空仓订单被拒绝: {order.symbol} SELL {order.volume} "
+                        f"需要保证金{total_required:.2f}元，可用{self.account.cash_available:.2f}元"
+                    )
+                    return False
+                order._frozen_amount = total_required
+
+        # 平空仓：检查空头持仓
+        elif order.side == Side.SHORT_CLOSE:
+            short_key = f"{order.symbol}{SHORT_POSITION_SUFFIX}"
+            position = self.positions.get(short_key)
+            available_volume = position.available_volume if position else 0
+            if available_volume < order.volume:
+                Log.logger.warning(
+                    f"空头持仓不足，平空订单被拒绝: {order.symbol} 需要{order.volume}，可用{available_volume}"
+                )
+                return False
+
+        return True
+
+    def handle_order_submission(self, event):
+        """处理订单提交事件 - 空操作（订单已在place_order_sync中直接处理）"""
+        pass
+
+    def handle_order_cancellation(self, event):
+        """处理订单撤销事件 - 空操作（订单已在cancel_order_sync中直接处理）"""
+        pass
+
     def get_account(self) -> Account:
         """获取账户信息"""
         return self.account
@@ -336,7 +563,7 @@ class TradeCenter:
             order.status = OrderStatus.REJECTED
             order.rejected_reason = "订单验证失败"
             Log.logger.warning(f"订单被拒绝: {order_id} - {order.rejected_reason}")
-            return order_id
+            return None
             
         # 添加到订单列表
         self.orders[order_id] = order
@@ -451,7 +678,7 @@ class TradeCenter:
     async def _execute_trade(self, order: Order, price: float, trade_time: datetime):
         """执行交易"""
         # 应用滑点
-        slip_price = self._apply_slippage(price, order.side)
+        slip_price = self._apply_slippage(price, order.side, order.symbol)
         
         # 计算手续费和税费
         trade_amount = order.volume * slip_price
@@ -469,18 +696,41 @@ class TradeCenter:
                 
         # 检查持仓充足性
         if order.side == Side.SELL:
+            # 期货/合约市场无多头持仓时，SELL自动转为SHORT_OPEN（开空仓）
+            market = self.context.get('settings', {}).get('market', '')
             if order.symbol not in self.positions:
-                order.status = OrderStatus.REJECTED
-                order.rejected_reason = "无持仓"
-                Log.logger.warning(f"无持仓，订单被拒绝: {order.order_id}")
-                return
-                
-            position = self.positions[order.symbol]
-            if position.available_volume < order.volume:
-                order.status = OrderStatus.REJECTED
-                order.rejected_reason = "持仓不足"
-                Log.logger.warning(f"持仓不足，订单被拒绝: {order.order_id}")
-                return
+                if market in ('cn_future', 'global_cryptoswap'):
+                    order.side = Side.SHORT_OPEN
+                else:
+                    order.status = OrderStatus.REJECTED
+                    order.rejected_reason = "无持仓"
+                    Log.logger.warning(f"无持仓，订单被拒绝: {order.order_id}")
+                    return
+            elif order.symbol in self.positions:
+                position = self.positions[order.symbol]
+                if position.available_volume < order.volume:
+                    # 期货/合约市场：无多头持仓(total≈0)时转为开空仓
+                    if market in ('cn_future', 'global_cryptoswap') and position.volume <= POSITION_DUST_THRESHOLD:
+                        order.side = Side.SHORT_OPEN
+                    # 有持仓但冻结中(available≈0)：拒绝
+                    elif market in ('cn_future', 'global_cryptoswap') and position.volume > POSITION_DUST_THRESHOLD and position.available_volume <= POSITION_DUST_THRESHOLD:
+                        order.status = OrderStatus.REJECTED
+                        order.rejected_reason = "持仓冻结中，无法卖出"
+                        Log.logger.warning(f"持仓冻结中，订单被拒绝: {order.order_id}")
+                        return
+                    # 期货/合约市场：有可用持仓但不足时，缩减至可用量（部分平仓）
+                    elif market in ('cn_future', 'global_cryptoswap') and position.available_volume > POSITION_DUST_THRESHOLD:
+                        original_volume = order.volume
+                        order.volume = position.available_volume
+                        Log.logger.info(
+                            f"持仓不足，缩减卖出量: {order.symbol} "
+                            f"申请{original_volume}手 → 实际{order.volume}手"
+                        )
+                    else:
+                        order.status = OrderStatus.REJECTED
+                        order.rejected_reason = "持仓不足"
+                        Log.logger.warning(f"持仓不足，订单被拒绝: {order.order_id}")
+                        return
                 
         # 生成成交记录
         trade_id = f"trade_{self.trade_id_counter:06d}"
@@ -558,16 +808,29 @@ class TradeCenter:
                 realized_pnl = (trade.price - position.cost_price) * trade.volume - trade.commission - trade.tax
                 self.account.pnl_realized += realized_pnl
 
-                # 如果持仓清零，删除持仓记录
-                if position.volume <= 0:
+                # 如果持仓清零，删除持仓记录（浮点精度容差）
+                if position.volume <= POSITION_DUST_THRESHOLD:
+                    position.volume = 0
                     del self.positions[trade.symbol]
 
         elif trade.side == Side.SHORT_OPEN:
             # 开空仓：减少现金（作为保证金），创建空头持仓
-            self.account.cash_available -= (trade.amount + trade.commission + trade.tax)
+            from finhack.trader.backtest.constants import DEFAULT_MARGIN_RATIO
+            market = self.context.get('settings', {}).get('market', '')
+            if market == 'cn_future':
+                # 期货：只扣除保证金+手续费
+                margin = trade.amount * DEFAULT_MARGIN_RATIO
+                self.account.cash_available -= (margin + trade.commission + trade.tax)
+            elif market == 'global_cryptoswap':
+                # 永续合约：只扣除保证金+手续费
+                margin_ratio = self._get_margin_ratio(trade.symbol)
+                margin = trade.amount * margin_ratio
+                self.account.cash_available -= (margin + trade.commission + trade.tax)
+            else:
+                self.account.cash_available -= (trade.amount + trade.commission + trade.tax)
 
             # 生成空头持仓的唯一key
-            short_key = f"{trade.symbol}_SHORT"
+            short_key = f"{trade.symbol}{SHORT_POSITION_SUFFIX}"
 
             if short_key not in self.positions:
                 # 新建空头持仓
@@ -595,7 +858,7 @@ class TradeCenter:
             # 平空仓：增加现金，减少空头持仓
             self.account.cash_available += (trade.amount - trade.commission - trade.tax)
 
-            short_key = f"{trade.symbol}_SHORT"
+            short_key = f"{trade.symbol}{SHORT_POSITION_SUFFIX}"
 
             if short_key in self.positions:
                 position = self.positions[short_key]
@@ -607,10 +870,11 @@ class TradeCenter:
                 realized_pnl = (position.cost_price - trade.price) * trade.volume - trade.commission - trade.tax
                 self.account.pnl_realized += realized_pnl
 
-                # 如果持仓清零，删除持仓记录
-                if position.volume <= 0:
+                # 如果持仓清零，删除持仓记录（浮点精度容差）
+                if position.volume <= POSITION_DUST_THRESHOLD:
+                    position.volume = 0
                     del self.positions[short_key]
-                    
+
         # 更新账户总资产
         self._update_account_value()
         
@@ -619,24 +883,52 @@ class TradeCenter:
         # 记录更新前的总资产（用于异常检测）
         prev_total_assets = getattr(self.account, 'total_assets', 0)
 
-        # 计算持仓市值（使用已更新的市值）
-        positions_value = sum(pos.market_value for pos in self.positions.values())
+        # 保证金市场：基于当前持仓和最新价格实时重算保证金占用
+        # 确保margin_used始终反映最新的保证金水平，避免日内/日终差异
+        if self._uses_margin():
+            total_margin = 0.0
+            for pos in self.positions.values():
+                if pos.volume > 0:
+                    # 优先使用最新市价，若不可用则回退到成本价（如合约停牌/交割日）
+                    price = pos.last_price if pos.last_price > 0 else pos.cost_price
+                    if price > 0:
+                        margin_ratio = self._get_margin_ratio(pos.symbol)
+                        contract_size = getattr(pos, 'contract_multiplier', 1)
+                        total_margin += pos.volume * price * contract_size * margin_ratio
+            self.account.margin_used = total_margin
+
+        # 计算持仓市值（区分市场和方向）
+        positions_value = 0.0
+        if self._uses_margin():
+            # 期货/永续合约：所有持仓只计入浮动盈亏
+            # 原因：开仓时只扣保证金，未扣全额合约价值
+            # 总资产 = 可用现金 + 冻结资金 + 保证金 + 浮动盈亏
+            for pos in self.positions.values():
+                positions_value += pos.unrealized_pnl
+            total_assets = (self.account.cash_available
+                            + self.account.cash_frozen
+                            + self.account.margin_used
+                            + positions_value)
+        else:
+            # 非期货：多头计入市值（现金已扣全额），空头计入浮动盈亏
+            for pos in self.positions.values():
+                if hasattr(pos, 'position_side') and pos.position_side == PositionSide.SHORT:
+                    positions_value += pos.unrealized_pnl
+                else:
+                    positions_value += pos.market_value
+            total_assets = self.account.cash_available + self.account.cash_frozen + positions_value
 
         # 打印持仓市值
-        Log.logger.info(f"持仓市值计算: {positions_value:.2f}")
+        Log.logger.debug(f"持仓市值计算: {positions_value:.2f}")
 
-        # 计算总资产（确保不为负数）
-        total_assets = self.account.cash_available + self.account.cash_frozen + positions_value
-
-        # 防御性检查：如果总资产为负数或异常小，记录警告并修正
-        initial_capital = self.context.get('settings', {}).get('initial_capital', 1000000)
+        # 总资产为负数：穿仓场景下合法，保留真实负值
+        initial_capital = self.context.get('settings', {}).get('initial_capital', DEFAULT_INITIAL_CASH)
         if total_assets < 0:
-            Log.logger.error(f"总资产为负数({total_assets:.2f})，可能存在计算错误！"
-                           f"现金={self.account.cash_available:.2f}, "
-                           f"冻结={self.account.cash_frozen:.2f}, "
-                           f"市值={positions_value:.2f}")
-            # 修正为最小值（避免最大回撤计算异常）
-            total_assets = initial_capital * 0.001  # 设为初始资金的0.1%
+            Log.logger.warning(f"总资产为负数({total_assets:.2f})，穿仓亏损"
+                             f"现金={self.account.cash_available:.2f}, "
+                             f"冻结={self.account.cash_frozen:.2f}, "
+                             f"保证金={getattr(self.account, 'margin_used', 0):.2f}, "
+                             f"持仓盈亏={positions_value:.2f}")
         elif total_assets < initial_capital * 0.01:  # 小于初始资金的1%
             Log.logger.warning(f"总资产异常低({total_assets:.2f})，请检查！")
 
@@ -669,7 +961,7 @@ class TradeCenter:
         self.account.pnl_unrealized = sum(pos.unrealized_pnl for pos in self.positions.values())
 
         # 打印更新后的账户信息
-        Log.logger.info(f"账户更新: 总资产={self.account.total_assets:.2f}, 持仓市值={self.account.market_value:.2f}")
+        Log.logger.debug(f"账户更新: 总资产={self.account.total_assets:.2f}, 持仓市值={self.account.market_value:.2f}")
         
     async def _validate_order(self, order: Order) -> bool:
         """验证订单"""
@@ -680,11 +972,24 @@ class TradeCenter:
         if order.order_type == OrderType.LIMIT and (not order.price or order.price <= 0):
             return False
 
+        # 期货合约到期检查：拒绝已过期合约的新订单
+        if self._is_cn_future() and self.market_adapter and hasattr(self.market_adapter, 'get_delivery_info'):
+            try:
+                delivery_info = self.market_adapter.get_delivery_info(order.symbol)
+                natural_person_ban = delivery_info.get('natural_person_ban', {})
+                if natural_person_ban.get('is_banned', False):
+                    reason = natural_person_ban.get('reason', '合约已到期')
+                    Log.logger.warning(f"订单被拒绝: {order.symbol} {reason}")
+                    return False
+            except Exception:
+                pass  # 无法获取交割信息时放行，由其他验证逻辑处理
+
         # 市场规则验证 - 委托给market_adapter
         lot_size = self._get_lot_size(order.symbol)
         if lot_size > 0 and order.side in (Side.BUY, Side.SHORT_OPEN):
             # 买入/开空时检查手数（卖出/平空允许零股）
-            if order.volume % lot_size != 0:
+            from ..utils.float_validation import is_valid_volume
+            if not is_valid_volume(order.volume, lot_size):
                 Log.logger.warning(f"订单数量必须是{lot_size}的整数倍: {order.volume}")
                 return False
         # 如果adapter有validate_order方法，也调用它
@@ -714,9 +1019,17 @@ class TradeCenter:
 
             # 计算预估成交金额（含手续费）
             estimated_amount = order.volume * estimated_price
-            estimated_commission = self._calculate_commission(estimated_amount, Side.BUY)
-            estimated_tax = self._calculate_tax(estimated_amount, Side.BUY)
-            total_required = estimated_amount + estimated_commission + estimated_tax
+            if self._is_cn_future() or self._is_crypto_swap():
+                # 期货/永续合约：按合约价值计算手续费，按保证金检查资金
+                contract_value = self._get_futures_contract_value(order.symbol, order.volume, estimated_price)
+                estimated_commission = self._calculate_commission(contract_value, Side.BUY)
+                estimated_tax = self._calculate_tax(estimated_amount, Side.BUY)
+                margin = self._get_futures_margin(order.symbol, order.volume, estimated_price)
+                total_required = margin + estimated_commission + estimated_tax
+            else:
+                estimated_commission = self._calculate_commission(estimated_amount, Side.BUY)
+                estimated_tax = self._calculate_tax(estimated_amount, Side.BUY)
+                total_required = estimated_amount + estimated_commission + estimated_tax
 
             # 检查可用资金
             if self.account.cash_available < total_required:
@@ -731,10 +1044,15 @@ class TradeCenter:
             position = self.positions.get(order.symbol)
             available_volume = position.available_volume if position else 0
             if available_volume < order.volume:
-                Log.logger.warning(
-                    f"持仓不足，订单被拒绝: {order.symbol} 需要{order.volume}股，可用{available_volume}股"
-                )
-                return False
+                # 期货市场：无多头持仓时允许SELL，后续撮合时转为SHORT_OPEN
+                market = self.context.get('settings', {}).get('market', '')
+                if market in ('cn_future', 'global_cryptoswap') and available_volume == 0:
+                    pass  # 允许通过，撮合时会转为SHORT_OPEN
+                else:
+                    Log.logger.warning(
+                        f"持仓不足，订单被拒绝: {order.symbol} 需要{order.volume}股，可用{available_volume}股"
+                    )
+                    return False
 
         # 开空仓订单：检查资金是否充足（作为保证金）
         elif order.side == Side.SHORT_OPEN:
@@ -750,10 +1068,17 @@ class TradeCenter:
             # 计算预估成交金额（含手续费）
             # 开空仓需要冻结资金作为保证金
             estimated_amount = order.volume * estimated_price
-            estimated_commission = self._calculate_commission(estimated_amount, Side.SHORT_OPEN)
-            estimated_tax = self._calculate_tax(estimated_amount, Side.SHORT_OPEN)
-            # 期货通常使用保证金制度，这里简化为全额
-            total_required = estimated_amount + estimated_commission + estimated_tax
+            if self._is_cn_future() or self._is_crypto_swap():
+                # 期货/永续合约：按合约价值计算手续费，按保证金检查资金
+                contract_value = self._get_futures_contract_value(order.symbol, order.volume, estimated_price)
+                estimated_commission = self._calculate_commission(contract_value, Side.SHORT_OPEN)
+                estimated_tax = self._calculate_tax(estimated_amount, Side.SHORT_OPEN)
+                margin = self._get_futures_margin(order.symbol, order.volume, estimated_price)
+                total_required = margin + estimated_commission + estimated_tax
+            else:
+                estimated_commission = self._calculate_commission(estimated_amount, Side.SHORT_OPEN)
+                estimated_tax = self._calculate_tax(estimated_amount, Side.SHORT_OPEN)
+                total_required = estimated_amount + estimated_commission + estimated_tax
 
             # 检查可用资金
             if self.account.cash_available < total_required:
@@ -764,7 +1089,7 @@ class TradeCenter:
 
         # 平空仓订单：检查空头持仓是否充足
         elif order.side == Side.SHORT_CLOSE:
-            short_key = f"{order.symbol}_SHORT"
+            short_key = f"{order.symbol}{SHORT_POSITION_SUFFIX}"
             position = self.positions.get(short_key)
             available_volume = position.available_volume if position else 0
             if available_volume < order.volume:
@@ -775,23 +1100,51 @@ class TradeCenter:
 
         return True
         
-    def _apply_slippage(self, price: float, side: Side) -> float:
-        """应用滑点"""
+    def _apply_slippage(self, price: float, side: Side, symbol: str = None) -> float:
+        """应用滑点，并对期货价格做tick_size取整"""
+        import math as _math
         slip_type = self.context['settings'].get('slip_type', 'pricerelated')
         slip_value = self.context['settings'].get('slip_value', 0.001)
 
         if slip_type == 'pricerelated':
             if side in (Side.BUY, Side.SHORT_CLOSE):  # 买入和平空仓价格偏高
-                return price * (1 + slip_value)
+                result = price * (1 + slip_value)
             else:  # SELL, SHORT_OPEN 价格偏低
-                return price * (1 - slip_value)
+                result = price * (1 - slip_value)
         elif slip_type == 'fixed':
             if side in (Side.BUY, Side.SHORT_CLOSE):
-                return price + slip_value
+                result = price + slip_value
             else:
-                return price - slip_value
+                result = price - slip_value
         else:
             return price
+
+        # 期货价格按tick_size取整（不利方向取整）
+        if symbol:
+            tick_size = self._get_tick_size(symbol)
+            if tick_size and tick_size > 0:
+                if side in (Side.BUY, Side.SHORT_CLOSE):
+                    # 买入方向：向上取整（多付）
+                    result = _math.ceil(result / tick_size) * tick_size
+                else:
+                    # 卖出方向：向下取整（少收）
+                    result = _math.floor(result / tick_size) * tick_size
+
+        return result
+
+    def _get_tick_size(self, symbol: str) -> float:
+        """获取合约的最小变动价位
+
+        仅期货市场有tick_size概念，其他市场返回0（不做取整）。
+        """
+        market = self.context.get('settings', {}).get('market', 'cn_stock')
+        if market == 'cn_future':
+            try:
+                from finhack.trader.backtest.markets.cn_future.future_trading_rules_versions import get_tick_size
+                return get_tick_size(symbol)
+            except Exception:
+                return 0
+        return 0
 
     def _calculate_commission(self, amount: float, side: Side, symbol: str = None) -> float:
         """计算手续费
@@ -843,7 +1196,7 @@ class TradeCenter:
         # 检查持仓的买入日期
         pos_key = symbol
         if side == Side.SHORT_CLOSE:
-            pos_key = f"{symbol}_SHORT"
+            pos_key = f"{symbol}{SHORT_POSITION_SUFFIX}"
 
         position = self.positions.get(pos_key)
         if position and hasattr(position, 'buy_dates') and position.buy_dates:
@@ -882,7 +1235,10 @@ class TradeCenter:
                 if not quote_df.empty:
                     matched = _match_quote_symbols(quote_df, [symbol])
                     if symbol in matched:
-                        return float(matched[symbol]['close'])
+                        val = matched[symbol]['close']
+                        if isinstance(val, pd.Series):
+                            val = float(val.iloc[-1])
+                        return float(val)
 
             # 尝试从持仓获取最后价格
             if symbol in self.positions:
@@ -917,10 +1273,16 @@ class TradeCenter:
         freq = self.context.get('settings', {}).get('freq', '1d')
 
         # 添加INFO级别日志方便调试
-        Log.logger.info(f"[{time_str}] 开始撮合，共{len(self.active_orders)}个活跃订单，市场数据标的: {list(market_data.keys())[:5]}...")
+        Log.logger.debug(f"[{time_str}] 开始撮合，共{len(self.active_orders)}个活跃订单，市场数据标的: {list(market_data.keys())[:5]}...")
 
         if not market_data:
-            Log.logger.warning(f"[{time_str}] 市场数据为空，无法撮合")
+            # 对于24小时市场(crypto等)，无数据时段是正常的，降低日志级别
+            market = self.context.get('settings', {}).get('market', '')
+            if market in ('global_cryptospot', 'global_cryptoswap'):
+                # crypto市场无数据时用debug级别，避免大量重复warning
+                Log.logger.debug(f"[{time_str}] 市场数据为空（crypto正常现象），跳过撮合")
+            else:
+                Log.logger.warning(f"[{time_str}] 市场数据为空，无法撮合")
             return
 
         Log.logger.debug(f"[{time_str}] 开始撮合，共{len(self.active_orders)}个活跃订单（总订单{len(self.orders)}），市场数据: {list(market_data.keys())}")
@@ -948,16 +1310,16 @@ class TradeCenter:
                     continue
 
             if symbol not in market_data:
-                Log.logger.info(f"[{time_str}] 跳过订单 {order_id}: {symbol} 不在市场数据中")
+                Log.logger.debug(f"[{time_str}] 跳过订单 {order_id}: {symbol} 不在市场数据中")
                 continue
 
             quote = market_data[symbol]
             current_price = quote.get('close', 0)
             market_volume = quote.get('volume', 0)  # 【修复】获取市场成交量
-            Log.logger.info(f"[{time_str}] 订单 {order_id} 当前价格: {current_price}, 市场成交量: {market_volume}")
+            Log.logger.debug(f"[{time_str}] 订单 {order_id} 当前价格: {current_price}, 市场成交量: {market_volume}")
 
             if current_price <= 0:
-                Log.logger.info(f"[{time_str}] 跳过订单 {order_id}: 价格无效 {current_price}")
+                Log.logger.debug(f"[{time_str}] 跳过订单 {order_id}: 价格无效 {current_price}")
                 continue
 
             # 【修复】基于市场成交量的成交限制配置 - 通过adapter获取市场规则
@@ -969,8 +1331,9 @@ class TradeCenter:
             if market_volume > 0:
                 max_fill_by_market = max(min_fill_volume, market_volume * max_fill_ratio)
             else:
-                # 如果市场成交量数据缺失，使用默认限制
-                max_fill_by_market = 10000
+                # 市场成交量为0时跳过撮合（无成交的K线不应执行订单）
+                Log.logger.debug(f"[{time_str}] 跳过订单 {order_id}: 市场成交量为0")
+                continue
 
             # 判断是否可以成交
             can_fill = False
@@ -984,9 +1347,9 @@ class TradeCenter:
                 if is_daily_freq:
                     # 日线频率：市价单直接全部成交（基于日线收盘价）
                     fill_volume = order.remaining_volume
-                    fill_price = self._apply_slippage(current_price, order.side)
+                    fill_price = self._apply_slippage(current_price, order.side, order.symbol)
                     can_fill = True
-                    Log.logger.info(f"[{time_str}] [撮合] {order_id} {symbol} 日线市价单成交: {fill_volume}股 @{fill_price:.4f}")
+                    Log.logger.debug(f"[{time_str}] [撮合] {order_id} {symbol} 日线市价单成交: {fill_volume}股 @{fill_price:.4f}")
                 else:
                     # 分钟频率：部分成交逻辑（每次撮合只成交剩余量的部分比例）
                     import random
@@ -1014,11 +1377,11 @@ class TradeCenter:
                     fill_volume = min(fill_volume, order.remaining_volume, max_fill_by_market)
 
                     can_fill = True
-                    fill_price = self._apply_slippage(current_price, order.side)
+                    fill_price = self._apply_slippage(current_price, order.side, order.symbol)
                     if fill_volume < order.remaining_volume:
-                        Log.logger.info(f"[{time_str}] [撮合] {order_id} {symbol} 市价单部分成交: {order.remaining_volume}->{fill_volume}股 @{fill_price:.4f} (市场成交量限制: {max_fill_by_market})")
+                        Log.logger.debug(f"[{time_str}] [撮合] {order_id} {symbol} 市价单部分成交: {order.remaining_volume}->{fill_volume}股 @{fill_price:.4f} (市场成交量限制: {max_fill_by_market})")
                     else:
-                        Log.logger.info(f"[{time_str}] [撮合] {order_id} {symbol} 市价单成交: {fill_volume}股 @{fill_price:.4f}")
+                        Log.logger.debug(f"[{time_str}] [撮合] {order_id} {symbol} 市价单成交: {fill_volume}股 @{fill_price:.4f}")
             elif order.order_type == OrderType.LIMIT:
                 # 限价单需要判断价格
                 if order.side == Side.BUY and order.price >= current_price:
@@ -1030,7 +1393,7 @@ class TradeCenter:
                         fill_volume = min(order.remaining_volume, max_fill_by_market)
                         fill_volume = self._normalize_volume(fill_volume, symbol)
                         fill_volume = max(min_fill_volume, fill_volume)
-                    Log.logger.info(f"[{time_str}] [撮合] {order_id} {symbol} 限价买单可成交: {order.price}>={current_price}, 成交{fill_volume}股")
+                    Log.logger.debug(f"[{time_str}] [撮合] {order_id} {symbol} 限价买单可成交: {order.price}>={current_price}, 成交{fill_volume}股")
                 elif order.side == Side.SELL and order.price <= current_price:
                     can_fill = True
                     fill_price = max(order.price, current_price)
@@ -1040,7 +1403,7 @@ class TradeCenter:
                         fill_volume = min(order.remaining_volume, max_fill_by_market)
                         fill_volume = self._normalize_volume(fill_volume, symbol)
                         fill_volume = max(min_fill_volume, fill_volume)
-                    Log.logger.info(f"[{time_str}] [撮合] {order_id} {symbol} 限价卖单可成交: {order.price}<={current_price}, 成交{fill_volume}股")
+                    Log.logger.debug(f"[{time_str}] [撮合] {order_id} {symbol} 限价卖单可成交: {order.price}<={current_price}, 成交{fill_volume}股")
                 # 开空仓限价单：卖方逻辑（价格低于等于限价时成交）
                 elif order.side == Side.SHORT_OPEN and order.price >= current_price:
                     can_fill = True
@@ -1051,7 +1414,7 @@ class TradeCenter:
                         fill_volume = min(order.remaining_volume, max_fill_by_market)
                         fill_volume = self._normalize_volume(fill_volume, symbol)
                         fill_volume = max(min_fill_volume, fill_volume)
-                    Log.logger.info(f"[{time_str}] [撮合] {order_id} {symbol} 限价开空单可成交: {order.price}>={current_price}, 成交{fill_volume}股")
+                    Log.logger.debug(f"[{time_str}] [撮合] {order_id} {symbol} 限价开空单可成交: {order.price}>={current_price}, 成交{fill_volume}股")
                 # 平空仓限价单：买方逻辑（价格高于等于限价时成交）
                 elif order.side == Side.SHORT_CLOSE and order.price <= current_price:
                     can_fill = True
@@ -1062,36 +1425,57 @@ class TradeCenter:
                         fill_volume = min(order.remaining_volume, max_fill_by_market)
                         fill_volume = self._normalize_volume(fill_volume, symbol)
                         fill_volume = max(min_fill_volume, fill_volume)
-                    Log.logger.info(f"[{time_str}] [撮合] {order_id} {symbol} 限价平空单可成交: {order.price}<={current_price}, 成交{fill_volume}股")
+                    Log.logger.debug(f"[{time_str}] [撮合] {order_id} {symbol} 限价平空单可成交: {order.price}<={current_price}, 成交{fill_volume}股")
                 else:
                     Log.logger.debug(f"[{time_str}] 订单 {order_id} 限价单价格不匹配: {order.price} vs {current_price}")
 
             if can_fill and fill_volume > 0:
+                # 统一标准化成交量（确保符合市场最小交易单位）
+                fill_volume = self._normalize_volume(fill_volume, symbol)
+                if fill_volume <= 0:
+                    # 标准化后不足一手，跳过
+                    continue
+
                 # 执行成交
-                Log.logger.info(f"[{time_str}] [撮合] {order_id} {symbol} {order.side} 成交{fill_volume}/{order.volume}股 @{fill_price:.4f}")
+                Log.logger.debug(f"[{time_str}] [撮合] {order_id} {symbol} {order.side} 成交{fill_volume}/{order.volume}股 @{fill_price:.4f}")
                 self._execute_trade_sync(order, fill_price, fill_volume)
 
                 # 检查订单状态
                 if order.status == OrderStatus.FILLED:
                     matched_orders.append(order_id)
-                    Log.logger.info(f"[{time_str}] [撮合] {order_id} 全部成交 ✓")
+                    Log.logger.debug(f"[{time_str}] [撮合] {order_id} 全部成交 ✓")
                 elif order.status == OrderStatus.PARTIALLY_FILLED:
                     partial_orders.append(order_id)
-                    Log.logger.info(f"[{time_str}] [撮合] {order_id} 部分成交 {order.filled_volume}/{order.volume}")
+                    Log.logger.debug(f"[{time_str}] [撮合] {order_id} 部分成交 {order.filled_volume}/{order.volume}")
             else:
-                Log.logger.info(f"[{time_str}] 订单 {order_id} 不可成交: can_fill={can_fill}, fill_volume={fill_volume}, current_price={current_price}, order_type={order.order_type}")
+                Log.logger.debug(f"[{time_str}] 订单 {order_id} 不可成交: can_fill={can_fill}, fill_volume={fill_volume}, current_price={current_price}, order_type={order.order_type}")
 
         # 从活跃订单中移除已完全成交的订单
         for order_id in matched_orders:
             if order_id in self.active_orders:
                 del self.active_orders[order_id]
 
-        Log.logger.info(f"[{time_str}] [撮合] 完成: 全部成交{len(matched_orders)}单, 部分成交{len(partial_orders)}单, 剩余活跃{len(self.active_orders)}单")
+        # 清理僵尸订单：剩余量极小时强制完成（避免浮点精度导致永远无法完全成交）
+        ZOMBIE_THRESHOLD = ZOMBIE_ORDER_THRESHOLD
+        zombie_cleaned = []
+        for order_id in list(self.active_orders.keys()):
+            order = self.active_orders.get(order_id)
+            if order and order.remaining_volume < ZOMBIE_THRESHOLD:
+                # 将微小剩余量视为全部成交
+                if order.remaining_volume > 0:
+                    tiny_volume = order.remaining_volume
+                    order.filled_volume = order.volume
+                    order.status = OrderStatus.FILLED
+                    del self.active_orders[order_id]
+                    zombie_cleaned.append(order_id)
+                    Log.logger.debug(f"[{time_str}] [撮合] 清理僵尸订单 {order_id}: 剩余{tiny_volume:.2e}视为全部成交")
+
+        Log.logger.debug(f"[{time_str}] [撮合] 完成: 全部成交{len(matched_orders)}单, 部分成交{len(partial_orders)}单, 清理僵尸{len(zombie_cleaned)}单, 剩余活跃{len(self.active_orders)}单")
 
         if matched_orders:
-            Log.logger.info(f"[{time_str}] [撮合] 全部成交: {matched_orders}")
+            Log.logger.debug(f"[{time_str}] [撮合] 全部成交: {matched_orders}")
         if partial_orders:
-            Log.logger.info(f"[{time_str}] [撮合] 部分成交: {partial_orders}")
+            Log.logger.debug(f"[{time_str}] [撮合] 部分成交: {partial_orders}")
         
     def _execute_trade_sync(self, order: Order, fill_price: float, fill_volume: float = None):
         """执行成交 - 同步版本，支持部分成交
@@ -1116,15 +1500,30 @@ class TradeCenter:
             # 计算成交金额
             fill_amount = fill_volume * fill_price
 
-            # 计算费用（传入symbol用于平今判断）
-            commission = self._calculate_commission(fill_amount, order.side, order.symbol)
+            # 计算费用（保证金市场需按合约价值计算手续费）
+            if self._uses_margin():
+                contract_value = self._get_futures_contract_value(order.symbol, fill_volume, fill_price)
+                commission = self._calculate_commission(contract_value, order.side, order.symbol)
+            else:
+                commission = self._calculate_commission(fill_amount, order.side, order.symbol)
             tax = self._calculate_tax(fill_amount, order.side)
             total_cost = commission + tax
 
             # 买入订单：检查资金是否充足（防止超额交易）
             if order.side == Side.BUY:
-                total_required = fill_amount + total_cost
-                if self.account.cash_available < total_required:
+                frozen_amount = getattr(order, '_frozen_amount', 0)
+                if self._is_cn_future() or self._is_crypto_swap():
+                    margin = self._get_futures_margin(order.symbol, fill_volume, fill_price)
+                    total_required = margin + total_cost
+                else:
+                    total_required = fill_amount + total_cost
+                if frozen_amount > 0:
+                    # 部分成交：按比例解冻已成交部分，保留剩余冻结
+                    fill_ratio = fill_volume / order.volume if order.volume > 0 else 1.0
+                    release_amount = frozen_amount * fill_ratio
+                    self.account.unfreeze_cash(release_amount)
+                    order._frozen_amount = frozen_amount - release_amount
+                elif self.account.cash_available < total_required:
                     Log.logger.error(f"[{time_str}] 资金不足，成交被拒绝: {order.symbol} "
                                    f"需要{total_required:.2f}元，可用{self.account.cash_available:.2f}元")
                     order.status = OrderStatus.REJECTED
@@ -1137,14 +1536,59 @@ class TradeCenter:
             elif order.side == Side.SELL:
                 position = self.positions.get(order.symbol)
                 available_volume = position.available_volume if position else 0
+                # 解冻SELL订单可能冻结的保证金（非转开空的情况）
+                frozen_amount_sell = getattr(order, '_frozen_amount', 0)
+                if frozen_amount_sell > 0 and available_volume >= fill_volume:
+                    self.account.unfreeze_cash(frozen_amount_sell)
+                    order._frozen_amount = 0
                 if available_volume < fill_volume:
-                    Log.logger.error(f"[{time_str}] 持仓不足，成交被拒绝: {order.symbol} "
-                                   f"需要{fill_volume}股，可用{available_volume}股")
-                    order.status = OrderStatus.REJECTED
-                    order.rejected_reason = f"持仓不足: 需要{fill_volume}, 可用{available_volume}"
-                    if order.order_id in self.active_orders:
-                        del self.active_orders[order.order_id]
-                    return
+                    # BUG 3 fix: 期货市场：无多头持仓(total=0)时自动转为开空仓
+                    market = self.context.get('settings', {}).get('market', '')
+                    total_volume = position.volume if position else 0
+                    if market in ('cn_future', 'global_cryptoswap') and total_volume <= POSITION_DUST_THRESHOLD:
+                        order.side = Side.SHORT_OPEN
+                        margin = self._get_futures_margin(order.symbol, fill_volume, fill_price)
+                        total_required = margin + total_cost
+                        frozen_amount = getattr(order, '_frozen_amount', 0)
+                        if frozen_amount > 0:
+                            self.account.unfreeze_cash(frozen_amount)
+                            order._frozen_amount = 0
+                        elif self.account.cash_available < total_required:
+                            Log.logger.error(f"[{time_str}] 资金不足，开空仓被拒绝: {order.symbol} "
+                                           f"需要保证金{total_required:.2f}元，可用{self.account.cash_available:.2f}元")
+                            order.status = OrderStatus.REJECTED
+                            order.rejected_reason = f"资金不足: 开空仓需要{total_required:.2f}, 可用{self.account.cash_available:.2f}"
+                            if order.order_id in self.active_orders:
+                                del self.active_orders[order.order_id]
+                            return
+                    elif market in ('cn_future', 'global_cryptoswap') and total_volume > POSITION_DUST_THRESHOLD and available_volume <= POSITION_DUST_THRESHOLD:
+                        # 有持仓但被冻结，拒绝订单
+                        Log.logger.error(f"[{time_str}] 持仓冻结中，卖出被拒绝: {order.symbol} "
+                                       f"总持仓{total_volume}，可用{available_volume}")
+                        order.status = OrderStatus.REJECTED
+                        order.rejected_reason = f"持仓冻结中: 总持仓{total_volume}, 可用{available_volume}"
+                        if order.order_id in self.active_orders:
+                            del self.active_orders[order.order_id]
+                        return
+                    else:
+                        # 期货/合约市场：有可用持仓但不足时，缩减至可用量（部分平仓）
+                        if market in ('cn_future', 'global_cryptoswap') and available_volume > POSITION_DUST_THRESHOLD:
+                            original_volume = fill_volume
+                            fill_volume = available_volume
+                            # 重新计算缩减后的成交金额和手续费
+                            contract_value = self._get_futures_contract_value(order.symbol, fill_volume, fill_price)
+                            commission = self._calculate_commission(contract_value, order.side, order.symbol)
+                            total_cost = commission + self._calculate_tax(fill_volume * fill_price, order.side)
+                            Log.logger.info(f"[{time_str}] 持仓不足，缩减卖出量: {order.symbol} "
+                                           f"申请{original_volume}手 → 实际{fill_volume}手")
+                        else:
+                            Log.logger.error(f"[{time_str}] 持仓不足，成交被拒绝: {order.symbol} "
+                                           f"需要{fill_volume}股，可用{available_volume}股")
+                            order.status = OrderStatus.REJECTED
+                            order.rejected_reason = f"持仓不足: 需要{fill_volume}, 可用{available_volume}"
+                            if order.order_id in self.active_orders:
+                                del self.active_orders[order.order_id]
+                            return
 
             # 生成成交ID
             trade_id = f"trade_{self.trade_id_counter:06d}"
@@ -1179,10 +1623,10 @@ class TradeCenter:
             # 更新订单状态
             if order.filled_volume >= order.volume:
                 order.status = OrderStatus.FILLED
-                Log.logger.info(f"[{time_str}] [订单] {order.order_id} 全部成交 ✓ ({order.filled_volume}/{order.volume}股)")
+                Log.logger.debug(f"[{time_str}] [订单] {order.order_id} 全部成交 ✓ ({order.filled_volume}/{order.volume}股)")
             else:
                 order.status = OrderStatus.PARTIALLY_FILLED
-                Log.logger.info(f"[{time_str}] [订单] {order.order_id} 部分成交 ({order.filled_volume}/{order.volume}股)")
+                Log.logger.debug(f"[{time_str}] [订单] {order.order_id} 部分成交 ({order.filled_volume}/{order.volume}股)")
 
             # 从活跃订单中移除已完全成交的订单
             if order.status == OrderStatus.FILLED and order.order_id in self.active_orders:
@@ -1195,7 +1639,7 @@ class TradeCenter:
             # 先更新持仓，获取卖出时的成本价（用于准确计算盈亏）
             try:
                 sell_cost_price = self._update_position_sync(trade, total_cost)
-                Log.logger.info(f"[调试] _update_position_sync 返回: {sell_cost_price}")
+                Log.logger.debug(f"[调试] _update_position_sync 返回: {sell_cost_price}")
             except Exception as e:
                 Log.logger.error(f"[调试] _update_position_sync 失败: {e}")
                 import traceback
@@ -1212,9 +1656,9 @@ class TradeCenter:
             # 调试：检查持仓成本价
             if trade.symbol in self.positions:
                 pos = self.positions[trade.symbol]
-                Log.logger.info(f"[调试] 持仓更新后 {trade.symbol}: volume={pos.volume}, cost_price={pos.cost_price:.4f}")
+                Log.logger.debug(f"[调试] 持仓更新后 {trade.symbol}: volume={pos.volume}, cost_price={pos.cost_price:.4f}")
 
-            Log.logger.info(f"[{time_str}] [成交] {trade_id} {order.symbol} {order.side.value} "
+            Log.logger.debug(f"[{time_str}] [成交] {trade_id} {order.symbol} {order.side.value} "
                           f"{fill_volume}股@{fill_price:.4f} 费用:{total_cost:.2f} "
                           f"(累计:{order.filled_volume}/{order.volume}股)")
 
@@ -1245,6 +1689,7 @@ class TradeCenter:
         if trade.side in (Side.BUY, Side.SELL):
             if symbol not in self.positions:
                 # 创建新持仓
+                cm = self._get_contract_size(symbol)
                 self.positions[symbol] = Position(
                     account_id=trade.account_id,
                     symbol=symbol,
@@ -1254,16 +1699,21 @@ class TradeCenter:
                     cost_price=0,
                     market_value=0,
                     unrealized_pnl=0,
+                    contract_multiplier=cm,
                 )
 
             position = self.positions[symbol]
 
             if trade.side == Side.BUY:
-                # 买入：增加持仓（成本价计算包含交易费用）
+                # 买入：增加持仓
                 old_volume = position.volume
                 old_cost = position.volume * position.cost_price
-                # 新成本 = 成交金额 + 交易费用（费用分摊到每股）
-                new_cost = trade.volume * trade.price + total_cost
+                if self._uses_margin():
+                    # 保证金市场：成本价不含手续费（手续费已从现金扣除）
+                    new_cost = trade.volume * trade.price
+                else:
+                    # 新成本 = 成交金额 + 交易费用（费用分摊到每股）
+                    new_cost = trade.volume * trade.price + total_cost
 
                 Log.logger.debug(f"[调试] BUY {symbol}: old_volume={old_volume}, old_cost={old_cost}, "
                                f"trade.volume={trade.volume}, trade.price={trade.price}, total_cost={total_cost}, "
@@ -1271,8 +1721,8 @@ class TradeCenter:
 
                 position.volume += trade.volume
 
-                # T+1规则：根据市场adapter判断
-                if self._is_t_plus_one():
+                # T+1规则：根据市场adapter和具体代码判断
+                if self._is_t_plus_one(symbol):
                     if not hasattr(position, 'buy_dates'):
                         position.buy_dates = []
                     current_time = self.context.get('current_dt')
@@ -1294,22 +1744,51 @@ class TradeCenter:
                 sell_cost_price = position.cost_price
 
                 position.volume -= trade.volume
-                position.available_volume -= trade.volume
+
+                # T+1: 卖出时同步消费buy_dates（FIFO），防止available_volume损坏
+                if hasattr(position, 'buy_dates') and position.buy_dates:
+                    sell_remaining = trade.volume
+                    # 先从已解冻(available)的份额中消费
+                    if sell_remaining <= position.available_volume:
+                        position.available_volume -= sell_remaining
+                        sell_remaining = 0
+                    else:
+                        sell_remaining -= position.available_volume
+                        position.available_volume = 0
+
+                    # 剩余从冻结的buy_dates中消费（FIFO）
+                    if sell_remaining > 0:
+                        remaining_buy_dates = []
+                        for buy_time, buy_volume in position.buy_dates:
+                            if sell_remaining <= 0:
+                                remaining_buy_dates.append((buy_time, buy_volume))
+                            elif sell_remaining >= buy_volume:
+                                sell_remaining -= buy_volume
+                            else:
+                                remaining_buy_dates.append((buy_time, buy_volume - sell_remaining))
+                                sell_remaining = 0
+                        position.buy_dates = remaining_buy_dates
+                else:
+                    position.available_volume -= trade.volume
+
+                # 浮点精度修复：持仓量极小时视为清零
+                if position.volume < POSITION_DUST_THRESHOLD:
+                    Log.logger.debug(f"[浮点清零] {symbol} 残留持仓 {position.volume:.2e} 视为清零")
+                    del self.positions[symbol]
+                    return sell_cost_price
 
                 # 如果持仓为0，移除持仓记录
                 if position.volume <= 0:
                     del self.positions[symbol]
                     return sell_cost_price
 
-            # 更新持仓市值
+            # 更新持仓市值（使用 Position 模型方法，正确处理 contract_multiplier 和多空方向）
             if symbol in self.positions and position.volume > 0:
-                position.market_value = position.volume * trade.price
-                position.unrealized_pnl = (trade.price - position.cost_price) * position.volume
-                position.last_price = trade.price
+                position.update_market_price(trade.price)
 
         # ========== 空头方向：SHORT_OPEN / SHORT_CLOSE ==========
         elif trade.side in (Side.SHORT_OPEN, Side.SHORT_CLOSE):
-            short_key = f"{symbol}_SHORT"
+            short_key = f"{symbol}{SHORT_POSITION_SUFFIX}"
 
             if short_key not in self.positions:
                 self.positions[short_key] = Position(
@@ -1321,6 +1800,7 @@ class TradeCenter:
                     cost_price=0,
                     market_value=0,
                     unrealized_pnl=0,
+                    contract_multiplier=self._get_contract_size(symbol),
                 )
 
             position = self.positions[short_key]
@@ -1338,7 +1818,7 @@ class TradeCenter:
                 if position.volume > 0:
                     position.cost_price = (old_cost + new_cost) / position.volume
 
-                Log.logger.info(f"[开空] {symbol}: volume={old_volume}->{position.volume}, cost_price={position.cost_price:.4f}")
+                Log.logger.debug(f"[开空] {symbol}: volume={old_volume}->{position.volume}, cost_price={position.cost_price:.4f}")
 
             elif trade.side == Side.SHORT_CLOSE:
                 # 平空：减少空头持仓
@@ -1347,18 +1827,21 @@ class TradeCenter:
                 position.volume -= trade.volume
                 position.available_volume -= trade.volume
 
-                Log.logger.info(f"[平空] {symbol}: volume -> {position.volume}, cost_price={position.cost_price:.4f}")
+                Log.logger.debug(f"[平空] {symbol}: volume -> {position.volume}, cost_price={position.cost_price:.4f}")
+
+                # 浮点精度修复：持仓量极小时视为清零
+                if position.volume < POSITION_DUST_THRESHOLD:
+                    Log.logger.debug(f"[浮点清零] {short_key} 残留持仓 {position.volume:.2e} 视为清零")
+                    del self.positions[short_key]
+                    return sell_cost_price
 
                 if position.volume <= 0:
                     del self.positions[short_key]
                     return sell_cost_price
 
-            # 更新空头持仓市值和盈亏
+            # 更新空头持仓市值和盈亏（使用 Position 模型方法）
             if short_key in self.positions and position.volume > 0:
-                position.market_value = position.volume * trade.price
-                # 空头：价格下跌盈利
-                position.unrealized_pnl = (position.cost_price - trade.price) * position.volume
-                position.last_price = trade.price
+                position.update_market_price(trade.price)
 
         return sell_cost_price
         
@@ -1371,27 +1854,54 @@ class TradeCenter:
             sell_cost_price: 卖出时的成本价（从_update_position_sync返回），用于准确计算已实现盈亏
         """
         if trade.side == Side.BUY:
-            # 买入：减少现金，增加持仓市值
-            self.account.cash_available -= (trade.amount + total_cost)
-            self.account.market_value += trade.amount
+            if self._uses_margin():
+                # 保证金市场（期货/永续）：只扣除保证金+手续费
+                margin = self._get_futures_margin(trade.symbol, trade.volume, trade.price)
+                self.account.cash_available -= (margin + total_cost)
+                self.account.margin_used += margin
+            else:
+                # 买入：减少现金，增加持仓市值
+                self.account.cash_available -= (trade.amount + total_cost)
+                self.account.market_value += trade.amount
         elif trade.side == Side.SELL:
-            # 卖出：增加现金，减少持仓市值
-            self.account.cash_available += (trade.amount - total_cost)
-            self.account.market_value -= trade.amount
-            # 使用传入的成本价计算已实现盈亏（修正Bug：避免持仓删除后获取不到成本价）
             cost_price = sell_cost_price if sell_cost_price > 0 else self._get_cost_price(trade.symbol)
-            realized_pnl = (trade.price - cost_price) * trade.volume - total_cost
+            if self._uses_margin():
+                # 保证金市场：释放保证金 + 结算盈亏
+                margin_released = self._get_futures_margin(trade.symbol, trade.volume, cost_price)
+                contract_size = self._get_contract_size(trade.symbol)
+                realized_pnl = (trade.price - cost_price) * trade.volume * contract_size - total_cost
+                self.account.cash_available += (margin_released + realized_pnl)
+                self.account.margin_used -= margin_released
+            else:
+                # 卖出：增加现金，减少持仓市值
+                self.account.cash_available += (trade.amount - total_cost)
+                self.account.market_value -= trade.amount
+                realized_pnl = (trade.price - cost_price) * trade.volume - total_cost
             self.account.pnl_realized += realized_pnl
         elif trade.side == Side.SHORT_OPEN:
-            # 开空：冻结资金作为保证金（简化为全额）
-            self.account.cash_available -= (trade.amount + total_cost)
-            self.account.market_value += trade.amount
+            if self._uses_margin():
+                # 保证金市场：按合约乘数和保证金比例扣除保证金
+                margin = self._get_futures_margin(trade.symbol, trade.volume, trade.price)
+                self.account.cash_available -= (margin + total_cost)
+                self.account.margin_used += margin
+            else:
+                # 其他市场：全额
+                self.account.cash_available -= (trade.amount + total_cost)
+                self.account.market_value += trade.amount
         elif trade.side == Side.SHORT_CLOSE:
-            # 平空：释放资金，计算盈亏（空头：价格下跌盈利）
-            self.account.cash_available += (trade.amount - total_cost)
-            self.account.market_value -= trade.amount
-            cost_price = sell_cost_price if sell_cost_price > 0 else self._get_cost_price(trade.symbol + "_SHORT")
-            realized_pnl = (cost_price - trade.price) * trade.volume - total_cost
+            cost_price = sell_cost_price if sell_cost_price > 0 else self._get_cost_price(trade.symbol + SHORT_POSITION_SUFFIX)
+            if self._uses_margin():
+                # 保证金市场：释放保证金 + 结算盈亏
+                margin_released = self._get_futures_margin(trade.symbol, trade.volume, cost_price)
+                contract_size = self._get_contract_size(trade.symbol)
+                realized_pnl = (cost_price - trade.price) * trade.volume * contract_size - total_cost
+                self.account.cash_available += (margin_released + realized_pnl)
+                self.account.margin_used -= margin_released
+            else:
+                # 平空：释放资金，计算盈亏
+                self.account.cash_available += (trade.amount - total_cost)
+                self.account.market_value -= trade.amount
+                realized_pnl = (cost_price - trade.price) * trade.volume - total_cost
             self.account.pnl_realized += realized_pnl
 
         # 更新总资产
@@ -1402,6 +1912,85 @@ class TradeCenter:
         if symbol in self.positions:
             return self.positions[symbol].cost_price
         return 0
+
+    def check_futures_expiry(self):
+        """检查期货合约是否到期/进入交割月，自动平仓
+
+        通过市场适配器获取交割信息，在交割月或合约过期时自动平仓。
+        仅对 cn_future 市场生效。
+        """
+        if not self._is_cn_future():
+            return
+        if not self.market_adapter:
+            return
+        if not hasattr(self.market_adapter, 'get_delivery_info'):
+            return
+
+        current_time = self.context.get('current_dt')
+        if not current_time:
+            return
+
+        positions_to_close = []
+        for pos_key, position in list(self.positions.items()):
+            symbol = position.symbol
+            try:
+                delivery_info = self.market_adapter.get_delivery_info(symbol)
+                natural_person_ban = delivery_info.get('natural_person_ban', {})
+                is_banned = natural_person_ban.get('is_banned', False)
+                reason = natural_person_ban.get('reason', '')
+
+                if is_banned and ('过期' in reason or '交割月' in reason):
+                    positions_to_close.append((pos_key, position, reason))
+            except Exception as e:
+                Log.logger.debug(f"检查合约到期 {symbol}: {e}")
+
+        for pos_key, position, reason in positions_to_close:
+            symbol = position.symbol
+            volume = position.volume
+            last_price = getattr(position, 'last_price', None) or position.cost_price
+
+            if volume <= 0 or last_price <= 0:
+                continue
+
+            side = Side.SELL if position.position_side == PositionSide.LONG else Side.SHORT_CLOSE
+            side_desc = "卖出" if side == Side.SELL else "平空"
+
+            Log.logger.warning(
+                f"[合约到期] {symbol} {reason}，自动{side_desc} {volume}手 @结算价{last_price:.2f}"
+            )
+
+            # 创建平仓交易记录并直接执行（绕过撮合，因为合约可能已无市场数据）
+            trade = Trade(
+                trade_id=f"expiry_{pos_key}_{int(current_time.timestamp())}",
+                order_id=f"expiry_order_{pos_key}_{int(current_time.timestamp())}",
+                account_id=self.context.get('account', {}).get('account_id', 'default'),
+                symbol=symbol,
+                side=side,
+                volume=volume,
+                price=last_price,
+                amount=volume * last_price * position.contract_multiplier,
+                commission=0,  # 到期平仓不收手续费
+                tax=0,
+                trade_time=current_time,
+            )
+            total_cost = 0.0
+
+            # 先更新持仓，记录清仓前的unrealized_pnl
+            position.update_market_price(last_price)
+            sell_cost_price = self._update_position_sync(trade, total_cost)
+            self._update_account_sync(trade, total_cost, sell_cost_price)
+
+            # 确保已删除的持仓不再被后续计算引用
+            # 注意：必须用 pos_key 而非 symbol，因为空头持仓的 key 是 "symbol_SHORT"
+            if pos_key in self.positions:
+                del self.positions[pos_key]
+
+            # 强制重算账户价值，避免残留的unrealized_pnl影响
+            self._update_account_value()
+
+            Log.logger.info(
+                f"[合约到期] {symbol} 已自动平仓: {volume}手 @ {last_price:.2f}"
+            )
 
     def handle_corporate_action(self, event):
         """处理公司行为事件（分红、送股等）
@@ -1568,6 +2157,7 @@ class BacktestEngine:
         if self.event_center and hasattr(self.event_center, 'market_adapters'):
             market_adapter = self.event_center.market_adapters.get(market_name)
         self.trade_center = TradeCenter(context, market_adapter=market_adapter, data_center=data_center)
+        self._last_synced_date = None  # 日期同步缓存
 
         # 智能加速跳过追踪（用于合并日志）
         self._skip_total_minutes = 0.0
@@ -1613,9 +2203,37 @@ class BacktestEngine:
         for event_type in dynamic_events:
             self.event_center.event_bus.register_handler(event_type, self._process_event_sync)
     
+    def _is_cn_future(self):
+        """检查当前市场是否为期货"""
+        market = self.context.get('settings', {}).get('market', '')
+        return market == 'cn_future'
+
+    def _is_crypto_swap(self):
+        """检查当前市场是否为加密货币永续合约"""
+        market = self.context.get('settings', {}).get('market', '')
+        return market == 'global_cryptoswap'
+
+    def _sync_backtest_date(self, current_date: date):
+        """同步回测日期到所有市场适配器
+
+        确保所有适配器使用回测日期而非系统日期，
+        避免历史回测使用当前的交易规则、佣金率、保证金比例等。
+
+        Args:
+            current_date: 回测当前日期
+        """
+        if self._last_synced_date == current_date:
+            return
+        self._last_synced_date = current_date
+
+        # 通过 TradeCenter 获取 market_adapter 并同步
+        adapter = getattr(self.trade_center, 'market_adapter', None)
+        if adapter and hasattr(adapter, 'set_current_date'):
+            adapter.set_current_date(current_date)
+
     def _has_pending_orders(self):
         """检查是否有挂单（未成交的订单）
-        
+
         Returns:
             bool: True表示有挂单，False表示没有挂单
         """
@@ -1632,192 +2250,6 @@ class BacktestEngine:
         # 订单撤销逻辑已在cancel_order中处理
         pass
         
-    async def _handle_try_match(self, event: Dict):
-        """处理撮合事件"""
-        # 获取当前市场数据
-        current_time = self.context['current_dt']
-        market = self.context['settings']['market']
-        freq = self.context['settings']['freq']
-        
-        # 获取所有需要行情的标的（使用 active_orders）
-        symbols = set()
-        for order in self.trade_center.active_orders.values():
-            symbols.add(order.symbol)
-                
-        if not symbols:
-            return
-
-        # 获取行情数据 - 批量获取以提高性能
-        try:
-            market_data = {}
-            symbols_list = list(symbols)
-            
-            # 批量获取行情数据而不是逐个获取
-            if freq == '1m':
-                # 对于1分钟数据，使用get_klines获取最近的数据
-                from datetime import timedelta
-                start_time = current_time - timedelta(minutes=5)
-                klines_df = self.data_center.get_klines(
-                    codes=symbols_list,  # 批量获取
-                    freq=freq,
-                    start_time=start_time.strftime('%Y-%m-%d %H:%M:%S'),
-                    end_time=(current_time + timedelta(minutes=1)).strftime('%Y-%m-%d %H:%M:%S'),
-                    fields=['close', 'volume']  # 【修复】获取成交量数据
-                )
-
-                if not klines_df.empty:
-                    # 为每个symbol提取最新数据
-                    for symbol in symbols_list:
-                        try:
-                            symbol_klines = klines_df[klines_df.index.get_level_values('code') == symbol]
-                            if not symbol_klines.empty:
-                                latest_close = symbol_klines['close'].iloc[-1]
-                                latest_volume = symbol_klines['volume'].iloc[-1] if 'volume' in symbol_klines.columns else 0
-                                market_data[symbol] = {'close': latest_close, 'volume': latest_volume}
-                        except Exception as e:
-                            Log.logger.warning(f"提取 {symbol} 行情数据失败: {e}")
-            else:
-                # 对于日线数据，批量获取
-                quote_df = self.data_center.get_quotes(symbols_list, freq=freq, time=current_time, fields=['close'])
-                if not quote_df.empty:
-                    market_data = _match_quote_symbols(quote_df, symbols_list)
-
-            # 执行撮合
-            self.trade_center.try_match_orders_sync(market_data)
-
-        except Exception as e:
-            Log.logger.error(f"撮合过程中发生错误: {e}")
-
-    async def _handle_on_time(self, event):
-        """处理定时任务事件"""
-        try:
-            # 从上下文中查找定时任务
-            if not self.context or 'scheduled_tasks' not in self.context:
-                return
-
-            function_name = getattr(event, 'function_name', None)
-            if not function_name:
-                Log.logger.warning("ON_TIME事件缺少function_name属性")
-                return
-
-            # 查找对应的函数对象
-            func = None
-            for task in self.context['scheduled_tasks']:
-                if task.get('function_name') == function_name:
-                    func = task.get('function_object')
-                    break
-
-            if func:
-                # 调用策略函数
-                if asyncio.iscoroutinefunction(func):
-                    await func(self.context)
-                else:
-                    func(self.context)
-
-                Log.logger.info(f"执行定时任务成功: {function_name}")
-
-                # 注意：不再立即撮合，让订单在后续的分钟级撮合事件中自然成交
-                # 分钟级回测中，后续每分钟都会触发撮合事件
-
-            else:
-                Log.logger.warning(f"未找到定时任务函数: {function_name}")
-
-        except Exception as e:
-            Log.logger.error(f"执行定时任务失败: {e}")
-
-    async def _try_match_after_scheduled_task(self):
-        """定时任务执行后尝试撮合订单"""
-        try:
-            current_time = self.context.get('current_dt')
-            if not current_time:
-                return
-
-            market = self.context.get('settings', {}).get('market', 'cn_stock')
-            freq = self.context.get('settings', {}).get('freq', '1d')
-
-            # 获取所有需要行情的标的
-            symbols = set()
-            for order in self.trade_center.active_orders.values():
-                symbols.add(order.symbol)
-
-            if not symbols:
-                return
-
-            # 获取行情数据
-            try:
-                market_data = {}
-                symbols_list = list(symbols)
-
-                if freq == '1d':
-                    # 日线数据批量获取
-                    quote_df = self.data_center.get_quotes(symbols_list, freq=freq, time=current_time, fields=['close'])
-                    if not quote_df.empty:
-                        market_data = _match_quote_symbols(quote_df, symbols_list)
-                else:
-                    # 分钟线数据
-                    from datetime import timedelta
-                    start_time = current_time - timedelta(minutes=5)
-                    klines_df = self.data_center.get_klines(
-                        codes=symbols_list,
-                        freq=freq,
-                        start_time=start_time.strftime('%Y-%m-%d %H:%M:%S'),
-                        end_time=(current_time + timedelta(minutes=1)).strftime('%Y-%m-%d %H:%M:%S'),
-                        fields=['close', 'volume']  # 【修复】获取成交量数据
-                    )
-
-                    if not klines_df.empty:
-                        for symbol in symbols_list:
-                            try:
-                                symbol_klines = klines_df[klines_df.index.get_level_values('code') == symbol]
-                                if not symbol_klines.empty:
-                                    latest_close = symbol_klines['close'].iloc[-1]
-                                    latest_volume = symbol_klines['volume'].iloc[-1] if 'volume' in symbol_klines.columns else 0
-                                    market_data[symbol] = {'close': latest_close, 'volume': latest_volume}
-                            except Exception:
-                                pass
-
-                # 执行撮合
-                if market_data:
-                    time_str = current_time.strftime('%Y-%m-%d %H:%M:%S')
-                    Log.logger.info(f"[{time_str}] [定时任务后撮合] 活跃订单={len(self.trade_center.active_orders)}, 标的={list(symbols)}")
-                    self.trade_center.try_match_orders_sync(market_data)
-
-            except Exception as e:
-                Log.logger.error(f"定时任务后撮合失败: {e}")
-
-        except Exception as e:
-            Log.logger.error(f"_try_match_after_scheduled_task 失败: {e}")
-            
-    async def run(self, start_date: str, end_date: str, strategy, scheduled_tasks: List):
-        """运行回测"""
-        Log.logger.info(f"开始回测: {start_date} -> {end_date}")
-        
-        # 生成交易日历
-        calendar = await self._generate_calendar(start_date, end_date)
-        
-        # 设置调度任务
-        self.event_center.set_scheduled_tasks(scheduled_tasks)
-        
-        # 主循环：遍历每个交易日
-        for trade_date in calendar:
-            self.context['current_dt'] = trade_date
-            Log.logger.info(f"交易日: {trade_date.strftime('%Y-%m-%d')}")
-            
-            # 生成当日事件列表
-            daily_events = self.event_center.generate_daily_events(trade_date.date())
-            
-            # 按时间顺序处理事件
-            for event in daily_events:
-                await self._process_event(event, strategy)
-                
-            # 更新前一交易日
-            self.context['previous_date'] = trade_date.date()
-
-        # 计算绩效
-        await self._calculate_performance()
-
-        Log.logger.info("回测完成")
-
     def _get_context_filepath(self) -> Optional[str]:
         """获取上下文文件路径"""
         settings = self.context.get('settings', {})
@@ -1942,6 +2374,8 @@ class BacktestEngine:
 
     def run_sync(self, start_date: str, end_date: str, strategy, scheduled_tasks: List):
         """运行回测 - 同步版本"""
+        import time as _run_perf_time
+        _run_start = _run_perf_time.perf_counter()
         Log.logger.info(f"开始回测: {start_date} -> {end_date}")
 
         # 保存策略引用
@@ -1986,7 +2420,10 @@ class BacktestEngine:
         # 生成交易日历
         calendar = self._generate_calendar_sync(start_date, end_date)
         Log.logger.info(f"交易日历已生成，共{len(calendar)}天")
-        
+
+        # 将日历存入context，供策略API（get_trading_calendar）直接使用
+        self.context['calendar'] = calendar
+
         # 设置调度任务
         self.event_center.set_scheduled_tasks(scheduled_tasks)
         
@@ -2013,7 +2450,7 @@ class BacktestEngine:
                 if calendar:
                     first_trade_date = calendar[0]
                     Log.logger.info(f"开始预加载初始数据: {first_trade_date}（含前{extra_months}个月）")
-                    print(f"[回测] 开始预加载 {market} 数据（含前{extra_months}个月历史数据）...", flush=True)
+                    Log.logger.info(f"开始预加载 {market} 数据（含前{extra_months}个月历史数据）...")
 
                     # 获取universe（股票池）
                     universe = self.context.get('universe', None)
@@ -2024,18 +2461,31 @@ class BacktestEngine:
                         universe=universe,
                         frequency=frequency
                     )
-                    print(f"[回测] 初始数据预加载完成（已加载前{extra_months}个月历史数据）", flush=True)
+                    Log.logger.info(f"初始数据预加载完成（已加载前{extra_months}个月历史数据）")
             else:
                 Log.logger.info("检测到1分钟频率回测，使用按需加载策略（禁用预加载）")
-                print(f"[回测] 使用按需加载策略，数据将在策略需要时加载", flush=True)
+                Log.logger.info("使用按需加载策略，数据将在策略需要时加载")
         
         # 记录上一次处理的月份，用于检测月份变化
         last_processed_month = None
+
+        # 【性能诊断】启动耗时
+        _startup_time = _run_perf_time.perf_counter() - _run_start
+        Log.logger.info(f"[性能] 启动耗时: {_startup_time:.2f}s")
         
         # 主循环：遍历每个交易日
+        # BUG 4 fix: 账户清零检测计数器
+        self._zero_asset_days = 0
+        self._bankruptcy_triggered = False
+        _initial_capital = self.context.get('settings', {}).get('initial_capital', 1000000)
+
         for trade_date in calendar:
+            import time as _perf_time
+            _day_t0 = _perf_time.perf_counter()
+
             self.context['current_dt'] = trade_date
-            Log.logger.info(f"交易日: {trade_date.strftime('%Y-%m-%d')}")
+            self._sync_backtest_date(trade_date.date())
+            Log.logger.debug(f"交易日: {trade_date.strftime('%Y-%m-%d')}")
             
             # 检查是否进入新的月份
             if frequency == '1m':
@@ -2052,7 +2502,7 @@ class BacktestEngine:
                         extra_months = 3
                         if hasattr(self.context, 'data_config'):
                             extra_months = getattr(self.context.data_config, 'preload_extra_months', 3)
-                        print(f"[回测] 进入新月份 {current_month}，预加载本月及前{extra_months}个月数据", flush=True)
+                        Log.logger.info(f"进入新月份 {current_month}，预加载本月及前{extra_months}个月数据")
 
                         # 预加载当前月及前N个月的数据
                         self.data_center.ensure_monthly_data_loaded(
@@ -2062,7 +2512,7 @@ class BacktestEngine:
                             frequency=frequency
                         )
                     else:
-                        print(f"[回测] 进入新月份 {current_month}，使用按需加载", flush=True)
+                        Log.logger.info(f"进入新月份 {current_month}，使用按需加载")
 
                     last_processed_month = current_month
             
@@ -2070,17 +2520,54 @@ class BacktestEngine:
             daily_events = self.event_center.generate_daily_events(trade_date.date())
             
             # 调试：打印前3个事件
-            Log.logger.info(f"生成了 {len(daily_events)} 个事件")
+            Log.logger.debug(f"生成了 {len(daily_events)} 个事件")
             for idx in range(min(3, len(daily_events))):
                 e = daily_events[idx]
                 Log.logger.info(f"  [{idx}] {e.event_time} ({e.event_type.value})")
-                print(f"[事件列表] [{idx}] {e.event_time} ({e.event_type.value})", flush=True)
+                Log.logger.debug(f"[事件列表] [{idx}] {e.event_time} ({e.event_type.value})")
             
             # 按时间顺序处理事件
             i = 0
             while i < len(daily_events):
+                # 即时空转检测：账户完全归零时跳过当天剩余事件
+                if i == 0:
+                    try:
+                        acct = self.account
+                        pos = self.trade_center.positions if hasattr(self.trade_center, 'positions') else {}
+                        if (acct.cash_available <= 0
+                            and len(pos) == 0
+                            and getattr(acct, 'margin_used', 0) <= 0):
+                            Log.logger.info(f"账户已完全归零（无现金、无持仓、无保证金），"
+                                          f"跳过 {trade_date.date()} 剩余事件")
+                            self._zero_asset_days += 1
+                            if self._zero_asset_days >= 3:
+                                Log.logger.warning(f"账户归零连续{self._zero_asset_days}天，回测提前终止")
+                                break
+                            break  # 跳过当天剩余事件
+                    except Exception:
+                        pass
+
                 event = daily_events[i]
+
+                # 【性能诊断】事件级计时
+                _evt_t0 = __import__('time').perf_counter()
                 self._process_event_sync(event, strategy)
+                _evt_dt = __import__('time').perf_counter() - _evt_t0
+                _evt_key = event.event_type.value
+                if not hasattr(self, '_perf_event_timings'):
+                    self._perf_event_timings = {}
+                if _evt_key not in self._perf_event_timings:
+                    self._perf_event_timings[_evt_key] = [0.0, 0]
+                self._perf_event_timings[_evt_key][0] += _evt_dt
+                self._perf_event_timings[_evt_key][1] += 1
+                # 慢事件告警（>1秒）
+                if _evt_dt > 1.0:
+                    Log.logger.warning(f"[性能] 慢事件 {_evt_key} @ {event.event_time}: {_evt_dt:.3f}s")
+
+                # 穿仓破产检测：强平导致负余额后立即终止
+                if self._bankruptcy_triggered:
+                    Log.logger.warning(f"账户穿仓破产，回测提前终止于 {trade_date.date()}")
+                    break
 
                 # 智能加速逻辑：仅在1分钟频率下生效
                 frequency = self.context.get('settings', {}).get('freq', '1d')
@@ -2094,43 +2581,45 @@ class BacktestEngine:
                 # 如果没有注册1分钟K线处理器，在MARKET_BAR_1M事件时跳过
                 if frequency == '1m' and not strategy_has_bar_handler:
                     if event.event_type == EventTypeEnum.MARKET_BAR_1M:
-                        # 直接跳过MARKET_BAR_1M事件，不做任何处理
                         Log.logger.debug(f"智能加速：跳过MARKET_BAR_1M事件 {event.event_time}")
                         i += 1
                         continue
                     elif event.event_type == EventTypeEnum.TRY_MATCH:
-                        # 检查是否有挂单
+                        # 检查是否有需要即时撮合的订单
                         has_pending_orders = self._has_pending_orders()
                         active_count = len(self.trade_center.active_orders) if hasattr(self.trade_center, 'active_orders') else 0
-                        Log.logger.debug(f"[智能加速] TRY_MATCH {event.event_time}: 有挂单={has_pending_orders}, 活跃订单数={active_count}")
+                        # 检查是否有需要即时撮合的市价单（排除僵尸单：remaining_volume < ZOMBIE_ORDER_THRESHOLD）
+                        has_market_orders = False
+                        if hasattr(self.trade_center, 'active_orders') and active_count > 0:
+                            from ..models.order import OrderType
+                            has_market_orders = any(
+                                o.order_type == OrderType.MARKET and o.remaining_volume > ZOMBIE_ORDER_THRESHOLD
+                                for o in self.trade_center.active_orders.values()
+                            )
+                        has_only_stale_orders = has_pending_orders and not has_market_orders
 
-                        if not has_pending_orders:
-                            # 无挂单时，跳过后续的MARKET_BAR_1M，直达下一个TRY_MATCH或重要事件
+                        can_skip = not has_pending_orders or has_only_stale_orders
+                        if can_skip:
+                            # 无挂单或仅有限价单时，跳过所有TRY_MATCH，直达下一个ON_TIME或重要事件
                             next_event_idx = i + 1
+                            important_events = [
+                                EventTypeEnum.ON_TIME,
+                                EventTypeEnum.MARKET_START,
+                                EventTypeEnum.MORNING_END,
+                                EventTypeEnum.AFTERNOON_START,
+                                EventTypeEnum.CLOSING_START,
+                                EventTypeEnum.MARKET_END,
+                            ]
                             while next_event_idx < len(daily_events):
                                 next_event = daily_events[next_event_idx]
-                                # 停在TRY_MATCH或重要事件上
-                                if next_event.event_type == EventTypeEnum.TRY_MATCH:
-                                    break
-                                # 重要事件列表
-                                important_events = [
-                                    EventTypeEnum.ON_TIME,
-                                    EventTypeEnum.MARKET_START,
-                                    EventTypeEnum.MORNING_END,
-                                    EventTypeEnum.AFTERNOON_START,
-                                    EventTypeEnum.CLOSING_START,
-                                    EventTypeEnum.MARKET_END,
-                                ]
                                 if next_event.event_type in important_events:
                                     break
                                 next_event_idx += 1
 
-                            # 只有找到了目标事件且不在列表末尾时才跳转
                             if next_event_idx > i + 1 and next_event_idx < len(daily_events):
                                 target_event = daily_events[next_event_idx]
                                 time_diff = (target_event.event_time - event.event_time).total_seconds() / 60
 
-                                # 累积跳过时间，不立即输出日志
                                 if self._skip_start_time is None:
                                     self._skip_start_time = event.event_time
                                 self._skip_total_minutes += time_diff
@@ -2148,12 +2637,54 @@ class BacktestEngine:
 
             # 每日结束时，输出剩余的撮合跳过日志
             if self._match_skip_count > 0:
-                Log.logger.info(f"[TRY_MATCH] 累计跳过撮合 {self._match_skip_count} 次 (从 {self._match_skip_start_time} 到交易日结束)")
+                Log.logger.debug(f"[TRY_MATCH] 累计跳过撮合 {self._match_skip_count} 次 (从 {self._match_skip_start_time} 到交易日结束)")
                 self._match_skip_count = 0
                 self._match_skip_start_time = None
 
+            # 【性能诊断】日终性能报告
+            if hasattr(self, '_perf_event_timings') and self._perf_event_timings:
+                _day_total = sum(v[0] for v in self._perf_event_timings.values())
+                Log.logger.info(f"[性能] ===== {trade_date.date()} 性能报告 =====")
+                Log.logger.info(f"[性能] 事件总耗时: {_day_total:.2f}s")
+                for _k, (_total, _count) in sorted(self._perf_event_timings.items(), key=lambda x: -x[1][0]):
+                    _avg = _total / _count * 1000 if _count > 0 else 0
+                    Log.logger.info(f"[性能]   {_k}: total={_total:.2f}s, count={_count}, avg={_avg:.1f}ms")
+                self._perf_event_timings.clear()
+
+            # 【性能诊断】数据中心API计时报告
+            if hasattr(self.data_center, '_perf_api_timings') and self.data_center._perf_api_timings:
+                Log.logger.info(f"[性能] 数据API耗时:")
+                for _k, (_total, _count) in sorted(self.data_center._perf_api_timings.items(), key=lambda x: -x[1][0]):
+                    _avg = _total / _count * 1000 if _count > 0 else 0
+                    Log.logger.info(f"[性能]   {_k}: total={_total:.2f}s, count={_count}, avg={_avg:.1f}ms")
+                self.data_center._perf_api_timings.clear()
+
+            # 穿仓破产后跳出外层循环
+            if self._bankruptcy_triggered:
+                break
+
+            # 检测账户清零：总资产极低或归零状态持续，提前终止
+            try:
+                total_assets = self.account.total_assets
+                pos = self.trade_center.positions if hasattr(self.trade_center, 'positions') else {}
+                # 无持仓且总资产极低（< 0.1%初始资金）视为空转
+                if total_assets < _initial_capital * 0.001 and len(pos) == 0:
+                    self._zero_asset_days += 1
+                    if self._zero_asset_days >= 3:
+                        Log.logger.warning(f"账户资产连续{self._zero_asset_days}天极低（{total_assets:.2f}），回测提前终止")
+                        break
+                else:
+                    self._zero_asset_days = 0
+            except Exception:
+                pass
+
             # 更新前一交易日
             self.context['previous_date'] = trade_date.date()
+
+            # 【性能诊断】日级总耗时（含非事件开销）
+            _day_total = _perf_time.perf_counter() - _day_t0
+            _evt_total = sum(v[0] for v in self._perf_event_timings.values()) if hasattr(self, '_perf_event_timings') and self._perf_event_timings else 0
+            Log.logger.info(f"[性能] 日总耗时: {_day_total:.2f}s (事件: {_evt_total:.2f}s, 非事件: {_day_total - _evt_total:.2f}s)")
 
         # 计算绩效
         self._calculate_performance_sync()
@@ -2187,13 +2718,29 @@ class BacktestEngine:
                     return None
                 
                 price = quote_df.loc[security, 'close']
-                
-                # 计算数量
-                volume = amount / price
+                if isinstance(price, pd.Series):
+                    price = float(price.iloc[-1])
+
+                # 计算数量 - 期货需考虑合约乘数和保证金比率
+                if price <= 0:
+                    Log.logger.warning(f"[order_value] {security} 价格无效({price})，无法下单")
+                    return None
+                if self._is_cn_future() or self._is_crypto_swap():
+                    contract_size = self.trade_center._get_contract_size(security)
+                    margin_ratio = self.trade_center._get_margin_ratio(security)
+                    if contract_size > 0 and margin_ratio > 0:
+                        volume = amount / (price * contract_size * margin_ratio)
+                    else:
+                        volume = amount / price
+                else:
+                    volume = amount / price
 
                 # 按市场规则取整（委托给trade_center的_normalize_volume）
                 lot_size = self.trade_center._get_lot_size(security)
                 if lot_size > 0 and side.lower() == 'buy':
+                    if volume < 0:
+                        Log.logger.warning(f"[order_value] {security} 计算数量为负({volume})，已拒绝下单")
+                        return None
                     volume = int(volume / lot_size) * lot_size
                     if volume <= 0:
                         volume = lot_size  # 至少买入1手
@@ -2229,9 +2776,10 @@ class BacktestEngine:
                     )
                 )
 
-                current_time = self.context.get('current_dt')
-                time_str = TimeFormatter.format(current_time)
-                Log.logger.info(f"[{time_str}] 下单成功: {security} {side} {volume:.2f} @ {price:.2f}, 订单ID: {order_id}")
+                if order_id is not None:
+                    current_time = self.context.get('current_dt')
+                    time_str = TimeFormatter.format(current_time)
+                    Log.logger.info(f"[{time_str}] 下单成功: {security} {side} {volume:.2f} @ {price:.2f}, 订单ID: {order_id}")
                 return order_id
 
             except Exception as e:
@@ -2255,10 +2803,15 @@ class BacktestEngine:
                     return None
                 
                 price = quote_df.loc[security, 'close']
+                if isinstance(price, pd.Series):
+                    price = float(price.iloc[-1])
 
                 # 按市场规则取整（委托给trade_center的_normalize_volume）
                 lot_size = self.trade_center._get_lot_size(security)
                 if lot_size > 0 and side.lower() == 'buy':
+                    if volume < 0:
+                        Log.logger.warning(f"[order_volume] {security} 下单数量为负({volume})，已拒绝下单")
+                        return None
                     volume = int(volume / lot_size) * lot_size
                     if volume <= 0:
                         volume = lot_size
@@ -2294,9 +2847,10 @@ class BacktestEngine:
                     )
                 )
 
-                current_time = self.context.get('current_dt')
-                time_str = TimeFormatter.format(current_time)
-                Log.logger.info(f"[{time_str}] 下单成功: {security} {side} {volume:.2f} @ {price:.2f}, 订单ID: {order_id}")
+                if order_id is not None:
+                    current_time = self.context.get('current_dt')
+                    time_str = TimeFormatter.format(current_time)
+                    Log.logger.info(f"[{time_str}] 下单成功: {security} {side} {volume:.2f} @ {price:.2f}, 订单ID: {order_id}")
                 return order_id
 
             except Exception as e:
@@ -2427,6 +2981,9 @@ class BacktestEngine:
                 (df['cal_date'] <= end_date_int)
             ]
 
+            # 期货日历包含多个交易所（CFFEX/DCE/CZCE/SHFE），交易日相同，需去重
+            trade_df = trade_df.drop_duplicates(subset=['cal_date'])
+
             # 转换为date列表
             trade_dates = []
             for date_val in trade_df['cal_date'].values:
@@ -2441,34 +2998,26 @@ class BacktestEngine:
             traceback.print_exc()
             return []
     
-    def _process_event_sync(self, event: BaseEvent, strategy):
+    def _process_event_sync(self, event: BaseEvent, strategy=None):
         """处理单个事件 - 同步版本"""
+        if strategy is None:
+            strategy = getattr(self, 'strategy', None)
         event_name = event.event_type.value
         event_time = event.event_time
         
         # 更新当前时间
         self.context['current_dt'] = event_time
-        
+        self._sync_backtest_date(event_time.date())
+
         # 添加调试日志
         if event.event_type == EventTypeEnum.TRY_MATCH:
             Log.logger.debug(f"处理撮合事件: {event_time}")
         
-        # ====== 新增：调用策略注册的事件处理器 ======
+        # ====== 调用策略注册的事件处理器 ======
         if hasattr(strategy, 'event_handlers'):
             # 尝试通过枚举值和枚举对象本身查找处理器
             handlers = None
-            
-            # 添加详细调试
-            if event.event_type.value == 'DAY_START' or event.event_type.value == 'day_start':
-                print(f"[DEBUG] 处理DAY_START事件", flush=True)
-                print(f"[DEBUG] event.event_type = {event.event_type}, type = {type(event.event_type)}", flush=True)
-                print(f"[DEBUG] event.event_type.value = {event.event_type.value}", flush=True)
-                print(f"[DEBUG] strategy.event_handlers.keys() = {list(strategy.event_handlers.keys())}", flush=True)
-                for k in strategy.event_handlers.keys():
-                    print(f"[DEBUG] key = {k}, value = {k.value}, type = {type(k)}", flush=True)
-                    print(f"[DEBUG] k == event.event_type: {k == event.event_type}", flush=True)
-                    print(f"[DEBUG] k.value == event.event_type.value: {k.value == event.event_type.value}", flush=True)
-            
+
             # 方法1：直接用枚举对象查找
             if event.event_type in strategy.event_handlers:
                 handlers = strategy.event_handlers[event.event_type]
@@ -2477,12 +3026,10 @@ class BacktestEngine:
                 for registered_event_type, registered_handlers in strategy.event_handlers.items():
                     if registered_event_type.value == event.event_type.value:
                         handlers = registered_handlers
-                        print(f"[DEBUG] 通过枚举值匹配找到处理器: {event.event_type.value}", flush=True)
                         break
-            
+
             if handlers:
-                Log.logger.info(f"[事件分发] 调用策略事件处理器: {event.event_type.value}，共{len(handlers)}个处理器")
-                print(f"[事件分发] 调用策略事件处理器: {event.event_type.value}", flush=True)
+                Log.logger.debug(f"[事件分发] 调用策略事件处理器: {event.event_type.value}，共{len(handlers)}个处理器")
                 for handler in handlers:
                     try:
                         handler(self.context, event)
@@ -2530,6 +3077,12 @@ class BacktestEngine:
             self._handle_before_market_sync(event)
         elif event.event_type == EventTypeEnum.CORPORATE_ACTION:
             self._handle_corporate_action_sync(event)
+        elif event.event_type.value == 'DELISTING':
+            self._handle_delisting_sync(event)
+        elif event.event_type == EventTypeEnum.MARGIN_CALL_CHECK:
+            self._handle_margin_call_check_sync(event)
+        elif event.event_type == EventTypeEnum.FUNDING_RATE_SETTLE:
+            self._handle_funding_rate_settle_sync(event)
         else:
             # 其他市场事件的默认处理
             Log.logger.debug(f"市场事件 {event.event_type.value} 已处理")
@@ -2556,7 +3109,7 @@ class BacktestEngine:
             if func:
                 # 调用策略函数 - 强制同步调用
                 func(self.context)
-                Log.logger.info(f"执行定时任务成功: {function_name}")
+                Log.logger.debug(f"执行定时任务成功: {function_name}")
 
                 # 注意：不再立即撮合，让订单在后续的分钟级撮合事件中自然成交
                 # 分钟级回测中，后续每分钟都会触发撮合事件
@@ -2597,7 +3150,7 @@ class BacktestEngine:
 
                 if freq == '1d':
                     # 日线数据批量获取
-                    quote_df = self.data_center.get_quotes(symbols_list, freq=freq, time=current_time, fields=['close'])
+                    quote_df = self.data_center.get_quotes(symbols_list, freq=freq, time=current_time, fields=['close', 'volume'])
                     if not quote_df.empty:
                         market_data = _match_quote_symbols(quote_df, symbols_list)
                 else:
@@ -2624,7 +3177,7 @@ class BacktestEngine:
                 if market_data:
                     # 【优化】使用缓存的时间格式化器
                     time_str = TimeFormatter.format(current_time)
-                    Log.logger.info(f"[{time_str}] [定时任务后撮合] 活跃订单={len(self.trade_center.active_orders)}, 标的={list(symbols)}")
+                    Log.logger.debug(f"[{time_str}] [定时任务后撮合] 活跃订单={len(self.trade_center.active_orders)}, 标的={list(symbols)}")
                     self.trade_center.try_match_orders_sync(market_data)
 
             except Exception as e:
@@ -2664,11 +3217,11 @@ class BacktestEngine:
         if self._match_skip_count > 0:
             # 【优化】使用缓存的时间格式化器
             start_str = TimeFormatter.format(self._match_skip_start_time)
-            Log.logger.info(f"[{time_str}] [TRY_MATCH] 累计跳过撮合 {self._match_skip_count} 次 ({start_str} -> {time_str})")
+            Log.logger.debug(f"[{time_str}] [TRY_MATCH] 累计跳过撮合 {self._match_skip_count} 次 ({start_str} -> {time_str})")
             self._match_skip_count = 0
             self._match_skip_start_time = None
 
-        Log.logger.info(f"[{time_str}] [TRY_MATCH] 活跃订单={len(self.trade_center.active_orders)}, 标的={list(symbols)}")
+        Log.logger.debug(f"[{time_str}] [TRY_MATCH] 活跃订单={len(self.trade_center.active_orders)}, 标的={list(symbols)}")
 
         # 获取行情数据 - 批量获取以提高性能
         try:
@@ -2677,62 +3230,78 @@ class BacktestEngine:
 
             # 批量获取行情数据而不是逐个获取
             if freq == '1m':
-                # 对于1分钟数据，使用get_klines获取最近的数据
-                start_time = current_time - timedelta(minutes=5)
-                end_time = current_time + timedelta(minutes=1)
-
-                # 【优化】使用缓存的时间格式化器
-                start_time_str, end_time_str = TimeFormatter.format_range(start_time, end_time)
-                Log.logger.info(f"[{time_str}] [TRY_MATCH] 查询K线: codes={len(symbols_list)}个, start={start_time_str}, end={end_time_str}")
-
-                klines_df = self.data_center.get_klines(
-                    codes=symbols_list,  # 批量获取
-                    freq=freq,
-                    start_time=start_time_str,
-                    end_time=end_time_str,
-                    fields=['close', 'volume']  # 获取成交量数据
+                # 【性能优化】优先使用快速价格查找，避免DataFrame copy
+                market_data = self.data_center.get_minute_prices(
+                    codes=symbols_list, market=market, freq=freq,
+                    current_time=current_time
                 )
 
-                Log.logger.info(f"[{time_str}] [TRY_MATCH] get_klines返回: empty={klines_df.empty}, shape={klines_df.shape if not klines_df.empty else 'N/A'}")
+                if market_data:
+                    Log.logger.debug(f"[{time_str}] [TRY_MATCH] 快速查找命中: {len(market_data)}个标的")
+                else:
+                    # 回退到get_klines
+                    start_time = current_time - timedelta(minutes=5)
+                    end_time = current_time + timedelta(minutes=1)
 
-                if not klines_df.empty:
-                    # 【性能优化】使用批量提取函数，避免循环查询MultiIndex
-                    market_data = extract_latest_prices_batch(klines_df, symbols_list)
-                    found_count = len(market_data)
-                    Log.logger.info(f"[{time_str}] [TRY_MATCH] 共找到{found_count}个标的的价格")
-                    if found_count <= 3 and found_count > 0:
-                        for symbol, data in list(market_data.items())[:3]:
-                            Log.logger.info(f"[{time_str}] [TRY_MATCH] 找到{symbol}价格: {data['close']}, 成交量: {data['volume']}")
+                    start_time_str, end_time_str = TimeFormatter.format_range(start_time, end_time)
+                    Log.logger.debug(f"[{time_str}] [TRY_MATCH] 查询K线: codes={len(symbols_list)}个, start={start_time_str}, end={end_time_str}")
+
+                    klines_df = self.data_center.get_klines(
+                        codes=symbols_list,
+                        freq=freq,
+                        start_time=start_time_str,
+                        end_time=end_time_str,
+                        fields=['close', 'volume']
+                    )
+
+                    Log.logger.debug(f"[{time_str}] [TRY_MATCH] get_klines返回: empty={klines_df.empty}, shape={klines_df.shape if not klines_df.empty else 'N/A'}")
+
+                    if not klines_df.empty:
+                        market_data = extract_latest_prices_batch(klines_df, symbols_list)
+                        found_count = len(market_data)
+                        Log.logger.debug(f"[{time_str}] [TRY_MATCH] 共找到{found_count}个标的的价格")
+                        if found_count <= 3 and found_count > 0:
+                            for symbol, data in list(market_data.items())[:3]:
+                                Log.logger.debug(f"[{time_str}] [TRY_MATCH] 找到{symbol}价格: {data['close']}, 成交量: {data['volume']}")
             else:
                 # 对于日线数据，批量获取
-                quote_df = self.data_center.get_quotes(symbols_list, freq=freq, time=current_time, fields=['close'])
+                quote_df = self.data_center.get_quotes(symbols_list, freq=freq, time=current_time, fields=['close', 'volume'])
                 if not quote_df.empty:
                     market_data = _match_quote_symbols(quote_df, symbols_list)
 
             # 执行撮合
-            Log.logger.info(f"[{time_str}] [TRY_MATCH] 获取到市场数据: {len(market_data)}个标的, 数据内容: {list(market_data.items())[:3]}...")
+            Log.logger.debug(f"[{time_str}] [TRY_MATCH] 获取到市场数据: {len(market_data)}个标的, 数据内容: {list(market_data.items())[:3]}...")
             self.trade_center.try_match_orders_sync(market_data)
+
+            # 期货/永续合约：撮合后立即检查保证金
+            if self._is_cn_future() or self._is_crypto_swap():
+                self._handle_margin_call_check_sync(event)
 
         except Exception as e:
             Log.logger.error(f"[{time_str}] 撮合过程中发生错误: {e}")
             import traceback
             traceback.print_exc()
-            
+
     def _handle_market_end_sync(self, event):
         """处理收盘事件 - 同步版本"""
-        # 取消未成交的市价单（使用 active_orders）
+        # 取消所有未成交订单（市价单和限价单）
+        # 限价单不应跨日存活：A股限价单有效期仅为当日，期货亦然
         for order_id, order in list(self.trade_center.active_orders.items()):
-            if order.order_type == OrderType.MARKET:
-                order.status = OrderStatus.CANCELLED
-                order.rejected_reason = "收盘时未成交自动撤销"
-                # 从活跃订单中移除
-                del self.trade_center.active_orders[order_id]
+            # 解冻订单占用的资金
+            frozen_amount = getattr(order, '_frozen_amount', 0)
+            if frozen_amount > 0:
+                self.trade_center.account.unfreeze_cash(frozen_amount)
+                order._frozen_amount = 0
+            order.status = OrderStatus.CANCELLED
+            order.rejected_reason = "收盘时未成交自动撤销"
+            # 从活跃订单中移除
+            del self.trade_center.active_orders[order_id]
                 
     def _handle_day_end_sync(self, event):
         """处理日终事件 - 同步版本"""
         try:
             current_time = self.context['current_dt']
-            Log.logger.info(f"处理日终事件: {current_time}")
+            Log.logger.debug(f"处理日终事件: {current_time}")
 
             freq = self.context['settings']['freq']
 
@@ -2740,6 +3309,11 @@ class BacktestEngine:
             cancelled_count = 0
             for order_id, order in list(self.trade_center.active_orders.items()):
                 if order.order_type == OrderType.MARKET and order.status in [OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED]:
+                    # 解冻订单占用的资金
+                    frozen_amount = getattr(order, '_frozen_amount', 0)
+                    if frozen_amount > 0:
+                        self.trade_center.account.unfreeze_cash(frozen_amount)
+                        order._frozen_amount = 0
                     order.status = OrderStatus.CANCELLED
                     order.rejected_reason = "收盘时未成交自动撤销"
                     del self.trade_center.active_orders[order_id]
@@ -2755,8 +3329,8 @@ class BacktestEngine:
             position_keys = list(self.trade_center.positions.keys())
             quote_symbols = []
             for pos_key in position_keys:
-                if pos_key.endswith('_SHORT'):
-                    quote_symbols.append(pos_key[:-6])  # 去掉 _SHORT 后缀
+                if pos_key.endswith(SHORT_POSITION_SUFFIX):
+                    quote_symbols.append(pos_key[:-len(SHORT_POSITION_SUFFIX)])  # 去掉 _SHORT 后缀
                 else:
                     quote_symbols.append(pos_key)
 
@@ -2771,8 +3345,8 @@ class BacktestEngine:
 
                     for pos_key in position_keys:
                         # 确定用于查行情的symbol
-                        if pos_key.endswith('_SHORT'):
-                            quote_key = pos_key[:-6]
+                        if pos_key.endswith(SHORT_POSITION_SUFFIX):
+                            quote_key = pos_key[:-len(SHORT_POSITION_SUFFIX)]
                         else:
                             quote_key = pos_key
 
@@ -2781,6 +3355,9 @@ class BacktestEngine:
                         # 获取最新价格，三级fallback：报价数据 → last_price → cost_price
                         if quote_key in matched:
                             latest_price = matched[quote_key]['close']
+                            # 确保latest_price是标量，而非Series
+                            if isinstance(latest_price, pd.Series):
+                                latest_price = float(latest_price.iloc[-1])
                             # 防御性检查：价格为0或异常
                             if latest_price <= 0:
                                 Log.logger.warning(f"[日终] {quote_key} 价格异常({latest_price})，使用fallback")
@@ -2791,23 +3368,27 @@ class BacktestEngine:
                             Log.logger.debug(f"[日终] {quote_key} 无报价数据，使用{'last_price' if hasattr(position, 'last_price') and position.last_price else 'cost_price'}: {latest_price:.4f}")
 
                         if latest_price and latest_price > 0:
-                            position.last_price = latest_price
-                            position.market_value = position.volume * latest_price
-                            if hasattr(position, 'position_side') and position.position_side == PositionSide.SHORT:
-                                position.unrealized_pnl = (position.cost_price - latest_price) * position.volume
-                            else:
-                                position.unrealized_pnl = (latest_price - position.cost_price) * position.volume
-                            Log.logger.debug(f"更新持仓市值: {pos_key} 数量:{position.volume} 价格:{latest_price} 市值:{position.market_value}")
+                            # 使用 Position 模型的 update_market_price() 方法
+                            # 该方法已正确处理 contract_multiplier 和多空方向
+                            position.update_market_price(latest_price)
+                            Log.logger.debug(f"更新持仓市值: {pos_key} 数量:{position.volume} 价格:{latest_price} 乘数:{position.contract_multiplier} 市值:{position.market_value}")
                 except Exception as e:
                     Log.logger.warning(f"更新持仓市值失败: {e}")
+
+            # 保证金市场：基于当前价格重算保证金占用
+            # 注意：margin_used 已在 _update_account_value 中实时重算，
+            # 此处只需在持仓重定价后执行强平检查
+            if self._is_cn_future() or self._is_crypto_swap():
+                # 日终保证金检查：持仓重定价后检查是否需要强平
+                self._handle_margin_call_check_sync(event)
 
             # 更新账户价值
             self.trade_center._update_account_value()
             
             # 调试信息
-            Log.logger.info(f"调试 - 更新后账户总资产: {self.trade_center.account.total_assets:.2f}")
-            Log.logger.info(f"调试 - 更新后持仓市值: {self.trade_center.account.market_value:.2f}")
-            Log.logger.info(f"调试 - 更新后现金: {self.trade_center.account.cash_available:.2f}")
+            Log.logger.debug(f"调试 - 更新后账户总资产: {self.trade_center.account.total_assets:.2f}")
+            Log.logger.debug(f"调试 - 更新后持仓市值: {self.trade_center.account.market_value:.2f}")
+            Log.logger.debug(f"调试 - 更新后现金: {self.trade_center.account.cash_available:.2f}")
             
             # 记录每日净值
             daily_record = {
@@ -2820,7 +3401,7 @@ class BacktestEngine:
             }
             self.context['logs']['daily_history'].append(daily_record)
             
-            Log.logger.info(f"记录每日净值: {daily_record['date']}, 总资产: {daily_record['total_assets']:.2f}")
+            Log.logger.debug(f"记录每日净值: {daily_record['date']}, 总资产: {daily_record['total_assets']:.2f}")
             
             # 打印每日资产情况
             Log.logger.info(f"日期: {daily_record['date']}, 总资产: {daily_record['total_assets']:.2f}, "
@@ -2840,59 +3421,75 @@ class BacktestEngine:
             current_time = self.context['current_dt']
             current_date = current_time.date()
 
-            Log.logger.info(f"[盘前事件] {current_date} 盘前准备 - 当前账户: 现金={self.trade_center.account.cash_available:.2f}, "
+            Log.logger.debug(f"[盘前事件] {current_date} 盘前准备 - 当前账户: 现金={self.trade_center.account.cash_available:.2f}, "
                            f"持仓市值={sum(p.market_value for p in self.trade_center.positions.values()):.2f}, "
                            f"持仓数={len(self.trade_center.positions)}")
 
-            # T+1规则：日始时解冻昨日买入的持仓（仅限T+1市场）
-            if self.trade_center._is_t_plus_one():
-                for symbol, position in self.trade_center.positions.items():
-                    if hasattr(position, 'buy_dates') and position.buy_dates:
-                        # 解冻昨日及之前买入的持仓
-                        newly_available = 0.0
-                        remaining_buy_dates = []
-                        for buy_time, buy_volume in position.buy_dates:
-                            if buy_time.date() < current_date:
-                                # 昨日及之前买入的，解冻
-                                newly_available += buy_volume
-                            else:
-                                # 今日买入的，保持冻结
-                                remaining_buy_dates.append((buy_time, buy_volume))
+            # 期货合约到期检查（在T+1解冻和市值更新之前执行）
+            self.trade_center.check_futures_expiry()
 
-                        if newly_available > 0:
-                            position.available_volume += newly_available
-                            # 注意：frozen_volume 是计算属性 (volume - available_volume)，不需要直接设置
-                            position.buy_dates = remaining_buy_dates
-                            Log.logger.info(f"[T+1解冻] {symbol}: 解冻{newly_available}股, 可用{position.available_volume}股, 冻结{position.frozen_volume}股")
+            # T+1规则：日始时解冻昨日买入的持仓
+            for symbol, position in list(self.trade_center.positions.items()):
+                if not self.trade_center._is_t_plus_one(symbol):
+                    continue  # T+0产品跳过解冻逻辑
+                if hasattr(position, 'buy_dates') and position.buy_dates:
+                    # 解冻昨日及之前买入的持仓
+                    newly_available = 0.0
+                    remaining_buy_dates = []
+                    for buy_time, buy_volume in position.buy_dates:
+                        if buy_time.date() < current_date:
+                            # 昨日及之前买入的，解冻
+                            newly_available += buy_volume
+                        else:
+                            # 今日买入的，保持冻结
+                            remaining_buy_dates.append((buy_time, buy_volume))
+
+                    if newly_available > 0:
+                        position.available_volume += newly_available
+                        position.buy_dates = remaining_buy_dates
+                        Log.logger.info(f"[T+1解冻] {symbol}: 解冻{newly_available}股, 可用{position.available_volume}股, 冻结{position.frozen_volume}股")
 
             # 更新持仓市值（使用上一交易日收盘价，因为当前日收盘价在盘前还不可用）
             freq = self.context.get('settings', {}).get('freq', '1d')
             previous_date = self.context.get('previous_date')
-            for pos_key, position in self.trade_center.positions.items():
-                try:
-                    # 空头仓的key如 IF2401.CFFEX_SHORT，需要提取base code查行情
-                    quote_symbol = pos_key[:-6] if pos_key.endswith('_SHORT') else pos_key
-                    # 盘前时刻，使用上一交易日收盘价更新市值（get_quotes已内置向前回溯）
-                    quote = self.data_center.get_quotes([quote_symbol], freq, current_time)
-                    if not quote.empty and quote_symbol in quote.index:
-                        current_price = quote.loc[quote_symbol, 'close']
-                        # 防御性检查：价格为0或异常
-                        if current_price <= 0:
-                            Log.logger.warning(f"[盘前] {quote_symbol} 价格异常({current_price})，使用fallback")
-                            current_price = getattr(position, 'last_price', None) or position.cost_price
-                    else:
-                        # 报价数据缺失（停牌等），使用上一次价格或成本价
-                        current_price = getattr(position, 'last_price', None) or position.cost_price
-                        Log.logger.debug(f"[盘前] {quote_symbol} 无报价数据，使用fallback价格: {current_price:.4f}")
 
-                    if current_price and current_price > 0:
-                        position.market_value = position.volume * current_price
-                        if hasattr(position, 'position_side') and position.position_side == PositionSide.SHORT:
-                            position.unrealized_pnl = (position.cost_price - current_price) * position.volume
-                        else:
-                            position.unrealized_pnl = (current_price - position.cost_price) * position.volume
+            # 【性能优化】批量获取所有持仓标的的报价，替代逐个调用get_quotes
+            positions_items = list(self.trade_center.positions.items())
+            if positions_items:
+                # 收集所有需要查询的quote_symbol，同时记录映射关系
+                quote_symbols = []
+                quote_to_pos = []  # [(pos_key, position, quote_symbol)]
+                for pos_key, position in positions_items:
+                    quote_symbol = pos_key[:-len(SHORT_POSITION_SUFFIX)] if pos_key.endswith(SHORT_POSITION_SUFFIX) else pos_key
+                    quote_symbols.append(quote_symbol)
+                    quote_to_pos.append((pos_key, position, quote_symbol))
+
+                # 去重查询（同一标的可能有多空头）
+                unique_symbols = list(dict.fromkeys(quote_symbols))
+                try:
+                    all_quotes = self.data_center.get_quotes(unique_symbols, freq, current_time)
                 except Exception as e:
-                    Log.logger.warning(f"更新{pos_key}持仓市值失败: {e}")
+                    Log.logger.warning(f"批量获取盘前报价失败: {e}")
+                    all_quotes = pd.DataFrame()
+
+                # 逐持仓更新市值
+                for pos_key, position, quote_symbol in quote_to_pos:
+                    try:
+                        if not all_quotes.empty and quote_symbol in all_quotes.index:
+                            current_price = all_quotes.loc[quote_symbol, 'close']
+                            if isinstance(current_price, pd.Series):
+                                current_price = float(current_price.iloc[-1])
+                            if current_price <= 0:
+                                Log.logger.warning(f"[盘前] {quote_symbol} 价格异常({current_price})，使用fallback")
+                                current_price = getattr(position, 'last_price', None) or position.cost_price
+                        else:
+                            current_price = getattr(position, 'last_price', None) or position.cost_price
+                            Log.logger.debug(f"[盘前] {quote_symbol} 无报价数据，使用fallback价格: {current_price:.4f}")
+
+                        if current_price and current_price > 0:
+                            position.update_market_price(current_price)
+                    except Exception as e:
+                        Log.logger.warning(f"更新{pos_key}持仓市值失败: {e}")
 
             # 更新账户总资产
             self.trade_center._update_account_value()
@@ -2901,7 +3498,406 @@ class BacktestEngine:
             Log.logger.error(f"处理盘前事件失败: {e}")
             import traceback
             traceback.print_exc()
-            
+
+    def _handle_funding_rate_settle_sync(self, event):
+        """处理资金费率结算事件 - 每8小时从持仓中收取/支付funding rate
+
+        仅对 global_cryptoswap 市场生效。
+        正费率时多头付空头，负费率时空头付多头。
+        结算后紧接的 MARGIN_CALL_CHECK 会反映扣除后的真实权益。
+        """
+        if not self._is_crypto_swap():
+            return
+
+        settings = self.context.get('settings', {})
+        funding_mode = settings.get('funding_rate_mode', 'fixed')
+        if funding_mode == 'none':
+            return
+
+        current_time = self.context.get('current_dt')
+        if not current_time:
+            return
+
+        total_paid = 0.0
+        total_received = 0.0
+        funding_rate = 0.0
+
+        for pos_key in list(self.trade_center.positions.keys()):
+            position = self.trade_center.positions.get(pos_key)
+            if not position or position.volume <= 0:
+                continue
+
+            current_price = getattr(position, 'last_price', None) or position.cost_price
+            if not current_price or current_price <= 0:
+                continue
+
+            # 持仓价值 = 数量 × 当前价 × 合约乘数
+            contract_multiplier = getattr(position, 'contract_multiplier', 1)
+            position_value = position.volume * current_price * contract_multiplier
+
+            # 确定费率
+            if funding_mode == 'fixed':
+                funding_rate = settings.get('funding_rate', 0.0001)
+            elif funding_mode == 'dynamic':
+                funding_rate = self._calculate_dynamic_funding_rate(
+                    position.symbol, current_price, current_time)
+            else:
+                continue
+
+            if funding_rate == 0.0:
+                continue
+
+            # 计算资金费: |费率| × 持仓价值
+            funding_fee = position_value * abs(funding_rate)
+
+            # 正费率: 多头支付，空头收取
+            # 负费率: 空头支付，多头收取
+            if position.is_long:
+                if funding_rate > 0:
+                    self.trade_center.account.cash_available -= funding_fee
+                    total_paid += funding_fee
+                else:
+                    self.trade_center.account.cash_available += funding_fee
+                    total_received += funding_fee
+            else:
+                if funding_rate > 0:
+                    self.trade_center.account.cash_available += funding_fee
+                    total_received += funding_fee
+                else:
+                    self.trade_center.account.cash_available -= funding_fee
+                    total_paid += funding_fee
+
+        # 记录结算日志
+        if total_paid > 0 or total_received > 0:
+            self.trade_center._update_account_value()
+            net = total_received - total_paid
+            Log.logger.info(
+                f"[资金费率结算] 支付={total_paid:.4f}, 收取={total_received:.4f}, "
+                f"净额={net:.4f}, 费率={funding_rate:.6f}"
+            )
+
+    def _calculate_dynamic_funding_rate(self, symbol, current_price, current_time):
+        """动态计算资金费率（使用已有的 CryptoFundingRateCalculator）
+
+        注意: 回测中 mark_price 与 index_price 通常相同（单一数据源），
+        因此动态模式下费率可能接近0。如需精确动态费率，需要独立的
+        mark/index 价格数据。推荐使用 fixed 模式。
+        """
+        try:
+            from ..markets.global_cryptospot.crypto_calculator import CryptoFundingRateCalculator
+            result = CryptoFundingRateCalculator.calculate_funding_rate(
+                symbol=symbol,
+                mark_price=current_price,
+                index_price=current_price,
+                query_date=current_time.date()
+            )
+            return result.get('funding_rate', 0.0)
+        except Exception as e:
+            Log.logger.debug(f"动态资金费率计算失败 {symbol}: {e}")
+            return 0.0
+
+    def _handle_margin_call_check_sync(self, event):
+        """处理保证金检查事件 - 检查是否需要强制平仓
+
+        对 cn_future 和 global_cryptoswap 市场生效。
+        遍历所有持仓，计算维持保证金/强平价，
+        如果触发条件则强制平仓。
+        """
+        if not self._is_cn_future() and not self._is_crypto_swap():
+            return
+
+        current_time = self.context.get('current_dt')
+        if not current_time:
+            return
+
+        if self._is_cn_future():
+            self._check_futures_margin(current_time)
+        elif self._is_crypto_swap():
+            self._check_crypto_swap_margin(current_time)
+
+    def _check_futures_margin(self, current_time):
+        """期货保证金检查（cn_future）"""
+        from ..markets.cn_future.future_calculator import FutureMarginCalculator
+
+        for pos_key in list(self.trade_center.positions.keys()):
+            position = self.trade_center.positions.get(pos_key)
+            if not position or position.volume <= 0:
+                continue
+
+            symbol = position.symbol
+            current_price = getattr(position, 'last_price', None) or position.cost_price
+            if not current_price or current_price <= 0:
+                continue
+
+            position_signed = position.volume if position.is_long else -position.volume
+
+            try:
+                # 使用 cash_available 作为账户余额
+                # check_margin_call 内部计算: current_equity = account_balance + unrealized_pnl
+                # 即: current_equity = cash_available + unrealized_pnl
+                # 这等价于交易所的"可用余额 + 浮动盈亏"概念，是正确且稳健的做法
+                # 注：不能用 cash_available + margin_used(重算后) 或 total_assets，
+                # 因为 Issue 1 的 margin_used 实时重算会导致 cash_available + margin_used ≠ total_cash，
+                # 引入 error = unrealized_pnl × margin_ratio，对亏损仓位造成级联强平
+                account_balance = self.trade_center.account.cash_available
+
+                margin_result = FutureMarginCalculator.check_margin_call(
+                    symbol=symbol,
+                    position=position_signed,
+                    entry_price=position.cost_price,
+                    current_price=current_price,
+                    account_balance=account_balance,
+                    query_date=current_time.date()
+                )
+            except Exception as e:
+                Log.logger.warning(f"[保证金检查] {symbol} 计算失败: {e}")
+                continue
+
+            if margin_result['need_margin_call']:
+                self._force_liquidate_position(pos_key, position, current_price, current_time, margin_result)
+
+    def _check_crypto_swap_margin(self, current_time):
+        """加密货币永续合约保证金检查（global_cryptoswap）"""
+        from ..markets.global_cryptospot.crypto_calculator import CryptoLiquidationCalculator
+
+        for pos_key in list(self.trade_center.positions.keys()):
+            position = self.trade_center.positions.get(pos_key)
+            if not position or position.volume <= 0:
+                continue
+
+            symbol = position.symbol
+            current_price = getattr(position, 'last_price', None) or position.cost_price
+            if not current_price or current_price <= 0:
+                continue
+
+            # 获取杠杆信息
+            leverage = 10
+            if hasattr(self, 'trade_center') and self.trade_center.market_adapter and hasattr(self.trade_center.market_adapter, 'get_leverage_info'):
+                try:
+                    leverage_info = self.trade_center.market_adapter.get_leverage_info(symbol)
+                    leverage = leverage_info.get('leverage', leverage)
+                except Exception:
+                    pass
+
+            # 计算强平价（crypto swap 市场中所有交易对都视为期货）
+            position_side = 'long' if position.is_long else 'short'
+            try:
+                liq_result = CryptoLiquidationCalculator.calculate_liquidation_price(
+                    symbol=symbol,
+                    entry_price=position.cost_price,
+                    leverage=leverage,
+                    position_side=position_side,
+                    query_date=current_time.date()
+                )
+                liq_price = liq_result.get('liquidation_price')
+            except Exception as e:
+                Log.logger.warning(f"[保证金检查] {symbol} 强平价计算失败: {e}")
+                liq_price = None
+
+            # 如果计算器返回None（因pair_type被识别为spot），手动计算
+            if liq_price is None:
+                mmr = 0.005  # 默认维持保证金率
+                if position_side == 'long':
+                    liq_price = position.cost_price * (1 - 1.0 / leverage + mmr)
+                else:
+                    liq_price = position.cost_price * (1 + 1.0 / leverage - mmr)
+
+            # 判断是否触发强平
+            need_liquidation = False
+            if position.is_long and current_price <= liq_price:
+                need_liquidation = True
+            elif not position.is_long and current_price >= liq_price:
+                need_liquidation = True
+
+            if need_liquidation:
+                # 直接使用账户总资产（已在 _update_account_value 中正确计算）
+                total_equity = self.trade_center.account.total_assets
+                contract_value = abs(position.volume) * current_price * getattr(position, 'contract_multiplier', 1)
+                maintenance_margin = contract_value * 0.005  # 默认维持保证金率
+
+                margin_result = {
+                    'need_margin_call': True,
+                    'current_equity': total_equity,
+                    'maintenance_margin': maintenance_margin,
+                    'shortfall': max(0, maintenance_margin - total_equity),
+                }
+                Log.logger.warning(
+                    f"[强制平仓] {symbol} {'多头' if position.is_long else '空头'}触发强平: "
+                    f"当前价={current_price:.6g}, 强平价={liq_price:.6g}, "
+                    f"权益={total_equity:.2f}, 维持保证金={maintenance_margin:.2f}, "
+                    f"杠杆={leverage}x"
+                )
+                self._force_liquidate_position(pos_key, position, current_price, current_time, margin_result)
+
+        # 账户级资金检查：遍历完所有持仓后，如果现金仍为负且总权益为正，
+        # 说明资金费率等扣除导致现金缺口，需要主动平仓弥补
+        cash_avail = self.trade_center.account.cash_available
+        total_assets = getattr(self.trade_center.account, 'total_assets', 0)
+        if cash_avail < -1.0 and total_assets > 0:
+            Log.logger.warning(
+                f"[账户资金检查] 遍历持仓后现金={cash_avail:.2f}，总权益={total_assets:.2f}，"
+                f"主动平仓弥补缺口"
+            )
+            self._liquidate_to_cover_deficit(current_time)
+
+    def _force_liquidate_position(self, pos_key, position, current_price, current_time, margin_result):
+        """强制平仓（保证金不足时）
+
+        复用 check_futures_expiry 的模式：创建Trade，更新持仓和账户，删除持仓。
+        """
+        symbol = position.symbol
+        volume = position.volume
+
+        if volume <= 0 or current_price <= 0:
+            return
+
+        if position.is_long:
+            side = Side.SELL
+            side_desc = "卖出平仓"
+        else:
+            side = Side.SHORT_CLOSE
+            side_desc = "平空仓"
+
+        Log.logger.warning(
+            f"[强制平仓] {symbol} {side_desc}: "
+            f"权益={margin_result.get('current_equity', 0):.2f}, "
+            f"维持保证金={margin_result.get('maintenance_margin', 0):.2f}, "
+            f"平仓 {volume} @{current_price:.6g}"
+        )
+
+        # 创建平仓Trade（绕过撮合直接执行）
+        trade = Trade(
+            trade_id=f"margin_{pos_key}_{int(current_time.timestamp())}",
+            order_id=f"margin_order_{pos_key}_{int(current_time.timestamp())}",
+            account_id=self.context.get('account', {}).get('account_id', 'default'),
+            symbol=symbol,
+            side=side,
+            volume=volume,
+            price=current_price,
+            amount=volume * current_price * getattr(position, 'contract_multiplier', 1),
+            commission=0,
+            tax=0,
+            trade_time=current_time,
+        )
+
+        position.update_market_price(current_price)
+        total_cost = 0.0
+        sell_cost_price = self.trade_center._update_position_sync(trade, total_cost)
+        self.trade_center._update_account_sync(trade, total_cost, sell_cost_price)
+
+        if pos_key in self.trade_center.positions:
+            del self.trade_center.positions[pos_key]
+
+        # 穿仓处理：现金为负数时，清算所有剩余持仓并终止回测
+        # 修复：增加浮点容差和总权益检查，避免浮点精度导致盈利账户被误判为破产
+        cash_avail = self.trade_center.account.cash_available
+        total_assets = getattr(self.trade_center.account, 'total_assets', 0)
+        FLOAT_TOLERANCE = 1.0  # 浮点容差，1元以内视为0
+        # 只有当现金显著为负（超过容差）且总权益也为负时，才判定为真正穿仓
+        is_truly_bankrupt = (cash_avail < -FLOAT_TOLERANCE) and (total_assets < -FLOAT_TOLERANCE)
+        if cash_avail < 0 and is_truly_bankrupt:
+            if not getattr(self, '_bankruptcy_triggered', False):
+                # 先设置标志，防止递归调用重复进入清算循环
+                self._bankruptcy_triggered = True
+
+                # 首次穿仓：平掉所有剩余持仓
+                Log.logger.warning(
+                    f"[穿仓] {symbol} 强平后现金={self.trade_center.account.cash_available:.2f}，"
+                    f"开始清算所有剩余持仓"
+                )
+                for remaining_key in list(self.trade_center.positions.keys()):
+                    remaining_pos = self.trade_center.positions.get(remaining_key)
+                    if not remaining_pos or remaining_pos.volume <= 0:
+                        continue
+                    remaining_price = getattr(remaining_pos, 'last_price', None) or remaining_pos.cost_price
+                    if not remaining_price or remaining_price <= 0:
+                        continue
+                    self._force_liquidate_position(
+                        remaining_key, remaining_pos, remaining_price, current_time,
+                        {'current_equity': 0, 'maintenance_margin': 0, 'shortfall': 0}
+                    )
+
+                # 修正 margin_used（所有持仓已平）
+                self.trade_center.account.margin_used = max(0.0, self.trade_center.account.margin_used)
+
+                Log.logger.warning(
+                    f"[穿仓] 清算完成，最终现金={self.trade_center.account.cash_available:.2f}"
+                )
+                self.trade_center._update_account_value()
+        elif cash_avail < 0:
+            # 现金为负但总权益为正
+            if abs(cash_avail) <= FLOAT_TOLERANCE:
+                # 微小浮点误差，修正为0
+                Log.logger.debug(
+                    f"[浮点修正] {symbol} 强平后现金微负({cash_avail:.2f})，"
+                    f"总权益={total_assets:.2f}，修正现金为0"
+                )
+                self.trade_center.account.cash_available = 0.0
+                if hasattr(self.trade_center.account, 'cash'):
+                    self.trade_center.account.cash = max(0.0, getattr(self.trade_center.account, 'cash', 0))
+            else:
+                # 现金显著为负但总权益为正（如资金费率持续扣除导致），
+                # 需要平仓来弥补资金缺口，而非简单归零
+                Log.logger.warning(
+                    f"[账户资金不足] {symbol} 强平后现金={cash_avail:.2f}，"
+                    f"总权益={total_assets:.2f}，开始平仓弥补资金缺口"
+                )
+                self._liquidate_to_cover_deficit(current_time)
+
+        self.trade_center._update_account_value()
+
+        Log.logger.info(f"[强制平仓] {symbol} 已{side_desc}: {volume}手 @{current_price:.6g}")
+
+    def _liquidate_to_cover_deficit(self, current_time):
+        """账户现金为负但总权益为正时，按未实现盈亏从差到好依次平仓，直到现金回正
+
+        适用于 global_cryptoswap 等保证金市场，资金费率持续扣除可能导致
+        单个持仓未触发强平但账户现金已经为负的场景。
+        """
+        cash_avail = self.trade_center.account.cash_available
+        if cash_avail >= 0:
+            return
+
+        # 按未实现盈亏排序（最差的先平）
+        positions_info = []
+        for pos_key in list(self.trade_center.positions.keys()):
+            pos = self.trade_center.positions.get(pos_key)
+            if not pos or pos.volume <= 0:
+                continue
+            price = getattr(pos, 'last_price', None) or pos.cost_price
+            if not price or price <= 0:
+                continue
+            unrealized = (price - pos.cost_price) * pos.volume * getattr(pos, 'contract_multiplier', 1)
+            if not pos.is_long:
+                unrealized = -unrealized
+            positions_info.append((pos_key, pos, price, unrealized))
+
+        # 按未实现盈亏升序排列（亏损最多的先平）
+        positions_info.sort(key=lambda x: x[3])
+
+        for pos_key, pos, price, unrealized in positions_info:
+            cash_avail = self.trade_center.account.cash_available
+            if cash_avail >= -1.0:
+                break
+
+            Log.logger.warning(
+                f"[账户资金弥补] 平仓 {pos.symbol} 未实现盈亏={unrealized:.2f}，"
+                f"当前现金={cash_avail:.2f}"
+            )
+            margin_result = {
+                'current_equity': self.trade_center.account.total_assets,
+                'maintenance_margin': 0,
+                'shortfall': abs(cash_avail),
+            }
+            self._force_liquidate_position(pos_key, pos, price, current_time, margin_result)
+
+        # 最终检查：如果平仓后现金仍为负，修正为0（剩余微小误差）
+        final_cash = self.trade_center.account.cash_available
+        if final_cash < 0 and final_cash > -1.0:
+            self.trade_center.account.cash_available = 0.0
+            if hasattr(self.trade_center.account, 'cash'):
+                self.trade_center.account.cash = max(0.0, getattr(self.trade_center.account, 'cash', 0))
+
     def _handle_corporate_action_sync(self, event):
         """处理公司行为事件 - 同步版本
 
@@ -2989,23 +3985,113 @@ class BacktestEngine:
 
         except Exception as e:
             Log.logger.error(f"处理公司行为事件失败: {e}")
+
+    def _handle_delisting_sync(self, event):
+        """处理退市事件 - 强制清算持仓"""
+        try:
+            # 获取symbol
+            symbol = getattr(event, 'symbol', None) or ''
+            if not symbol and hasattr(event, 'data') and event.data:
+                symbol = event.data.get('symbol', '')
+
+            if not symbol:
+                return
+
+            delisting_date = getattr(event, 'delisting_date', None)
+            delisting_reason = getattr(event, 'delisting_reason', '退市')
+            if hasattr(event, 'data') and event.data:
+                if not delisting_date:
+                    delisting_date = event.data.get('delisting_date')
+                if delisting_reason == '退市':
+                    delisting_reason = event.data.get('delisting_reason', '退市')
+
+            Log.logger.info(f"[退市处理] {symbol} 退市日期: {delisting_date}, 原因: {delisting_reason}")
+
+            # 更新交易状态为退市
+            data_center = getattr(self, 'data_center', None)
+            if data_center and hasattr(data_center, 'update_trading_status'):
+                data_center.update_trading_status(symbol, 'delisted', delisting_reason)
+
+            # 强制清算持仓
+            positions = self.trade_center.positions if hasattr(self, 'trade_center') else {}
+            if symbol in positions:
+                position = positions[symbol]
+                shares = position.volume
+
+                if shares > 0:
+                    # 使用最后价格或清算价格
+                    last_price = position.last_price
+                    liquidation_price = getattr(event, 'liquidation_price', 0)
+                    if liquidation_price and liquidation_price > 0:
+                        last_price = liquidation_price
+
+                    # 退市价可能为0（停牌/无数据），尝试获取退市前最后交易日的收盘价
+                    if last_price <= 0:
+                        try:
+                            market = self.context.get('settings', {}).get('market', 'cn_stock')
+                            last_quotes = self.data_center.get_klines(
+                                codes=symbol, market=market, freq='1d',
+                                start_date=None, end_date=None,
+                                fields=['close'], backtest_time=None
+                            )
+                            if last_quotes is not None and not last_quotes.empty:
+                                # 取最后一根有收盘价的K线
+                                close_col = 'close' if 'close' in last_quotes.columns else last_quotes.columns[-1]
+                                valid_closes = last_quotes[last_quotes[close_col] > 0][close_col]
+                                if not valid_closes.empty:
+                                    last_price = float(valid_closes.iloc[-1])
+                                    Log.logger.info(f"[退市处理] {symbol} 从历史K线获取最后有效价格: {last_price:.4f}")
+                        except Exception as e:
+                            Log.logger.debug(f"[退市处理] {symbol} 获取历史价格失败: {e}")
+
+                    # 如果仍然为0，使用持仓成本价作为兜底
+                    if last_price <= 0 and hasattr(position, 'cost_price') and position.cost_price > 0:
+                        last_price = position.cost_price
+                        Log.logger.warning(f"[退市处理] {symbol} 无有效市场价格，使用成本价 {last_price:.4f} 作为清算价")
+
+                    if last_price <= 0:
+                        Log.logger.warning(f"[退市处理] {symbol} 无法获取有效清算价格，清算价值为0")
+
+                    liquidation_value = shares * last_price
+
+                    # 更新现金
+                    if hasattr(self, 'trade_center'):
+                        self.trade_center.account.cash_available += liquidation_value
+                    else:
+                        self.account.cash_available += liquidation_value
+
+                    del positions[symbol]
+
+                    Log.logger.info(f"[退市处理] 强制清仓: {symbol}, 数量: {shares}, "
+                                   f"清算价格: {last_price:.4f}, 清算价值: {liquidation_value:.2f}")
+            else:
+                Log.logger.debug(f"[退市处理] {symbol} 不在持仓中，无需清仓")
+
+        except Exception as e:
+            Log.logger.error(f"处理退市事件失败: {e}")
             
     def _calculate_performance_sync(self):
         """计算绩效指标 - 同步版本"""
         Log.logger.info("开始计算绩效指标")
-        
+
         daily_history = self.context['logs']['daily_history']
         Log.logger.info(f"每日历史记录数量: {len(daily_history)}")
-        
+
         if len(daily_history) < 2:
             Log.logger.warning("每日历史记录不足，无法计算绩效指标")
             return
-            
-        # 计算日收益率
+
+        # BUG 5 fix: 使用 initial_capital 作为净值基准
+        initial_capital = self.context.get('settings', {}).get('initial_capital', 1000000)
+
+        # 构建完整净值序列：[initial_capital, day1_assets, day2_assets, ...]
+        nav_values = [initial_capital] + [dh['total_assets'] for dh in daily_history]
+
+        # 计算日收益率（基于完整净值序列，含首日相对初始资金的变化）
         returns = []
-        for i in range(1, len(daily_history)):
-            prev_value = daily_history[i-1]['total_assets']
-            curr_value = daily_history[i]['total_assets']
+        for i in range(1, len(nav_values)):
+            prev_value = nav_values[i-1]
+            curr_value = nav_values[i]
             # 防御性检查：避免除以0或负数
             if prev_value > 0:
                 daily_return = (curr_value - prev_value) / prev_value
@@ -3013,40 +4099,43 @@ class BacktestEngine:
                 Log.logger.warning(f"第{i-1}天总资产异常({prev_value:.2f})，无法计算收益率")
                 daily_return = 0.0
             returns.append(daily_return)
-            
+
         self.context['performance']['returns'] = returns
-        
+
         # 计算基本统计指标
         if returns:
             import numpy as np
             returns_array = np.array(returns)
-            
-            # 年化收益率
-            total_return = (daily_history[-1]['total_assets'] / daily_history[0]['total_assets']) - 1
+
+            # BUG 5 fix: 总收益率使用 initial_capital 作为基准
+            total_return = (daily_history[-1]['total_assets'] / initial_capital) - 1
             # 确保是实数
             if isinstance(total_return, complex):
                 total_return = total_return.real
             trading_days = len(returns)
-            annual_return = (1 + total_return) ** (252 / trading_days) - 1
+            market = self.context.get('settings', {}).get('market', 'cn_stock')
+            annual_trading_days = ANNUAL_TRADING_DAYS.get(market, 252)
+            annual_return = (1 + total_return) ** (annual_trading_days / trading_days) - 1
             # 确保是实数
             if isinstance(annual_return, complex):
                 annual_return = annual_return.real
             
             # 年化波动率
-            annual_volatility = np.std(returns_array) * np.sqrt(252)
+            annual_volatility = np.std(returns_array) * np.sqrt(annual_trading_days)
             
             # 夏普比率
-            risk_free_rate = 0.03  # 假设无风险利率3%
+            risk_free_rate = DEFAULT_RISK_FREE_RATE  # 假设无风险利率3%
             sharpe_ratio = (annual_return - risk_free_rate) / annual_volatility if annual_volatility > 0 else 0
             
             # 最大回撤
-            cumulative_returns = np.cumprod(1 + returns_array)
+            # nav_values已在上文构建: [initial_capital, day1_assets, day2_assets, ...]
+            cumulative_returns = np.array(nav_values) / initial_capital
             peak = np.maximum.accumulate(cumulative_returns)
             drawdown = (cumulative_returns - peak) / peak
             max_drawdown = np.min(drawdown)
 
             # 打印历史净值曲线（用于排查回撤问题）
-            self._print_equity_curve(daily_history, cumulative_returns, drawdown, max_drawdown)
+            self._print_equity_curve(daily_history, cumulative_returns, drawdown, max_drawdown, nav_values)
 
             # 胜率
             win_trades = len([r for r in returns if r > 0])
@@ -3071,7 +4160,7 @@ class BacktestEngine:
             self._calculate_benchmark_performance(daily_history, returns_array, trading_days)
 
     def _print_equity_curve(self, daily_history: List[Dict], cumulative_returns: np.ndarray,
-                            drawdown: np.ndarray, max_drawdown: float):
+                            drawdown: np.ndarray, max_drawdown: float, nav_values: list = None):
         """打印历史净值曲线和回撤曲线，用于排查回撤问题
 
         Args:
@@ -3083,6 +4172,9 @@ class BacktestEngine:
         if not daily_history or len(daily_history) < 2:
             return
 
+        # BUG 5 fix: 使用 initial_capital 显示真实初始资金
+        _initial_capital = self.context.get('settings', {}).get('initial_capital', 1000000)
+
         Log.logger.info("=" * 80)
         Log.logger.info("【净值曲线分析】")
 
@@ -3093,7 +4185,7 @@ class BacktestEngine:
         end_value = daily_history[-1].get('total_assets', 0)
 
         Log.logger.info(f"回测区间: {start_date} ~ {end_date}")
-        Log.logger.info(f"初始资金: {start_value:,.2f}, 最终资金: {end_value:,.2f}")
+        Log.logger.info(f"初始资金: {_initial_capital:,.2f}, 首日收盘资金: {start_value:,.2f}, 最终资金: {end_value:,.2f}")
 
         # 找到关键点位
         max_dd_idx = np.argmin(drawdown)
@@ -3102,18 +4194,20 @@ class BacktestEngine:
         # 累计净值曲线关键点
         Log.logger.info("-" * 80)
         Log.logger.info("【累计净值关键点】")
-        Log.logger.info(f"起点    : 日期={start_date}, 净值=1.0000, 资金={start_value:,.2f}")
+        Log.logger.info(f"起点    : 净值=1.0000, 初始资金={_initial_capital:,.2f}")
 
-        # 最高点
+        # 最高点 (cumulative_returns[0]是初始资金, cumulative_returns[i+1]对应daily_history[i])
         max_nav_idx = np.argmax(cumulative_returns)
-        max_nav_date = daily_history[min(max_nav_idx + 1, len(daily_history) - 1)].get('date', 'N/A')
-        max_nav_value = daily_history[min(max_nav_idx + 1, len(daily_history) - 1)].get('total_assets', 0)
+        max_nav_dh_idx = max(0, min(max_nav_idx - 1, len(daily_history) - 1))
+        max_nav_date = daily_history[max_nav_dh_idx].get('date', start_date) if max_nav_idx > 0 else '初始'
+        max_nav_value = nav_values[max_nav_idx] if nav_values is not None else cumulative_returns[max_nav_idx] * _initial_capital
         Log.logger.info(f"最高点  : 日期={max_nav_date}, 净值={cumulative_returns[max_nav_idx]:.4f}, 资金={max_nav_value:,.2f}")
 
         # 最低点
         min_nav_idx = np.argmin(cumulative_returns)
-        min_nav_date = daily_history[min(min_nav_idx + 1, len(daily_history) - 1)].get('date', 'N/A')
-        min_nav_value = daily_history[min(min_nav_idx + 1, len(daily_history) - 1)].get('total_assets', 0)
+        min_nav_dh_idx = max(0, min(min_nav_idx - 1, len(daily_history) - 1))
+        min_nav_date = daily_history[min_nav_dh_idx].get('date', start_date) if min_nav_idx > 0 else '初始'
+        min_nav_value = nav_values[min_nav_idx] if nav_values is not None else cumulative_returns[min_nav_idx] * _initial_capital
         Log.logger.info(f"最低点  : 日期={min_nav_date}, 净值={cumulative_returns[min_nav_idx]:.4f}, 资金={min_nav_value:,.2f}")
 
         # 终点
@@ -3123,8 +4217,10 @@ class BacktestEngine:
         Log.logger.info("-" * 80)
         Log.logger.info("【最大回撤详情】")
         if max_drawdown < 0:
-            peak_date = daily_history[min(peak_idx + 1, len(daily_history) - 1)].get('date', 'N/A')
-            trough_date = daily_history[min(max_dd_idx + 1, len(daily_history) - 1)].get('date', 'N/A')
+            peak_dh_idx = max(0, min(peak_idx - 1, len(daily_history) - 1))
+            trough_dh_idx = max(0, min(max_dd_idx - 1, len(daily_history) - 1))
+            peak_date = daily_history[peak_dh_idx].get('date', 'N/A') if peak_idx > 0 else '初始'
+            trough_date = daily_history[trough_dh_idx].get('date', 'N/A') if max_dd_idx > 0 else '初始'
             peak_nav = cumulative_returns[peak_idx]
             trough_nav = cumulative_returns[max_dd_idx]
             Log.logger.info(f"回撤区间: {peak_date} ~ {trough_date}")
@@ -3142,13 +4238,13 @@ class BacktestEngine:
             Log.logger.info(f"{'序号':>6} | {'日期':>12} | {'总资产':>15} | {'累计净值':>10} | {'回撤':>10} | {'备注':>10}")
             Log.logger.info("-" * 80)
 
-            # 计算回撤区间的起始和结束索引（peak_idx 和 max_dd_idx 是 returns 数组的索引，需要 +1 对应 daily_history）
+            # 计算回撤区间的起始和结束索引（cumulative_returns[0]=1.0 对应 daily_history[0]）
             start_idx = max(0, peak_idx - 5)  # 峰值前5天
-            end_idx = min(len(daily_history) - 2, max_dd_idx + 5)  # 谷值后5天
+            end_idx = min(len(daily_history) - 1, max_dd_idx + 5)  # 谷值后5天
 
             for i in range(start_idx, end_idx + 1):
-                date = daily_history[i + 1].get('date', 'N/A')
-                total = daily_history[i + 1].get('total_assets', 0)
+                date = daily_history[i].get('date', 'N/A')
+                total = daily_history[i].get('total_assets', 0)
                 nav = cumulative_returns[i] if i < len(cumulative_returns) else 0
                 dd = drawdown[i] if i < len(drawdown) else 0
 
@@ -3168,8 +4264,8 @@ class BacktestEngine:
 
             # 打印前20条
             for i in range(min(20, len(daily_history) - 1)):
-                date = daily_history[i + 1].get('date', 'N/A')
-                total = daily_history[i + 1].get('total_assets', 0)
+                date = daily_history[i].get('date', 'N/A')
+                total = daily_history[i].get('total_assets', 0)
                 nav = cumulative_returns[i] if i < len(cumulative_returns) else 0
                 dd = drawdown[i] if i < len(drawdown) else 0
                 Log.logger.info(f"{i + 1:>6} | {date:>12} | {total:>15,.2f} | {nav:>10.4f} | {dd:>9.2%}")
@@ -3178,9 +4274,9 @@ class BacktestEngine:
                 Log.logger.info(f"{'...':>6} | {'...':>12} | {'...':>15} | {'...':>10} | {'...':>10}")
 
             # 打印后20条
-            for i in range(max(20, len(daily_history) - 20), len(daily_history) - 1):
-                date = daily_history[i + 1].get('date', 'N/A')
-                total = daily_history[i + 1].get('total_assets', 0)
+            for i in range(max(20, len(daily_history) - 20), len(daily_history)):
+                date = daily_history[i].get('date', 'N/A')
+                total = daily_history[i].get('total_assets', 0)
                 nav = cumulative_returns[i] if i < len(cumulative_returns) else 0
                 dd = drawdown[i] if i < len(drawdown) else 0
                 Log.logger.info(f"{i + 1:>6} | {date:>12} | {total:>15,.2f} | {nav:>10.4f} | {dd:>9.2%}")
@@ -3216,7 +4312,7 @@ class BacktestEngine:
             Log.logger.info(f"最大单日亏损: {min_daily_return:.2%}")
 
             # 异常值告警：A股涨跌停10%，超过20%基本不可能
-            abnormal_threshold = 0.20
+            abnormal_threshold = ABNORMAL_DAILY_RETURN_THRESHOLD
             abnormal_days = [(i, returns_array[i]) for i in range(len(returns_array))
                            if abs(returns_array[i]) > abnormal_threshold]
             if abnormal_days:
@@ -3248,6 +4344,10 @@ class BacktestEngine:
             return
 
         try:
+            # 获取年化交易日数
+            market = self.context.get('settings', {}).get('market', 'cn_stock')
+            annual_trading_days = ANNUAL_TRADING_DAYS.get(market, 252)
+
             # 获取回测起止日期
             start_date = daily_history[0].get('date') if isinstance(daily_history[0], dict) else daily_history[0]
             end_date = daily_history[-1].get('date') if isinstance(daily_history[-1], dict) else daily_history[-1]
@@ -3280,8 +4380,23 @@ class BacktestEngine:
             )
 
             if benchmark_df is None or benchmark_df.empty:
-                Log.logger.warning(f"无法获取基准数据: {benchmark}")
-                return
+                # BUG 6 fix: 加密货币市场fallback逻辑
+                if benchmark_market in ('global_cryptospot', 'global_cryptoswap'):
+                    fallback_market = 'global_cryptoswap' if benchmark_market == 'global_cryptospot' else 'global_cryptospot'
+                    Log.logger.info(f"基准数据在 {benchmark_market} 中未找到，尝试 fallback 到 {fallback_market}")
+                    benchmark_df = self.data_center.data_interface.get_klines(
+                        codes=benchmark,
+                        market=fallback_market,
+                        freq='1d',
+                        start_date=start_date,
+                        end_date=end_date,
+                        fields=['close'],
+                        adj_type='none',
+                        use_cache=True
+                    )
+                if benchmark_df is None or benchmark_df.empty:
+                    Log.logger.warning(f"无法获取基准数据: {benchmark}")
+                    return
 
             # 提取基准收盘价（处理 MultiIndex）
             if hasattr(benchmark_df.index, 'levels') and len(benchmark_df.index.levels) > 0:
@@ -3309,8 +4424,8 @@ class BacktestEngine:
 
             # 计算基准指标
             benchmark_total_return = (benchmark_prices.iloc[-1] / benchmark_prices.iloc[0]) - 1
-            benchmark_annual_return = (1 + benchmark_total_return) ** (252 / trading_days) - 1
-            benchmark_volatility = np.std(aligned_benchmark_returns) * np.sqrt(252)
+            benchmark_annual_return = (1 + benchmark_total_return) ** (annual_trading_days / trading_days) - 1
+            benchmark_volatility = np.std(aligned_benchmark_returns) * np.sqrt(annual_trading_days)
 
             # 超额收益
             strategy_total_return = self.context['performance']['indicators']['total_return']
@@ -3318,7 +4433,7 @@ class BacktestEngine:
 
             # 跟踪误差（策略收益与基准收益的差值的标准差）
             excess_returns_daily = aligned_strategy_returns - aligned_benchmark_returns
-            tracking_error = np.std(excess_returns_daily) * np.sqrt(252)
+            tracking_error = np.std(excess_returns_daily) * np.sqrt(annual_trading_days)
 
             # 信息比率（年化超额收益 / 跟踪误差）
             information_ratio = excess_return / tracking_error if tracking_error > 0 else 0
@@ -3343,61 +4458,49 @@ class BacktestEngine:
             Log.logger.error(f"计算基准收益率失败: {e}")
 
     def _infer_benchmark_market(self, benchmark: str) -> str:
-        """根据基准代码后缀推断市场类型
+        """根据策略市场和基准代码推断市场类型
 
         Args:
             benchmark: 基准代码，如 000001.SH, 000300.SZ, HSI.HK
 
         Returns:
-            str: 市场类型 (cn_index, hk_index, global_index等)
+            str: 市场类型 (cn_index, cn_fund, hk_index, global_index等)
         """
-        # 后缀到市场的映射
+        strategy_market = self.context.get('settings', {}).get('market')
+
+        # 1. 如果策略市场是cn_fund，基准也应该优先在cn_fund查找
+        #    ETF代码如510300.SH在cn_index中不存在，需要从cn_fund查找
+        if strategy_market == 'cn_fund':
+            Log.logger.debug(f"基准 {benchmark} ETF市场，使用策略市场: cn_fund")
+            return 'cn_fund'
+
+        # 2. 根据基准代码后缀推断市场
         suffix_to_market = {
-            '.SH': 'cn_index',   # 上证指数
-            '.SZ': 'cn_index',   # 深证指数
-            '.HK': 'hk_index',   # 香港指数
-            '.US': 'us_index',   # 美国指数
+            '.SH': 'cn_index',   # 上证
+            '.SZ': 'cn_index',   # 深证
+            '.HK': 'hk_index',   # 香港
+            '.US': 'us_index',   # 美国
             '.UK': 'global_index',
             '.JP': 'global_index',
         }
 
-        # 检查后缀
         for suffix, market in suffix_to_market.items():
             if benchmark.endswith(suffix):
                 Log.logger.debug(f"基准 {benchmark} 后缀 {suffix} 推断为市场: {market}")
                 return market
 
-        # 默认返回 cn_index
+        # BUG 6 fix: 2.5 检测加密货币交易对（如BTCUSDT, ETHUSDT）
+        # 加密货币基准的K线数据在 global_cryptospot 中
+        crypto_suffixes = ('USDT', 'BUSD', 'BTC', 'ETH', 'BNB')
+        if any(benchmark.endswith(s) for s in crypto_suffixes):
+            Log.logger.debug(f"基准 {benchmark} 识别为加密货币交易对，使用市场: global_cryptospot")
+            return 'global_cryptospot'
+
+        # 3. 回退到策略所在市场
+        if strategy_market:
+            Log.logger.debug(f"基准 {benchmark} 使用策略市场: {strategy_market}")
+            return strategy_market
+
+        # 4. 默认返回 cn_index
         Log.logger.debug(f"基准 {benchmark} 无法推断市场，使用默认: cn_index")
         return 'cn_index'
-    
-    def _handle_market_event(self, event):
-        """通用市场事件处理器"""
-        try:
-            Log.logger.debug(f"处理市场事件: {event.event_type.value} at {event.event_time}")
-            
-            # 根据不同的事件类型执行相应的处理
-            if event.event_type == EventTypeEnum.BEFORE_MARKET:
-                asyncio.create_task(self._handle_before_market(event))
-            elif event.event_type == EventTypeEnum.MARKET_END:
-                asyncio.create_task(self._handle_market_end(event))
-            elif event.event_type == EventTypeEnum.DAY_END:
-                asyncio.create_task(self._handle_day_end(event))
-            elif event.event_type == EventTypeEnum.TRY_MATCH:
-                asyncio.create_task(self._handle_try_match(event))
-            elif event.event_type == EventTypeEnum.CORPORATE_ACTION:
-                asyncio.create_task(self._handle_corporate_action(event))
-            else:
-                # 其他市场事件的默认处理（主要是记录日志）
-                Log.logger.debug(f"市场事件 {event.event_type.value} 已处理")
-                
-        except Exception as e:
-            Log.logger.error(f"处理市场事件失败 {event.event_type.value}: {e}")
-    
-    async def _handle_before_market(self, event):
-        """处理盘前事件"""
-        try:
-            # 处理除权除息等盘前事件
-            Log.logger.debug(f"处理盘前事件: {event.event_time}")
-        except Exception as e:
-            Log.logger.error(f"处理盘前事件失败: {e}") 
