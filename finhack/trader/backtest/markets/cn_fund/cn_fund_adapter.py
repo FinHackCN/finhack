@@ -59,7 +59,7 @@ class CnFundMarketAdapter(BaseMarket):
         self._current_date = current_date or date.today()
 
         # 中国基金市场特有配置
-        self.t_plus_one = config.get('t_plus_one', True)  # T+1制度
+        self.t_plus_one = config.get('t_plus_one', True)  # 默认T+1，少数ETF允许T+0
         self.price_limit_enabled = config.get('price_limit_enabled', True)  # 涨跌停限制
         self.daily_price_limit = config.get('daily_price_limit', 0.10)  # 10%涨跌停
 
@@ -120,7 +120,7 @@ class CnFundMarketAdapter(BaseMarket):
                         'open_commission': 0.0003,
                         'close_commission': 0.0003,
                         'open_tax': 0.0,
-                        'close_tax': 0.001,  # 印花税（卖出）
+                        'close_tax': 0.0,  # ETF免征印花税
                         'min_commission': 5.0
                     },
                     'bond_etf': {
@@ -429,14 +429,8 @@ class CnFundMarketAdapter(BaseMarket):
                 event_description="收盘集合竞价结束"
             ))
 
-        # 10.5 日线K线收盘事件
-        events.append(MarketEvent(
-            event_type=EventTypeEnum.DAILY_BAR_CLOSED,
-            event_time=datetime.combine(trade_date, time(15, 0)),
-            market=self.market_name,
-            frequency='1d',
-            event_description="日线K线收盘"
-        ))
+        # 注意：不生成 DAILY_BAR_CLOSED，避免与 DAY_END 重复触发日终处理导致净值重复记录
+        # 参考 cn_stock_adapter 和 base_daily_events 的统一事件框架
 
         # 11. 盘后处理
         events.append(MarketEvent(
@@ -653,13 +647,8 @@ class CnFundMarketAdapter(BaseMarket):
             event_description="日终处理"
         ))
 
-        events.append(MarketEvent(
-            event_type=EventTypeEnum.DAILY_BAR_CLOSED,
-            event_time=datetime.combine(trade_date, time(15, 0)),
-            market=self.market_name,
-            frequency=frequency,
-            event_description="日K线生成"
-        ))
+        # 注意：不生成 DAILY_BAR_CLOSED，避免与 DAY_END 重复触发日终处理导致净值重复记录
+        # 参考 cn_stock_adapter 和 base_minutely_events 的统一事件框架
 
         return events
 
@@ -863,9 +852,28 @@ class CnFundMarketAdapter(BaseMarket):
         calendar = CnStockCalendar()
         return calendar.get_trading_days(start_date, end_date)
 
-    def get_settlement_cycle(self) -> str:
-        """获取结算周期"""
+    def get_settlement_cycle(self, symbol: str = None) -> str:
+        """获取结算周期
+
+        Args:
+            symbol: ETF代码（可选），传入时按具体产品类型判断
+        """
+        if symbol:
+            from .etf_trading_rules_versions import get_settlement_cycle as get_etf_settlement
+            return get_etf_settlement(symbol)
         return 'T+1'
+
+    def is_t_plus_one(self, symbol: str) -> bool:
+        """判断指定ETF是否为T+1交易
+
+        Args:
+            symbol: ETF代码
+
+        Returns:
+            True 表示T+1（买入当日不可卖出），False 表示T+0
+        """
+        from .etf_trading_rules_versions import is_t0_etf
+        return not is_t0_etf(symbol)
 
     def get_timezone(self) -> str:
         """获取时区"""

@@ -28,7 +28,10 @@ class BaseMarket(ABC):
         """
         self.market_name = market_name
         self.config = config
-        
+
+        # 回测当前日期（由引擎通过 set_current_date 同步）
+        self._current_date = date.today()
+
         # 从配置加载市场参数
         self.supported_frequencies = config.get('supported_frequencies', ['1d'])
         self.timezone = config.get('timezone', 'Asia/Shanghai')
@@ -86,6 +89,22 @@ class BaseMarket(ABC):
         
         # 风控配置
         self.risk_controls = rules_config.get('risk_controls', {})
+
+    def set_current_date(self, current_date: date):
+        """设置回测当前日期（由引擎调用）
+
+        Args:
+            current_date: 回测当前日期
+        """
+        self._current_date = current_date
+
+    def get_current_date(self) -> date:
+        """获取回测当前日期
+
+        Returns:
+            date: 回测当前日期
+        """
+        return self._current_date
     
     @abstractmethod
     def generate_daily_events(self, trade_date: date, frequency: str = '1d') -> List[BaseEvent]:

@@ -8,6 +8,7 @@
 
 import os
 import sys
+import io
 import pickle
 import logging
 import threading
@@ -42,6 +43,15 @@ if 'BASE_DIR' not in os.environ:
 from runtime.constant import *
 
 logger = logging.getLogger(__name__)
+
+# 提高递归上限：pandas 的 dtype 推断(is_float_dtype 等)内部带递归，在回测引擎较深的事件
+# 调用栈下，对个别空/畸形数据查询会触发 RecursionError(maximum recursion depth exceeded)，
+# 导致 get_klines 卡死。提高到 6000 给 pandas 留足栈空间（Python 默认 1000，6000 仍安全）。
+try:
+    if sys.getrecursionlimit() < 6000:
+        sys.setrecursionlimit(6000)
+except Exception:
+    pass
 
 # Parquet支持检查
 PARQUET_AVAILABLE = True
@@ -175,7 +185,7 @@ class MarketConfig:
         'cn_index': ['1d', '1m'],
         'cn_cb': ['1d', '1m'],
         'global_cryptospot': ['1d', '1m'],  # 支持1d和1m数据
-        'global_cryptoswap': ['1m'],  # 只有1m数据
+        'global_cryptoswap': ['1d', '1m'],  # 支持1d和1m数据
         'global_fx': ['1d'],
         'hk_stock': ['1d'],
     }
@@ -256,7 +266,64 @@ class DataInterface:
         
         # 元数据缓存（股票列表等）
         self.metadata_cache = LRUCache(cache_size // 10, cache_ttl * 10)
-    
+
+        # codebased 代码存在性索引：{(market, freq, year): (codes_set, dir_mtime)}
+        # 仅内存缓存（每次运行动态初始化），按目录 mtime 失效——不落盘、无 TTL，
+        # 因此 codebased 被 time2code 重建后会自动刷新，不存在"永久漏判"过期问题。
+        self._codebased_codes_index = {}
+
+        # timebased 单文件 code→行块索引：{file_path: (mtime, size, {code: [(start_row, count)]})}
+        # 内存级。配合磁盘 .idx（见 _get_tb_file_index）实现跨进程持久化。
+        # 按 (mtime, size) 校验——数据被 collector 追加/重写时自动失效重建，自维护。
+        self._tb_file_index_cache = {}
+
+        # timebased 单文件 已解析df 的 LRU 缓存（整表读路径用）。
+        # 解决"滑动窗口"查询：策略每分钟查 24h 回溯（窗口逐分钟滑动），同一日文件会被
+        # 反复读取。缓存整文件解析结果(按mtime校验)，1440次滑窗查询复用一次解析。
+        from collections import OrderedDict as _OD
+        self._tb_file_df_cache = _OD()
+        # 容量需覆盖策略最宽回溯窗口(crypto_swap 1m 有37天回溯→约37个日文件)，
+        # 否则宽查询会淘汰缓存、紧随的滑窗查询被迫重解析92MB文件而卡死。留足余量。
+        self._tb_file_df_cache_max = 60
+
+        # codebased 单文件 时间范围缓存：{file_path: (mtime, size, min_dt, max_dt)}
+        # 只读首尾行得到[min,max]，用于跳过"查询区间在文件数据范围之外"的情形
+        # （如小币2023-11才上线，却每分钟查2023-06的24h滑窗 → 整文件逐行扫描后返回空，卡死）。
+        self._cb_daterange_cache = {}
+        try:
+            self._tb_index_dir = os.path.join(os.path.dirname(self.market_data_dir), 'cache', 'tb_idx')
+            os.makedirs(self._tb_index_dir, exist_ok=True)
+        except Exception:
+            self._tb_index_dir = None
+
+    def _get_codebased_codes(self, market: str, freq: str, year: int):
+        """返回某年 codebased 中存在的代码集合，作为 timebased 代码存在性的判据。
+
+        依据：codebased 是从 timebased 抽取的"每个代码一个文件"，故其目录列表 = timebased
+        中有数据的代码集合。os.listdir 仅微秒级，远快于扫描 timebased 内容。
+        - 该年 codebased 未构建/为空时返回 None（不可作为判据，通常是当年尚未生成）；
+        - 目录 mtime 变化（time2code 重建）时自动重建索引。
+        """
+        key = (market, freq, year)
+        year_dir = os.path.join(self.market_data_dir, 'kline', 'codebased', market, freq, str(year))
+        if not os.path.isdir(year_dir):
+            return None
+        try:
+            mtime = os.stat(year_dir).st_mtime
+        except OSError:
+            return None
+        cached = self._codebased_codes_index.get(key)
+        if cached and cached[1] == mtime:
+            return cached[0]
+        try:
+            codes = {f[:-4] for f in os.listdir(year_dir) if f.endswith('.csv')}
+        except OSError:
+            return None
+        if not codes:
+            return None  # 空目录（当年可能尚未生成），不可靠
+        self._codebased_codes_index[key] = (codes, mtime)
+        return codes
+
     def _preload_adj_factors(self):
         """预加载复权因子数据"""
         try:
@@ -418,13 +485,16 @@ class DataInterface:
             if adj_type != 'none' and market in ['cn_stock', 'cn_fund']:
                 data = self._apply_adjustment(data, market, adj_type)
 
-            # 缓存结果
+            # 缓存结果（含负缓存：空结果也缓存）
+            # 否则对"无数据 symbol+日期组合"（crypto 小币/退市币）每次查询都触发慢速
+            # codebased→timebased 全扫描，回测会卡死在反复扫描上。LRUCache 带 TTL，
+            # 同一回测内数据静态、空结果稳定；后续补数据后 TTL 过期自动重查。
             if use_cache:
-                if not data.empty:
-                    self.kline_cache.put(cache_key, data)
-                    logger.debug(f"[Cache] 已缓存数据: {len(data)}条记录")
+                self.kline_cache.put(cache_key, data)
+                if data.empty:
+                    logger.debug(f"[Cache] 缓存空结果(负缓存): codes={len(codes)}")
                 else:
-                    logger.warning(f"[Cache] 数据为空，不缓存")
+                    logger.debug(f"[Cache] 已缓存数据: {len(data)}条记录")
 
             # 【内存优化】优化数据类型
             data = self._optimize_dtypes(data)
@@ -443,6 +513,15 @@ class DataInterface:
 
             return data
 
+        except RecursionError:
+            # 栈溢出（多见于 pandas dtype 推断在深栈/畸形数据下触发）。
+            # 处理须极简（此时栈已近耗尽）：仅记一行警告并优雅返回空，避免级联卡死。
+            # 已在模块级把递归上限提到 6000，正常情况不应再触发；此处为兜底。
+            try:
+                logger.warning(f"get_klines 触发 RecursionError(codes={codes[:3]}, market={market}, freq={freq})，返回空")
+            except Exception:
+                pass
+            return pd.DataFrame()
         except Exception as e:
             logger.error(f"获取K线数据失败: {e}")
             import traceback
@@ -466,7 +545,61 @@ class DataInterface:
                 end_dt = datetime.strptime(end_date, '%Y-%m-%d %H:%M:%S')
             except ValueError:
                 end_dt = datetime.strptime(end_date, '%Y-%m-%d')
-            
+
+            # 【性能】早退优化：剔除 codebased 判定为"区间内不存在"的代码，避免对无数据代码
+            # （如已退市/无数据的 AIOUSDT、ETHDOWN 等）扫描全部 timebased 月文件后返回空。
+            # 正确性守卫：仅当区间内【每个】年份的 codebased 都"新鲜"（codebased 不早于本查询涉及
+            # 月份的 timebased 目录）才剔除——这样用户回填 timebased 数据后，只要还没重建 codebased，
+            # 该年会被判为不新鲜而回退到完整扫描，绝不漏数据。索引按 codebased 目录 mtime 失效。
+            # 可用环境变量 DISABLE_TIMEBASED_EARLY_EXIT=1 全局关闭。
+            if os.environ.get('DISABLE_TIMEBASED_EARLY_EXIT') != '1':
+                years_in_range = list(range(start_dt.year, end_dt.year + 1))
+                cb_root = os.path.join(self.market_data_dir, 'kline', 'codebased', market, freq)
+                tb_root = os.path.join(self.market_data_dir, 'kline', 'timebased', market, freq)
+                # 收集每年涉及到的月份
+                qmonths = {}
+                _cd = start_dt
+                while _cd <= end_dt:
+                    qmonths.setdefault(_cd.year, set()).add(_cd.month)
+                    _cd += timedelta(days=1)
+                year_indices = []
+                for _y in years_in_range:
+                    _idx = self._get_codebased_codes(market, freq, _y)
+                    if _idx is None:
+                        year_indices.append((_y, None)); continue
+                    # 新鲜度：codebased/{year} mtime 必须 >= 涉及月份的 timebased 目录 mtime
+                    try:
+                        cb_mtime = os.stat(os.path.join(cb_root, str(_y))).st_mtime
+                    except OSError:
+                        year_indices.append((_y, None)); continue
+                    fresh = True
+                    for _m in qmonths.get(_y, ()):
+                        tb_month = os.path.join(tb_root, str(_y), f"{_m:02d}")
+                        try:
+                            if os.path.isdir(tb_month) and os.stat(tb_month).st_mtime > cb_mtime:
+                                fresh = False; break
+                        except OSError:
+                            pass
+                    year_indices.append((_y, _idx if fresh else None))
+                if all(idx is not None for _, idx in year_indices):
+                    if market == 'cn_future':
+                        existing_base = set()
+                        for _, idx in year_indices:
+                            existing_base |= {c.split('.')[0] for c in idx}
+                        filtered = [c for c in codes if (c.split('.')[0] if '.' in c else c) in existing_base]
+                    else:
+                        existing = set()
+                        for _, idx in year_indices:
+                            existing |= idx
+                        filtered = [c for c in codes if c in existing]
+                    skipped = len(codes) - len(filtered)
+                    if skipped > 0:
+                        logger.info(f"[Timebased] 早退：{skipped}/{len(codes)} 个代码在 codebased 中不存在，跳过其 timebased 扫描")
+                        codes = filtered
+                        if not codes:
+                            logger.info("[Timebased] 全部代码均无数据，跳过 timebased 扫描")
+                            return pd.DataFrame()
+
             # 生成日期列表
             date_list = []
             current_dt = start_dt
@@ -486,11 +619,16 @@ class DataInterface:
 
             logger.debug(f"[Timebased] 需要加载的月份数: {len(monthly_groups)}")
             
-            # 并行加载各月数据
+            # 并行加载各月数据。
+            # 定点读适用于: cn_stock / cn_fund / global_cryptospot（文件按 code 连续排序、
+            #   码数适中，定点读显著快于整表读）。
+            # 整表读保留: cn_future（按 base code 匹配需上游过滤）、global_cryptoswap
+            #   （单文件 ~92MB/92万行/多块布局，定点读索引开销反而不划算，整表读更稳）。
+            codes_for_read = None if market in ('cn_future', 'global_cryptoswap') else codes
             futures = []
             for (year, month), dates in monthly_groups.items():
                 future = self.thread_pool.submit(
-                    self._load_month_timebased, year, month, dates, market, freq, fields
+                    self._load_month_timebased, year, month, dates, market, freq, fields, codes_for_read
                 )
                 futures.append(future)
             
@@ -533,15 +671,201 @@ class DataInterface:
             logger.error(f"加载timebased K线数据失败: {e}")
             return pd.DataFrame()
     
+    def _tb_disk_index_path(self, file_path):
+        if not self._tb_index_dir:
+            return None
+        h = hashlib.md5(os.path.abspath(file_path).encode()).hexdigest()[:16]
+        return os.path.join(self._tb_index_dir, h + '.idx')
+
+    def _load_tb_disk_index(self, file_path, mtime, size):
+        p = self._tb_disk_index_path(file_path)
+        if not p or not os.path.exists(p):
+            return None
+        try:
+            with open(p, 'rb') as f:
+                obj = pickle.load(f)
+            if obj.get('mtime') == mtime and obj.get('size') == size and obj.get('path') == file_path:
+                return obj
+        except Exception:
+            pass
+        return None
+
+    def _save_tb_disk_index(self, file_path, mtime, size, byte_idx, sorted_layout, total_rows):
+        p = self._tb_disk_index_path(file_path)
+        if not p:
+            return
+        try:
+            with open(p, 'wb') as f:
+                pickle.dump({'mtime': mtime, 'size': size, 'path': file_path,
+                             'byte_idx': byte_idx, 'sorted': sorted_layout,
+                             'total_rows': total_rows}, f, protocol=pickle.HIGHEST_PROTOCOL)
+        except Exception:
+            pass
+
+    def _get_tb_byte_index(self, file_path):
+        """返回 timebased 单文件的字节索引。
+
+        扫描文件一次，记录每个 code 块的字节区间 {code: (byte_start, byte_end)} 及是否按
+        code 连续排序。按 (mtime, size) 做 内存→磁盘 两级缓存，collector 追加/重写数据后
+        (mtime 变) 自动重建——自维护、跨进程持久。用于定点 seek 读取目标 code 的字节，
+        避免整表读 47MB/64万行。
+        返回 {'byte_idx': {...}, 'sorted': bool, 'total_rows': int} 或 None。
+        """
+        try:
+            st = os.stat(file_path)
+            mtime, size = st.st_mtime, st.st_size
+        except OSError:
+            return None
+        cached = self._tb_file_index_cache.get(file_path)
+        if cached and cached[0] == mtime and cached[1] == size:
+            return cached[2]
+        disk = self._load_tb_disk_index(file_path, mtime, size)
+        if disk is not None:
+            self._tb_file_index_cache[file_path] = (mtime, size, disk)
+            return disk
+        # 构建：逐行扫描，记录每个 code 块起始字节
+        block_starts = []   # [(byte_start, code)]
+        seen_codes = set()
+        unsorted = False
+        total_rows = 0
+        try:
+            with open(file_path, 'rb') as f:
+                prev_code = None
+                while True:
+                    pos = f.tell()
+                    line = f.readline()
+                    if not line:
+                        break
+                    total_rows += 1
+                    seg = line.split(b',', 2)
+                    if len(seg) < 2:
+                        continue
+                    try:
+                        code = seg[1].decode('utf-8', 'replace').strip()
+                    except Exception:
+                        continue
+                    if code != prev_code:
+                        if code in seen_codes:
+                            unsorted = True   # 同 code 多块 → 非连续，回退整表读
+                        seen_codes.add(code)
+                        block_starts.append((pos, code))
+                        prev_code = code
+        except Exception as e:
+            logger.debug(f"[TBIndex] 扫描失败 {file_path}: {e}")
+            return None
+        byte_idx = {}
+        for i, (pos, code) in enumerate(block_starts):
+            end = block_starts[i + 1][0] if i + 1 < len(block_starts) else size
+            byte_idx[code] = (pos, end)
+        result = {'byte_idx': byte_idx, 'sorted': (not unsorted), 'total_rows': total_rows}
+        self._tb_file_index_cache[file_path] = (mtime, size, result)
+        self._save_tb_disk_index(file_path, mtime, size, byte_idx, (not unsorted), total_rows)
+        return result
+
+    def _read_tb_full(self, file_path):
+        names = ['time', 'code', 'open', 'high', 'low', 'close', 'volume', 'amount']
+        return pd.read_csv(file_path, header=None, names=names)
+
+    def _get_tb_file_df(self, file_path):
+        """整表读路径的按文件已解析df缓存(mtime校验, LRU)。
+
+        策略常做"滑动窗口"查询(每分钟查24h回溯，窗口逐分钟滑动)→ 同一日文件被反复读取。
+        缓存整文件解析结果，1440 次滑窗查询复用一次解析(解析才是耗时大头)。
+        返回的 df 已建好(time,code)索引；调用方只读/过滤/列选取，不就地修改。
+        """
+        try:
+            st = os.stat(file_path)
+            mtime, size = st.st_mtime, st.st_size
+        except OSError:
+            return self._clean_tb_df(self._read_tb_full(file_path))
+        cache = self._tb_file_df_cache
+        cached = cache.get(file_path)
+        if cached and cached[0] == mtime and cached[1] == size:
+            cache.move_to_end(file_path)  # LRU
+            return cached[2]
+        df = self._clean_tb_df(self._read_tb_full(file_path))
+        cache[file_path] = (mtime, size, df)
+        cache.move_to_end(file_path)
+        while len(cache) > self._tb_file_df_cache_max:
+            cache.popitem(last=False)  # 淘汰最旧
+        return df
+
+    def _clean_tb_df(self, df):
+        """对原始 K线 df 做类型/时间清洗（保持与原 _load_month_timebased 一致）。"""
+        if df is None or df.empty:
+            return df
+        df = df[df['open'].apply(lambda x: not isinstance(x, str) or x.replace('.', '').replace('-', '').isdigit())]
+        for col in ['open', 'high', 'low', 'close', 'volume', 'amount']:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+        df = df.dropna(subset=['close'])
+        df['time'] = df['time'].str.strip()
+        try:
+            df['time'] = pd.to_datetime(df['time'], format='mixed')
+            if hasattr(df['time'].dt, 'tz') and df['time'].dt.tz is not None:
+                df['time'] = df['time'].dt.tz_localize(None)
+        except Exception:
+            try:
+                df['time'] = df['time'].str.replace(r'[+-]\d{2}:\d{2}$', '', regex=True)
+                df['time'] = pd.to_datetime(df['time'], errors='coerce')
+            except Exception:
+                df['time'] = pd.to_datetime(df['time'], errors='coerce')
+        df.set_index(['time', 'code'], inplace=True)
+        return df
+
+    def _read_tb_file_codes(self, file_path, codes):
+        """用字节索引定点读取目标 codes 的字节块；索引不可用/非连续/目标过半时回退整表读。"""
+        names = ['time', 'code', 'open', 'high', 'low', 'close', 'volume', 'amount']
+        code_set = set(codes)
+        idx_info = self._get_tb_byte_index(file_path)
+        if idx_info and idx_info.get('sorted', False):
+            byte_idx = idx_info['byte_idx']
+            present = [c for c in code_set if c in byte_idx]
+            if not present:
+                return pd.DataFrame()  # 文件中无目标 code，整文件跳过
+            n_total = len(byte_idx)
+            if n_total > 0 and len(present) / n_total > 0.5:
+                # 目标过半，定点读不划算，整表读
+                return self._clean_tb_df(self._read_tb_full(file_path))
+            # 收集字节区间并合并相邻
+            ranges = sorted(byte_idx[c] for c in present)
+            merged = []
+            for s, e in ranges:
+                if merged and s <= merged[-1][1]:
+                    merged[-1] = (merged[-1][0], max(merged[-1][1], e))
+                else:
+                    merged.append([s, e])
+            chunks = []
+            try:
+                with open(file_path, 'rb') as f:
+                    for s, e in merged:
+                        f.seek(s)
+                        chunks.append(f.read(e - s))
+            except Exception as e:
+                logger.debug(f"[TBIndex] 定点读失败 {file_path}: {e}，回退整表")
+                return self._clean_tb_df(self._read_tb_full(file_path))
+            raw = b''.join(chunks)   # 每个 chunk 已以 \n 结尾（区间 [s, e)，e 为下一块行首），直接拼接
+            try:
+                df = pd.read_csv(io.BytesIO(raw), header=None, names=names)
+            except Exception:
+                return self._clean_tb_df(self._read_tb_full(file_path))
+            return self._clean_tb_df(df)
+        # 非连续布局或无索引 → 整表读
+        return self._clean_tb_df(self._read_tb_full(file_path))
+
     def _load_month_timebased(self, year: int, month: int, dates: List[datetime],
-                             market: str, freq: str, fields: List[str]) -> pd.DataFrame:
-        """加载指定月份的timebased数据"""
+                             market: str, freq: str, fields: List[str],
+                             codes: Optional[List[str]] = None) -> pd.DataFrame:
+        """加载指定月份的timebased数据。
+
+        codes 非 None 时，用 _read_tb_file_codes 按字节索引定点读取目标 code 的字节块，
+        避免整表读 47MB/64万行/446码（仅读目标码的行）。codes 为 None 时回退原整表读。
+        """
         try:
             logger.debug(f"[LoadMonth] 加载 {year}-{month:02d}，日期数: {len(dates)}")
             month_data = []
             files_found = 0
             files_missing = 0
-            
+
             for dt in dates:
                 # 构建文件路径
                 # 尝试两种文件名格式：{market}_kline_{freq}.csv 和 {market}_kline_merged.csv
@@ -556,45 +880,21 @@ class DataInterface:
                     f"{market}_kline_merged.csv"
                 )
                 file_path = file_path_freq if os.path.exists(file_path_freq) else file_path_merged
-                
+
                 if os.path.exists(file_path):
                     files_found += 1
-                    # 读取文件
-                    df = pd.read_csv(file_path, header=None,
-                                   names=['time', 'code', 'open', 'high', 'low', 'close', 'volume', 'amount'])
-                    
-                    # 转换时间格式（修复：清理时间字符串，保持本地时间）
-                    # 清除可能的多余空格
-                    df['time'] = df['time'].str.strip()
-                    
-                    # 解析时间并保持本地时间（不转换时区）
-                    try:
-                        # 先解析为带时区的时间
-                        df['time'] = pd.to_datetime(df['time'], format='mixed')
-                        # 如果有时区信息，转换到该时区的本地时间后移除时区
-                        if hasattr(df['time'].dt, 'tz') and df['time'].dt.tz is not None:
-                            # 保持原时区的时间值，只移除时区标记
-                            df['time'] = df['time'].dt.tz_localize(None)
-                    except Exception as e:
-                        # 如果format='mixed'失败，尝试去除时区信息后解析
-                        logger.debug(f"时间解析失败，尝试移除时区: {e}")
-                        try:
-                            # 手动移除时区部分（如 +08:00）
-                            df['time'] = df['time'].str.replace(r'[+-]\d{2}:\d{2}$', '', regex=True)
-                            df['time'] = pd.to_datetime(df['time'], errors='coerce')
-                        except Exception as e2:
-                            logger.error(f"时间解析完全失败: {e2}")
-                            df['time'] = pd.to_datetime(df['time'], errors='coerce')
-                    
-                    # 设置多级索引
-                    df.set_index(['time', 'code'], inplace=True)
-                    
-                    # 选择需要的字段
-                    available_fields = [f for f in fields if f in df.columns]
-                    if available_fields:
-                        df = df[available_fields]
-                    
-                    month_data.append(df)
+                    if codes is not None:
+                        df = self._read_tb_file_codes(file_path, codes)
+                    else:
+                        df = self._get_tb_file_df(file_path)  # 整表读+按文件缓存(滑窗查询复用)
+
+                    if df is not None and not df.empty:
+                        # 选择需要的字段
+                        available_fields = [f for f in fields if f in df.columns]
+                        if available_fields:
+                            df = df[available_fields]
+                        month_data.append(df)
+                    # df 为空（如该文件无目标 code）则跳过，等价于"缺失"
                 else:
                     files_missing += 1
                     logger.debug(f"[LoadMonth] 文件不存在: {file_path}")
@@ -625,12 +925,12 @@ class DataInterface:
             logger.debug(f"[CodeBased] 开始加载: {len(codes)}只股票, 时间范围={start_date}~{end_date}")
 
             # 智能判断：决定使用Parquet还是CSV
-            # Parquet适合：代码数量多（>100）、单年份
-            # CSV适合：代码数量少（<=100）、任意年份
+            # Parquet适合：代码数量多（>100）、单年份（大文件一次性读取高效）
+            # CSV适合：代码数量少（<=100）、任意年份（日期前缀预过滤已大幅优化）
             use_parquet = (
                 PARQUET_AVAILABLE and
                 len(years) == 1 and  # 单年份
-                len(codes) > 100  # 代码数量较多
+                len(codes) > 100  # 代码数量较多时Parquet更高效
             )
 
             logger.debug(f"[CodeBased] use_parquet={use_parquet}, 年份={years}, 代码数={len(codes)}")
@@ -914,6 +1214,46 @@ class DataInterface:
 
         return list(variants)
 
+    def _get_cb_daterange(self, file_path):
+        """读 codebased 文件首尾行，得到数据时间范围 (min_dt, max_dt)。按(mtime,size)缓存。
+
+        用于跳过"查询区间在文件数据范围外"的查询——避免对部分数据币(如小币晚于查询期才上线)
+        反复整文件逐行扫描后返回空。返回 None 表示无法判定(回退原行为)。
+        """
+        try:
+            st = os.stat(file_path)
+            mtime, size = st.st_mtime, st.st_size
+        except OSError:
+            return None
+        cached = self._cb_daterange_cache.get(file_path)
+        if cached and cached[0] == mtime and cached[1] == size:
+            return (cached[2], cached[3])
+        try:
+            with open(file_path, 'r') as f:
+                first = f.readline()
+                f.seek(max(0, size - 8192))
+                tail_lines = f.read().splitlines()
+            last = tail_lines[-1] if tail_lines else ''
+            if not first or not last:
+                return None
+            # CSV: time,code,... 取首列时间(前19字符 'YYYY-MM-DD HH:MM:SS')
+            def _parse(line):
+                t = line.split(',', 1)[0].strip()[:19]
+                try:
+                    return datetime.strptime(t, '%Y-%m-%d %H:%M:%S')
+                except Exception:
+                    try:
+                        return datetime.strptime(t[:10], '%Y-%m-%d')
+                    except Exception:
+                        return None
+            mn = _parse(first); mx = _parse(last)
+            if mn and mx:
+                self._cb_daterange_cache[file_path] = (mtime, size, mn, mx)
+                return (mn, mx)
+        except Exception:
+            pass
+        return None
+
     def _load_single_codebased_kline(self, market: str, symbol: str, freq: str,
                                     start_date: str, end_date: str, fields: List[str]) -> pd.DataFrame:
         """加载单个股票的codebased数据"""
@@ -965,39 +1305,71 @@ class DataInterface:
                 if symbol_file is None:
                     continue
 
+                # 【性能】区间外快速跳过：若查询区间完全在该文件数据范围之外，直接跳过
+                # （部分数据币如小币晚于查询期才上线，对早期区间逐行扫描必为空却反复执行，卡死回测）。
                 try:
-                    # 读取CSV文件（无header）
-                    year_data = pd.read_csv(symbol_file, header=None,
+                    _qs = pd.to_datetime(start_date)
+                    _qe = pd.to_datetime(end_date)
+                    _dr = self._get_cb_daterange(symbol_file)
+                    if _dr and (_qe < _dr[0] or _qs > _dr[1]):
+                        continue
+                except Exception:
+                    pass
+
+                try:
+                    # 【性能优化】日期前缀预过滤：只读取匹配日期范围的行
+                    # 原方式：read_csv读全量58000行 → strip+regex替换 → to_datetime → 过滤
+                    # 优化后：按日期前缀过滤只读目标行(~480行) → slice去时区 → to_datetime
+                    from io import StringIO as _StringIO
+                    from datetime import date as _date, timedelta as _timedelta
+
+                    # 计算日期前缀集合（支持跨年）
+                    date_prefixes = set()
+                    _sd = _date(int(start_date[:4]), int(start_date[5:7]), int(start_date[8:10]))
+                    _ed = _date(int(end_date[:4]), int(end_date[5:7]), int(end_date[8:10]))
+                    _d = _sd
+                    while _d <= _ed:
+                        date_prefixes.add(_d.isoformat())
+                        _d += _timedelta(days=1)
+
+                    # 按行预过滤：只保留时间列前10字符匹配目标日期的行
+                    filtered_lines = []
+                    with open(symbol_file, 'r') as _f:
+                        for _line in _f:
+                            if len(_line) > 10 and _line[:10] in date_prefixes:
+                                filtered_lines.append(_line)
+
+                    if not filtered_lines:
+                        logger.debug(f"{year}年{symbol}数据: 日期范围内无数据")
+                        continue
+
+                    year_data = pd.read_csv(_StringIO('\n'.join(filtered_lines)), header=None,
                                           names=['time', 'code', 'open', 'high', 'low', 'close', 'volume', 'amount'])
 
-                    logger.debug(f"读取{year}年{symbol}数据: 原始行数={len(year_data)}")
+                    logger.debug(f"读取{year}年{symbol}数据: 预过滤后行数={len(year_data)}")
 
-                    # 转换时间格式（修复：处理带时区的格式）
-                    year_data['time'] = year_data['time'].str.strip()
-                    # 移除时区信息后解析
-                    year_data['time'] = year_data['time'].str.replace(r'[+-]\d{2}:\d{2}$', '', regex=True)
-
-                    year_data['time'] = pd.to_datetime(year_data['time'], errors='coerce')
+                    # 转换时间格式：用slice替代regex（"2023-06-01 09:30:00+08:00" → "2023-06-01 09:30:00"）
+                    year_data['time'] = year_data['time'].str.slice(0, 19)
+                    year_data['time'] = pd.to_datetime(year_data['time'], errors='coerce',
+                                                        format='%Y-%m-%d %H:%M:%S')
 
                     # 【期货多后缀】将code列统一为查询时的symbol，确保后续过滤能匹配
                     if market == 'cn_future' and actual_symbol != symbol:
                         year_data['code'] = symbol
 
-                    # 过滤日期范围（统一去除时区避免UTC vs naive比较）
+                    # 精确过滤（前缀过滤是粗筛，这里做精确时间范围过滤）
                     start_dt = pd.to_datetime(start_date).normalize()
                     end_dt = pd.to_datetime(end_date).normalize() + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
-                    if hasattr(year_data['time'].dtype, 'tz') and year_data['time'].dt.tz is not None:
-                        year_data['time'] = year_data['time'].dt.tz_localize(None)
 
-                    original_count = len(year_data)
-                    year_data = year_data[(year_data['time'] >= start_dt) & (year_data['time'] <= end_dt)]
+                    # 已通过slice去掉了时区，无需再tz_localize(None)
                     filtered_count = len(year_data)
+                    year_data = year_data[(year_data['time'] >= start_dt) & (year_data['time'] <= end_dt)]
 
-                    logger.debug(f"过滤后数据: 原始={original_count}, 过滤后={filtered_count}")
+                    logger.debug(f"过滤后数据: 预过滤={filtered_count}, 精确过滤={len(year_data)}")
 
                     if not year_data.empty:
-                        # 选择需要的字段
-                        available_fields = ['time'] + [f for f in fields if f in year_data.columns]
+                        # 选择需要的字段（保留code列，期货去重时需要）
+                        available_fields = ['time', 'code'] + [f for f in fields if f in year_data.columns]
                         year_data = year_data[available_fields]
                         all_data.append(year_data)
 
@@ -1514,6 +1886,16 @@ class DataInterface:
                         list_file = os.path.join(ref_dir, f)
                         logger.debug(f"[StockList] 使用替代列表文件: {f}")
                         break
+
+            # 如果reference目录也没找到，尝试在list目录查找
+            if not os.path.exists(list_file):
+                list_dir = os.path.join(self.market_data_dir, 'list')
+                if os.path.isdir(list_dir):
+                    for f in os.listdir(list_dir):
+                        if f.startswith(market) and '_list' in f and f.endswith('.csv'):
+                            list_file = os.path.join(list_dir, f)
+                            logger.debug(f"[StockList] 使用list目录文件: {f}")
+                            break
 
         if os.path.exists(list_file):
             stock_list = pd.read_csv(list_file)

@@ -400,7 +400,7 @@ COMMISSION_VERSIONS = [
                 'commission_rate': 0.0003,  # 万三
                 'min_commission': 5.0,
                 'stamp_tax_buy': 0.0,
-                'stamp_tax_sell': 0.001,  # 千分之一
+                'stamp_tax_sell': 0.0,  # ETF免征印花税
             },
             'bond_etf': {
                 'commission_rate': 0.0003,
@@ -603,15 +603,69 @@ class RuleVersion:
         return sorted(dates)
 
 
+# ============================================================================
+# 结算周期规则 (T+0 / T+1)
+# ============================================================================
+
+# ETF类型 -> 结算周期映射
+# 默认为T+1（大多数国内股票型ETF），以下类型允许T+0
+SETTLEMENT_CYCLE_RULES = {
+    'bond': 'T+0',          # 债券ETF: T+0
+    'cross_border': 'T+0',  # 跨境ETF: T+0
+    'money': 'T+0',         # 货币基金: T+0
+    'gold': 'T+0',          # 黄金ETF: T+0
+    'stock': 'T+1',         # 股票型ETF: T+1（默认）
+}
+
+# 黄金ETF代码前缀（518xxx）
+GOLD_ETF_PREFIXES = ['518']
+
+
+def get_settlement_cycle(symbol: str) -> str:
+    """获取ETF的结算周期
+
+    Args:
+        symbol: ETF代码 (如 510300.SH)
+
+    Returns:
+        结算周期: 'T+0' 或 'T+1'
+    """
+    etf_type = get_etf_type(symbol)
+
+    # 黄金ETF额外判断（518xxx）
+    code = symbol.split('.')[0]
+    if any(code.startswith(p) for p in GOLD_ETF_PREFIXES):
+        etf_type = 'gold'
+
+    return SETTLEMENT_CYCLE_RULES.get(etf_type, 'T+1')
+
+
+def is_t0_etf(symbol: str) -> bool:
+    """判断ETF是否为T+0交易
+
+    Args:
+        symbol: ETF代码
+
+    Returns:
+        True 表示T+0（可当日买卖），False 表示T+1
+    """
+    return get_settlement_cycle(symbol) == 'T+0'
+
+
 if __name__ == '__main__':
     # 测试代码
     test_symbols = [
-        '510300.SH',  # 沪深300ETF - 主板
-        '588000.SH',  # 科创50ETF - 科创板
-        '159915.SZ',  # 创业板ETF - 创业板
+        '510300.SH',  # 沪深300ETF - 股票型 T+1
+        '588000.SH',  # 科创50ETF - 股票型 T+1
+        '159915.SZ',  # 创业板ETF - 股票型 T+1
+        '513010.SH',  # 跨境ETF - T+0
+        '511880.SH',  # 货币基金 - T+0
+        '518880.SH',  # 黄金ETF - T+0
+        '511010.SH',  # 债券ETF - T+0
     ]
 
     for symbol in test_symbols:
         print(f"{symbol}: board={get_etf_board_type(symbol)}, "
               f"type={get_etf_type(symbol)}, "
+              f"settlement={get_settlement_cycle(symbol)}, "
               f"exchange={get_exchange_from_symbol(symbol)}")

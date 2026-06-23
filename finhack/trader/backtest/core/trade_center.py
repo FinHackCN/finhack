@@ -19,6 +19,27 @@ from finhack.trader.backtest.models.enums import (
 from finhack.trader.backtest.models.instrument import Instrument
 from finhack.trader.backtest.models.position import Position
 from finhack.trader.backtest.events.event_types import EventTypeEnum
+from finhack.trader.backtest.constants import (
+    DEFAULT_INITIAL_CASH,
+    DEFAULT_OPEN_TAX,
+    DEFAULT_CLOSE_TAX,
+    DEFAULT_OPEN_COMMISSION,
+    DEFAULT_CLOSE_COMMISSION,
+    DEFAULT_MIN_COMMISSION,
+    DEFAULT_SLIPPAGE,
+    SLIPPAGE_MARKET_ADJUSTMENT,
+    SLIPPAGE_VOLUME_THRESHOLDS,
+    SLIPPAGE_ORDER_TYPE_ADJUSTMENT,
+    SLIPPAGE_MIN,
+    SLIPPAGE_MAX,
+    MAX_SINGLE_FILL_MARKET,
+    MAX_SINGLE_FILL_LIMIT,
+    DEFAULT_MARGIN_RATIO,
+    DEFAULT_CRYPTO_MARGIN_RATIO,
+    FUTURE_COMMISSION_RATE,
+    PRICE_TOLERANCE,
+    PRICE_TOLERANCE_LOWER,
+)
 
 
 @dataclass
@@ -142,11 +163,11 @@ class TradeCenter:
         market = self.market.lower()
         
         if market in ["cn_stock", "cn_fund"]:
-            # A股/基金交易规则
+            # A股交易规则
             self.trading_rules = {
                 "min_order_quantity": 100,  # 最小交易单位（股）
                 "tick_size": 0.01,          # 最小价格变动单位
-                "t1_rule": True,            # T+1交易规则
+                "t1_rule": True if market == "cn_stock" else False,  # A股T+1, ETF/基金T+0
                 "limit_up_down": True,      # 涨跌停限制
                 "price_limit_ratio": 0.10,  # 涨跌停比例（10%）
                 "st_price_limit_ratio": 0.05, # ST股涨跌停比例（5%）
@@ -156,13 +177,13 @@ class TradeCenter:
                     ("13:00", "15:00")
                 ],
                 "commission_rate": {
-                    "open": 0.0003,  # 买入佣金率
-                    "close": 0.0003, # 卖出佣金率
-                    "min_commission": 5.0  # 最低佣金
+                    "open": DEFAULT_OPEN_COMMISSION,
+                    "close": DEFAULT_CLOSE_COMMISSION,
+                    "min_commission": DEFAULT_MIN_COMMISSION
                 },
                 "tax_rate": {
-                    "open": 0.0,    # 买入税率
-                    "close": 0.001  # 卖出税率（印花税）
+                    "open": DEFAULT_OPEN_TAX,
+                    "close": DEFAULT_CLOSE_TAX
                 }
             }
         elif market == "cn_future":
@@ -172,7 +193,7 @@ class TradeCenter:
                 "tick_size": 0.01,           # 最小价格变动单位
                 "t0_rule": True,             # T+0交易规则
                 "margin_enabled": True,       # 保证金制度
-                "margin_ratio": 0.10,        # 保证金比例
+                "margin_ratio": DEFAULT_MARGIN_RATIO,
                 "trading_hours": [
                     ("09:00", "10:15"),
                     ("10:30", "11:30"),
@@ -180,14 +201,14 @@ class TradeCenter:
                     ("21:00", "02:30")  # 夜盘
                 ],
                 "commission_rate": {
-                    "open": 0.0001,      # 买入佣金率
-                    "close": 0.0001,     # 卖出佣金率
-                    "close_today": 0.0001, # 平今佣金率
-                    "min_commission": 5.0   # 最低佣金
+                    "open": FUTURE_COMMISSION_RATE,
+                    "close": FUTURE_COMMISSION_RATE,
+                    "close_today": FUTURE_COMMISSION_RATE,
+                    "min_commission": DEFAULT_MIN_COMMISSION
                 },
                 "tax_rate": {
-                    "open": 0.0,        # 买入税率
-                    "close": 0.0        # 卖出税率
+                    "open": DEFAULT_OPEN_TAX,
+                    "close": DEFAULT_OPEN_TAX
                 }
             }
         elif market == "global_cryptospot":
@@ -206,8 +227,31 @@ class TradeCenter:
                     "min_commission": 0.0  # 无最低佣金
                 },
                 "tax_rate": {
-                    "open": 0.0,         # 买入税率
-                    "close": 0.0         # 卖出税率
+                    "open": DEFAULT_OPEN_TAX,
+                    "close": DEFAULT_OPEN_TAX
+                }
+            }
+        elif market == "global_cryptoswap":
+            # 加密货币永续合约交易规则
+            self.trading_rules = {
+                "min_order_quantity": 0.00000001,
+                "tick_size": 0.00000001,
+                "t0_rule": True,
+                "trading_24_7": True,
+                "margin_enabled": True,
+                "margin_ratio": DEFAULT_CRYPTO_MARGIN_RATIO,
+                "max_leverage": 125,
+                "trading_hours": [
+                    ("00:00", "23:59:59")
+                ],
+                "commission_rate": {
+                    "open": 0.0004,      # 0.04% maker
+                    "close": 0.0004,     # 0.04% taker
+                    "min_commission": 0.0
+                },
+                "tax_rate": {
+                    "open": DEFAULT_OPEN_TAX,
+                    "close": DEFAULT_OPEN_TAX
                 }
             }
         else:
@@ -221,13 +265,13 @@ class TradeCenter:
                     ("09:30", "15:00")
                 ],
                 "commission_rate": {
-                    "open": 0.0003,
-                    "close": 0.0003,
-                    "min_commission": 5.0
+                    "open": DEFAULT_OPEN_COMMISSION,
+                    "close": DEFAULT_CLOSE_COMMISSION,
+                    "min_commission": DEFAULT_MIN_COMMISSION
                 },
                 "tax_rate": {
-                    "open": 0.0,
-                    "close": 0.0
+                    "open": DEFAULT_OPEN_TAX,
+                    "close": DEFAULT_OPEN_TAX
                 }
             }
     
@@ -297,7 +341,7 @@ class TradeCenter:
                 asset_type=self._get_asset_type(self.market),
                 name="",  # 可选：后续可从数据源获取
                 currency=self._get_currency(self.market),
-                contract_multiplier=self._get_contract_multiplier(self.market),
+                contract_multiplier=self._get_contract_multiplier(self.market, symbol),
                 tick_size=rules.get('tick_size', 0.01),
                 lot_size=rules.get('min_order_quantity', 100),
                 min_order_volume=rules.get('min_order_quantity', 100),
@@ -372,6 +416,7 @@ class TradeCenter:
             'cn_future': AssetTypeEnum.FUTURE,
             'cn_index': AssetTypeEnum.OTHER,  # 指数映射到 OTHER
             'global_cryptospot': AssetTypeEnum.CRYPTO,
+            'global_cryptoswap': AssetTypeEnum.CRYPTO,
             'global_forex': AssetTypeEnum.FX,
         }
         return asset_type_map.get(market, AssetTypeEnum.STOCK)
@@ -392,18 +437,23 @@ class TradeCenter:
             return 'USD'
         return 'CNY'
 
-    def _get_contract_multiplier(self, market: str) -> float:
-        """根据市场类型获取合约乘数
+    def _get_contract_multiplier(self, market: str, symbol: str = None) -> float:
+        """根据市场类型和品种获取合约乘数
 
         Args:
             market: 市场类型
+            symbol: 合约代码（可选），期货市场传入时按品种查实际乘数
 
         Returns:
             float: 合约乘数
         """
         market = market.lower()
-        if market == 'cn_future':
-            return 1.0  # 期货合约乘数根据品种不同，这里简化为1
+        if market == 'cn_future' and symbol:
+            try:
+                from ..markets.cn_future.future_trading_rules_versions import get_contract_size
+                return get_contract_size(symbol)
+            except Exception:
+                pass
         return 1.0
 
     def _get_volume_step(self, market: str) -> float:
@@ -680,7 +730,8 @@ class TradeCenter:
                 return False
             
             # 检查交易数量是否为最小单位的整数倍
-            if order.volume % min_quantity != 0:
+            from ..utils.float_validation import is_valid_volume
+            if not is_valid_volume(order.volume, min_quantity):
                 if self._context:
                     self._context.logger.error(f"订单数量必须是{min_quantity}的整数倍: {order.volume}")
                 return False
@@ -739,14 +790,15 @@ class TradeCenter:
         current_price = self.get_price(symbol=order.symbol)
         if not current_price:
             return 0.0
-        
+
         # 使用当前价格估算（市价单）或使用限价（限价单）
         price = current_price if order.order_type == OrderType.MARKET else (order.price or current_price)
-        
+
         # 计算成本（包含手续费）
-        trade_value = price * order.volume
+        contract_multiplier = self._get_contract_multiplier(self.market, order.symbol)
+        trade_value = price * order.volume * contract_multiplier
         commission = self._calculate_commission(trade_value, order.side)
-        
+
         return trade_value + commission
     
     def _calculate_commission(self, trade_value: float, side: OrderSide) -> float:
@@ -836,14 +888,14 @@ class TradeCenter:
 
                     if order.side == OrderSide.BUY:
                         # 买入：如果当前价格已经达到或超过涨停价，无法买入
-                        if current_price >= upper_limit * 0.9999:  # 允许微小误差
+                        if current_price >= upper_limit * PRICE_TOLERANCE:  # 允许微小误差
                             order.status = OrderStatus.REJECTED
                             if self._context:
                                 self._context.logger.warning(f"股票已涨停，无法买入: {order.symbol} 当前价{current_price:.2f}")
                             return
                     else:
                         # 卖出：如果当前价格已经达到或低于跌停价，无法卖出
-                        if current_price <= lower_limit * 1.0001:  # 允许微小误差
+                        if current_price <= lower_limit * PRICE_TOLERANCE_LOWER:  # 允许微小误差
                             order.status = OrderStatus.REJECTED
                             if self._context:
                                 self._context.logger.warning(f"股票已跌停，无法卖出: {order.symbol} 当前价{current_price:.2f}")
@@ -957,31 +1009,18 @@ class TradeCenter:
         
         # 根据市场类型调整滑点
         market = self.market.lower()
-        if market in ["cn_stock", "cn_fund"]:
-            # A股/基金滑点相对较小
-            market_adjustment = 1.0
-        elif market == "cn_future":
-            # 期货滑点中等
-            market_adjustment = 1.2
-        elif market == "global_cryptospot":
-            # 加密货币滑点较大
-            market_adjustment = 1.5
-        else:
-            market_adjustment = 1.0
-        
+        market_adjustment = SLIPPAGE_MARKET_ADJUSTMENT.get(market, 1.0)
+
         # 根据订单大小调整滑点
         volume_adjustment = 1.0
-        if order.volume > 10000:
-            volume_adjustment = 1.2  # 大额订单增加20%滑点
-        elif order.volume > 50000:
-            volume_adjustment = 1.5  # 超大额订单增加50%滑点
-        elif order.volume > 100000:
-            volume_adjustment = 2.0  # 巨额订单增加100%滑点
-        
+        for threshold, adjustment in SLIPPAGE_VOLUME_THRESHOLDS:
+            if order.volume > threshold:
+                volume_adjustment = adjustment
+                break
+
         # 根据订单类型调整滑点
-        type_adjustment = 1.0
-        if order.order_type == OrderType.MARKET:
-            type_adjustment = 1.5  # 市价单滑点更大
+        order_type_key = 'market' if order.order_type == OrderType.MARKET else 'limit'
+        type_adjustment = SLIPPAGE_ORDER_TYPE_ADJUSTMENT.get(order_type_key, 1.0)
         
         # 根据当前市场波动性调整滑点（简化处理）
         volatility_adjustment = 1.0
@@ -990,7 +1029,7 @@ class TradeCenter:
         final_slippage = base_slippage * market_adjustment * volume_adjustment * type_adjustment * volatility_adjustment
         
         # 限制滑点范围（0.01%到5%）
-        final_slippage = max(0.0001, min(0.05, final_slippage))
+        final_slippage = max(SLIPPAGE_MIN, min(SLIPPAGE_MAX, final_slippage))
         
         return final_slippage
     
@@ -999,10 +1038,10 @@ class TradeCenter:
         # 模拟市场流动性限制
         if order.order_type == OrderType.MARKET:
             # 市价单可以成交更多
-            return min(order.volume, 100000)
+            return min(order.volume, MAX_SINGLE_FILL_MARKET)
         else:
             # 限价单成交量相对较小
-            return min(order.volume, 50000)
+            return min(order.volume, MAX_SINGLE_FILL_LIMIT)
     
     def _schedule_next_fill_attempt(self, order: Order):
         """安排下次撮合尝试"""
@@ -1086,7 +1125,8 @@ class TradeCenter:
         """成交订单（带资金冻结更新）"""
         try:
             # 计算成交金额和手续费
-            trade_value = fill_quantity * fill_price
+            contract_multiplier = self._get_contract_multiplier(self.market, order.symbol)
+            trade_value = fill_quantity * fill_price * contract_multiplier
             commission = self._calculate_commission(trade_value, order.side)
             total_cost = trade_value + commission
 
@@ -1197,7 +1237,8 @@ class TradeCenter:
             self.positions[symbol] = Position(
                 account_id="default",
                 symbol=symbol,
-                position_side=PositionSide.LONG
+                position_side=PositionSide.LONG,
+                contract_multiplier=self._get_contract_multiplier(self.market, symbol),
             )
 
         position = self.positions[symbol]
@@ -1205,12 +1246,14 @@ class TradeCenter:
 
         if side == OrderSide.BUY:
             # 买入：增加持仓（成本价计算包含交易费用）
+            # 获取合约乘数（期货市场需要乘以合约单位，其他市场乘数为1.0）
+            contract_multiplier = self._get_contract_multiplier(self.market, symbol)
             if position.volume > 0:
                 # 已有持仓，计算新的加权平均成本
                 # 旧总成本 = 旧持仓量 * 旧成本价
                 old_total_cost = position.volume * position.cost_price
                 # 新成本 = 成交金额 + 交易费用（费用分摊到每股）
-                new_total_cost = quantity * price + commission
+                new_total_cost = quantity * price * contract_multiplier + commission
 
                 position.volume += quantity
                 # 新的加权平均成本价 = (旧总成本 + 新总成本) / 总持仓量
@@ -1219,7 +1262,7 @@ class TradeCenter:
                 # 新建持仓
                 position.volume = quantity
                 # 成本价包含交易费用分摊（每股成本 = 成交价 + 每股费用）
-                position.cost_price = price + commission / quantity if quantity > 0 else price
+                position.cost_price = price * contract_multiplier + commission / quantity if quantity > 0 else price
 
             # T+1规则处理
             if self.trading_rules.get("t1_rule", False):
@@ -1236,6 +1279,10 @@ class TradeCenter:
             # 卖出：减少持仓
             if position.volume >= quantity:
                 position.volume -= quantity
+
+                # 浮点精度保护：如果减到接近0则归零，避免幽灵持仓
+                if abs(position.volume) < 1e-10:
+                    position.volume = 0.0
 
                 # T+1规则处理：检查可用数量
                 if self.trading_rules.get("t1_rule", False):
@@ -1272,26 +1319,22 @@ class TradeCenter:
                 else:
                     position.available_volume = max(0, position.available_volume - quantity)
 
-                # 计算已实现盈亏
-                realized_pnl = (price - position.cost_price) * quantity - commission
+                # 计算已实现盈亏（期货需要乘以合约乘数，与未实现盈亏保持一致）
+                contract_multiplier = self._get_contract_multiplier(self.market, symbol)
+                realized_pnl = (price - position.cost_price) * quantity * contract_multiplier - commission
                 position.realized_pnl += realized_pnl
 
                 # 更新账户的已实现盈亏
                 if self._context:
                     self._context.account.realized_pnl += realized_pnl
 
-        # 更新市值和未实现盈亏
+        # 更新市值和未实现盈亏（使用Position模型方法，正确处理contract_multiplier和多空方向）
         current_price = self.get_price(symbol=symbol)
         if current_price and current_price > 0 and position.volume > 0:
-            position.last_price = current_price
-            position.market_value = position.volume * current_price
-            position.unrealized_pnl = (current_price - position.cost_price) * position.volume
+            position.update_market_price(current_price)
         elif position.volume > 0 and position.last_price > 0:
-            # 如果get_price失败，使用last_price保持市值
-            position.market_value = position.volume * position.last_price
-            position.unrealized_pnl = (position.last_price - position.cost_price) * position.volume
+            position.update_market_price(position.last_price)
         elif position.volume > 0:
-            # 两者都失败，记录警告但不改变市值（保持之前的值）
             if self._context:
                 self._context.logger.warning(
                     f"无法更新{symbol}市值: 价格无效(current_price={current_price}, last_price={position.last_price}), "
@@ -1490,14 +1533,12 @@ class TradeCenter:
     def handle_after_market(self, context, event):
         """处理盘后事件 - 执行清算"""
         context.logger.info("交易中心: 盘后清算")
-        
+
         # 更新所有持仓的市值
         for symbol, position in self.positions.items():
             current_price = self.get_price(symbol=symbol)
             if current_price:
-                position.last_price = current_price
-                position.market_value = position.volume * current_price
-                position.unrealized_pnl = (current_price - position.cost_price) * position.volume
+                position.update_market_price(current_price)
         
         # 更新账户总价值
         context.update_portfolio_value()
@@ -1615,13 +1656,7 @@ class TradeCenter:
         for symbol, position in self.positions.items():
             current_price = self.get_price(symbol=symbol)
             if current_price:
-                position.last_price = current_price
-                position.market_value = position.volume * current_price
-                position.unrealized_pnl = (current_price - position.cost_price) * position.volume
-                
-                # 更新兼容字段
-                position.last_price = current_price
-                position.market_value = position.market_value
+                position.update_market_price(current_price)
     
     def _validate_pending_orders(self):
         """验证所有待处理订单"""
@@ -1645,11 +1680,7 @@ class TradeCenter:
         for symbol, position in self.positions.items():
             current_price = self.get_price(symbol=symbol)
             if current_price and current_price != position.last_price:
-                position.last_price = current_price
-                position.market_value = position.volume * current_price
-                position.unrealized_pnl = (current_price - position.cost_price) * position.volume
-                position.last_price = current_price
-                position.market_value = position.market_value
+                position.update_market_price(current_price)
                 updated_count += 1
         
         if self._context and updated_count > 0:
@@ -1791,13 +1822,11 @@ class TradeCenter:
     def _calculate_position_pnl(self):
         """计算持仓盈亏"""
         total_unrealized_pnl = 0
-        
+
         for symbol, position in self.positions.items():
             current_price = self.get_price(symbol=symbol)
             if current_price:
-                position.last_price = current_price
-                position.market_value = position.volume * current_price
-                position.unrealized_pnl = (current_price - position.cost_price) * position.volume
+                position.update_market_price(current_price)
                 total_unrealized_pnl += position.unrealized_pnl
         
         if self._context:
@@ -2398,16 +2427,7 @@ class TradeCenter:
                 current_price = self.get_price(symbol=symbol)
                 
                 if current_price and current_price > 0:
-                    # 更新持仓价格和市值
-                    position.last_price = current_price
-                    position.last_price = current_price  # 兼容字段
-                    position.market_value = position.volume * current_price
-                    position.market_value = position.market_value  # 兼容字段
-                    
-                    # 计算未实现盈亏
-                    if position.cost_price > 0:
-                        position.unrealized_pnl = (current_price - position.cost_price) * position.volume
-
+                    position.update_market_price(current_price)
                     position.updated_at = self._get_backtest_time()
             
             # 更新账户总资产
@@ -2570,7 +2590,7 @@ class TradeCenter:
                 return {}
             
             # 计算总体绩效
-            initial_cash = getattr(self._context.account, 'initial_cash', 1000000.0)
+            initial_cash = getattr(self._context.account, 'initial_cash', DEFAULT_INITIAL_CASH)
             current_value = account['total_value']
             total_return = (current_value - initial_cash) / initial_cash if initial_cash > 0 else 0
             
@@ -2869,9 +2889,7 @@ class TradeCenter:
             # 更新市值和未实现盈亏
             current_price = self.get_price(symbol=position.symbol)
             if current_price and position.volume > 0:
-                position.last_price = current_price
-                position.market_value = position.volume * current_price
-                position.unrealized_pnl = (current_price - position.cost_price) * position.volume
+                position.update_market_price(current_price)
 
             # 更新时间戳
             position.timestamp_updated = self._get_backtest_time()
@@ -3184,12 +3202,11 @@ class TradeCenter:
                 # 优先使用get_price获取最新价格，避免last_price过时或为0
                 current_price = self.get_price(symbol=position.symbol)
                 if current_price and current_price > 0:
-                    position.last_price = current_price
-                    position.market_value = position.volume * current_price
+                    position.update_market_price(current_price)
                     position.updated_at = current_time
                 elif position.last_price > 0:
                     # 如果get_price失败，使用last_price作为备选
-                    position.market_value = position.volume * position.last_price
+                    position.update_market_price(position.last_price)
                     position.updated_at = current_time
                 else:
                     # 两者都无效，记录警告

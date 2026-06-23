@@ -16,6 +16,8 @@ from .future_trading_rules_versions import (
     get_future_exchange,
     get_future_type,
     get_future_product,
+    get_contract_size,
+    get_margin_ratio,
     has_night_session,
     DEFAULT_TRADING_SCHEDULES,
     NIGHT_SESSION_SPECIAL,
@@ -111,6 +113,7 @@ class CnFutureMarketAdapter(BaseMarket):
                     'BEFORE_MARKET': '08:55:00',
                     'DAY_SESSION_START': '09:00:00',
                     'DAY_SESSION_END': '15:00:00',
+                    'MARGIN_CALL_CHECK': '15:00:00',
                     'NIGHT_SESSION_START': '21:00:00',
                     'NIGHT_SESSION_END': '02:30:00',
                     'DAY_END': '23:59:59'
@@ -270,14 +273,8 @@ class CnFutureMarketAdapter(BaseMarket):
             event_description="收盘撮合"
         ))
 
-        # 7.5 日线K线收盘事件
-        events.append(MarketEvent(
-            event_type=EventTypeEnum.DAILY_BAR_CLOSED,
-            event_time=datetime.combine(trade_date, time(15, 0)),
-            market=self.market_name,
-            frequency='1d',
-            event_description="日线K线收盘"
-        ))
+        # 注意：不生成 DAILY_BAR_CLOSED，避免与 DAY_END 重复触发日终处理导致净值重复记录
+        # 参考 cn_stock_adapter 和 base_daily_events 的统一事件框架
 
         # 8. 结算价确定
         events.append(MarketEvent(
@@ -539,15 +536,16 @@ class CnFutureMarketAdapter(BaseMarket):
             return False, msg
 
         # 2. 检查价格是否符合Tick Size
+        from ...utils.float_validation import is_valid_price
         tick_size = lot_info['tick_size']
-        tick_count = price / tick_size
-        if not abs(tick_count - round(tick_count)) < 1e-6:
+        if not is_valid_price(price, tick_size):
             return False, f"价格必须是{tick_size}的整数倍"
 
         # 3. 检查涨跌停限制
         if prev_settlement:
             price_validation = FuturePriceCalculator.validate_order_price(
-                symbol, price, prev_settlement=prev_settlement
+                symbol, price, prev_settlement=prev_settlement,
+                query_date=self._current_date
             )
             if not price_validation['valid']:
                 return False, price_validation['message']

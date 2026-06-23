@@ -4,7 +4,6 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 from runtime.constant import *
-import glob
 from tqdm import tqdm
 import logging
 import concurrent.futures
@@ -165,15 +164,8 @@ def load_day_data_helper(day_tuple, market, freq, code_list, KLINE_DIR):
     month = current_dt.strftime("%m")
     day = current_dt.strftime("%d")
     
-    # 首先尝试加载merged文件
+    # 仅使用merged文件，如果不存在则跳过（raw文件未经过merge处理，不可直接使用）
     file_path = f"{KLINE_DIR}/timebased/{market}/{freq}/{year}/{month}/{day}/{market}_kline_merged.csv"
-    
-    if not os.path.exists(file_path):
-        # 如果没有merged文件，尝试找到任意一个源文件
-        pattern = f"{KLINE_DIR}/timebased/{market}/{freq}/{year}/{month}/{day}/{market}_kline_*.csv"
-        files = glob.glob(pattern)
-        if files:
-            file_path = files[0]
     
     if os.path.exists(file_path):
         try:
@@ -251,16 +243,10 @@ def loadKline(market='cn_stock', freq='1m', start_date="20200101", end_date="202
                     month = current_dt.strftime("%m")
                     day = current_dt.strftime("%d")
                     
-                    # 首先尝试获取merged文件
+                    # 仅使用merged文件（raw文件未经过merge处理，不可直接使用）
                     merged_file = f"{timebased_path}/{year}/{month}/{day}/{market}_kline_merged.csv"
                     if os.path.exists(merged_file):
                         sample_files.append(merged_file)
-                    else:
-                        # 否则获取任意一个源文件
-                        file_pattern = f"{timebased_path}/{year}/{month}/{day}/{market}_kline_*.csv"
-                        files = glob.glob(file_pattern)
-                        if files:
-                            sample_files.append(files[0])
                     
                     current_dt += timedelta(days=1)
                 

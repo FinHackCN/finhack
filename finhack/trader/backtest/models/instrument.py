@@ -103,12 +103,16 @@ class Instrument:
         check_dt = current_dt or datetime.now()
         return check_dt >= self.expiry_date
 
-    @property
-    def is_tradable(self) -> bool:
-        """判断合约是否可交易（活跃且未过期）"""
+    def is_tradable(self, current_dt: Optional[datetime] = None) -> bool:
+        """判断合约是否可交易（活跃且未过期）
+
+        Args:
+            current_dt: 当前时间，如果为None则使用系统时间
+        """
         if not self.is_active:
             return False
-        if self.expiry_date and datetime.now() >= self.expiry_date:
+        check_dt = current_dt or datetime.now()
+        if self.expiry_date and check_dt >= self.expiry_date:
             return False
         return True
     

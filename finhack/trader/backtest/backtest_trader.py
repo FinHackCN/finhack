@@ -219,7 +219,7 @@ class BacktestTrader:
                 'end_date': end_date,
                 'benchmark': benchmark,
                 'universe': getattr(self.args, 'universe', []),
-                'starting_cash': initial_cash,
+                'initial_capital': initial_cash,
                 'order_volume_ratio': getattr(self.args, 'order_volume_ratio', 1.0),
                 'slip_type': getattr(self.args, 'sliptype', 'pricerelated'),
                 'slip_value': float(getattr(self.args, 'slip', 0.001)),
@@ -346,6 +346,19 @@ class BacktestTrader:
                 'min_commission': 0.0,     # 加密货币无最低手续费
                 'slip_value': 0.0005,
             },
+            'global_cryptoswap': {
+                'currency': 'USD',
+                'account_type': AccountTypeEnum.CRYPTO,
+                'open_tax': 0.0,
+                'close_tax': 0.0,
+                'open_commission': 0.0004,  # 0.04% 合约费率
+                'close_commission': 0.0004,
+                'min_commission': 0.0,
+                'slip_value': 0.0005,
+                'funding_rate_mode': 'fixed',      # 'fixed' | 'dynamic' | 'none'
+                'funding_rate': 0.0001,            # 0.01% per 8h
+                'funding_interval_hours': 8,       # 每8小时结算
+            },
         }
 
         defaults = MARKET_DEFAULTS.get(market, MARKET_DEFAULTS['cn_stock'])
@@ -357,10 +370,12 @@ class BacktestTrader:
         # 设置费率（仅在用户未通过args显式指定时使用默认值）
         args_dict = self.args.__dict__
         for fee_key in ['open_tax', 'close_tax', 'open_commission', 'close_commission',
-                        'min_commission', 'slip_value']:
-            # 如果用户通过args传入了值，使用用户的；否则使用市场默认值
+                        'min_commission', 'slip_value',
+                        'funding_rate_mode', 'funding_rate', 'funding_interval_hours']:
+            # 如果用户通过args传入了值，使用用户的；否则使用市场默认值（如果存在）
             if fee_key not in args_dict or getattr(self.args, fee_key, None) is None:
-                settings[fee_key] = defaults[fee_key]
+                if fee_key in defaults:
+                    settings[fee_key] = defaults[fee_key]
 
         Log.logger.info(f"[市场默认] {market}: currency={defaults['currency']}, "
                        f"close_tax={settings.get('close_tax')}, "
@@ -451,6 +466,13 @@ class OrderCost:
         self.close_today_commission = 0
         self.min_commission = min_commission
 
+# FundingRateConfig类定义（资金费率配置）
+class FundingRateConfig:
+    def __init__(self, mode='fixed', rate=0.0001, interval_hours=8):
+        self.mode = mode
+        self.rate = rate
+        self.interval_hours = interval_hours
+
 # PriceRelatedSlippage类定义（简化版）
 class PriceRelatedSlippage:
     def __init__(self, value):
@@ -472,7 +494,7 @@ class PriceRelatedSlippage:
         
         # 实例化策略类 - 查找策略模块中的策略类并实例化
         strategy_instance = None
-        Log.logger.info(f"开始查找策略类，模块中的对象: {[n for n in dir(strategy_module) if not n.startswith('_')]}")
+        Log.logger.debug(f"开始查找策略类，模块中的对象: {[n for n in dir(strategy_module) if not n.startswith('_')]}")
         print(f"[Trader] 模块中的类: {[n for n in dir(strategy_module) if not n.startswith('_')]}", flush=True)
         
         for name in dir(strategy_module):
@@ -488,10 +510,10 @@ class PriceRelatedSlippage:
                 try:
                     # 尝试实例化策略类，传入配置
                     config = self.context.get('params', {})
-                    Log.logger.info(f"尝试实例化策略类: {name}, config={config}")
+                    Log.logger.debug(f"尝试实例化策略类: {name}, config={config}")
                     print(f"[Trader] 尝试实例化 {name}", flush=True)
                     strategy_instance = obj(config)
-                    Log.logger.info(f"成功实例化策略类: {name}")
+                    Log.logger.debug(f"成功实例化策略类: {name}")
                     print(f"[Trader] 成功实例化 {name}", flush=True)
                     break
                 except Exception as e:
@@ -512,7 +534,7 @@ class PriceRelatedSlippage:
         
     def init_strategy(self):
         """初始化策略"""
-        Log.logger.info("开始初始化策略...")
+        Log.logger.debug("开始初始化策略...")
         print(f"[Trader] 开始初始化策略, strategy类型: {type(self.strategy)}", flush=True)
         
         # 绑定API函数到策略模块
@@ -521,7 +543,7 @@ class PriceRelatedSlippage:
         
         # 调用策略的initialize函数
         if hasattr(self.strategy, 'initialize'):
-            Log.logger.info("调用strategy.initialize()...")
+            Log.logger.debug("调用strategy.initialize()...")
             print(f"[Trader] 调用strategy.initialize()", flush=True)
             try:
                 self.strategy.initialize(self.context)
@@ -541,7 +563,7 @@ class PriceRelatedSlippage:
         if hasattr(self.strategy, 'universe') and self.strategy.universe:
             self.context['settings']['universe'] = self.strategy.universe
             self.context['universe'] = self.strategy.universe  # 同时设置顶层快捷方式
-            Log.logger.info(f"从策略同步universe: {len(self.strategy.universe)}只股票/标的")
+            Log.logger.debug(f"从策略同步universe: {len(self.strategy.universe)}只股票/标的")
             print(f"[Trader] 同步universe: {len(self.strategy.universe)}只", flush=True)
             
     def bind_strategy_api(self):
@@ -587,6 +609,7 @@ class PriceRelatedSlippage:
         self.strategy.order_sell = self.order_sell_sync
         self.strategy.order_short = self.order_short_sync
         self.strategy.close_short = self.close_short_sync
+        self.strategy.close_long = self.close_long_sync
         self.strategy.sell_all_stocks = self.sell_all_stocks_sync
 
         # ========== 回测配置方法 ==========
@@ -594,6 +617,7 @@ class PriceRelatedSlippage:
         self.strategy.set_option = self.set_option
         self.strategy.set_order_cost = self.set_order_cost
         self.strategy.set_slippage = self.set_slippage
+        self.strategy.set_funding_rate = self.set_funding_rate
 
         Log.logger.info("策略API绑定完成")
     
@@ -645,7 +669,7 @@ class PriceRelatedSlippage:
             if stock_list_df is not None and not stock_list_df.empty:
                 # 返回股票代码列表
                 stock_codes = stock_list_df['code'].tolist()
-                Log.logger.info(f"成功获取 {market} 股票列表: {len(stock_codes)} 只")
+                Log.logger.debug(f"成功获取 {market} 股票列表: {len(stock_codes)} 只")
                 return stock_codes
             else:
                 Log.logger.warning(f"无法获取 {market} 的股票列表")
@@ -670,12 +694,34 @@ class PriceRelatedSlippage:
                     order_type = OrderType.LIMIT
                 else:
                     order_type = OrderType.LIMIT  # 默认为限价单
-            
+
+            # 订单数量校验
+            if volume is None or volume <= 0:
+                bt_time = self.context.get('current_dt')
+                time_str = bt_time.strftime('%Y-%m-%d %H:%M:%S') if bt_time else '--'
+                Log.logger.warning(f"[{time_str}] 订单数量无效({volume})，已拒绝: {symbol}")
+                return None
+
+            # T+1检查：仅在T+1市场中，卖出时验证可用持仓是否充足
+            if side == Side.SELL and hasattr(self.engine, 'trade_center'):
+                if self.engine.trade_center._is_t_plus_one():
+                    position = self.engine.trade_center.positions.get(symbol)
+                    available_volume = position.available_volume if position else 0
+                    if available_volume < volume:
+                        bt_time = self.context.get('current_dt')
+                        time_str = bt_time.strftime('%Y-%m-%d %H:%M:%S') if bt_time else '--'
+                        Log.logger.warning(
+                            f"[{time_str}] T+1规则拦截: {symbol} 卖出{volume}股被拒绝，"
+                            f"可用{available_volume}股(含T+1冻结)"
+                        )
+                        return None
+
             # 调用TradeCenter的下单方法
             if hasattr(self.engine, 'trade_center'):
                 # 创建订单对象并添加到TradeCenter
                 from datetime import datetime
-                order_id = f"order_{symbol}_{int(datetime.now().timestamp())}"
+                import uuid
+                order_id = f"order_{symbol}_{int(datetime.now().timestamp() * 1000)}_{uuid.uuid4().hex[:6]}"
 
                 # 对于市价单，获取并固定当前价格
                 market_price = None
@@ -698,7 +744,15 @@ class PriceRelatedSlippage:
                     created_time=self.context.get('current_dt', datetime.now()),
                     market_price=market_price  # 市价单的固定成交价
                 )
-                
+
+                # 订单验证（资金充足性、交割月、持仓充足性等）
+                if hasattr(self.engine.trade_center, 'validate_order_sync'):
+                    if not self.engine.trade_center.validate_order_sync(order):
+                        bt_time = self.context.get('current_dt')
+                        time_str = bt_time.strftime('%Y-%m-%d %H:%M:%S') if bt_time else '--'
+                        Log.logger.warning(f"[{time_str}] 订单验证未通过，已拒绝: {symbol} {side.value} {volume}")
+                        return None
+
                 # 添加到订单列表
                 self.engine.trade_center.orders[order_id] = order
                 self.engine.trade_center.active_orders[order_id] = order  # 同时添加到活跃订单
@@ -714,7 +768,7 @@ class PriceRelatedSlippage:
             else:
                 bt_time = self.context.get('current_dt')
                 time_str = bt_time.strftime('%Y-%m-%d %H:%M:%S') if bt_time else '--'
-                Log.logger.info(f"[{time_str}] 模拟下单: {symbol} {side} {order_type} 数量:{volume} 价格:{price}")
+                Log.logger.debug(f"[{time_str}] 模拟下单: {symbol} {side} {order_type} 数量:{volume} 价格:{price}")
                 return f"order_{symbol}_{int(datetime.now().timestamp())}"
         except Exception as e:
             bt_time = self.context.get('current_dt')
@@ -727,6 +781,11 @@ class PriceRelatedSlippage:
         try:
             if hasattr(self.engine, 'trade_center') and order_id in self.engine.trade_center.orders:
                 order = self.engine.trade_center.orders[order_id]
+                # 解冻订单占用的资金（期货/永续合约保证金冻结）
+                frozen_amount = getattr(order, '_frozen_amount', 0)
+                if frozen_amount > 0:
+                    self.engine.trade_center.account.unfreeze_cash(frozen_amount)
+                    order._frozen_amount = 0
                 order.status = OrderStatus.CANCELLED
                 order.rejected_reason = "用户撤单"
                 # 从活跃订单中移除
@@ -739,7 +798,7 @@ class PriceRelatedSlippage:
             else:
                 bt_time = self.context.get('current_dt')
                 time_str = bt_time.strftime('%Y-%m-%d %H:%M:%S') if bt_time else '--'
-                Log.logger.info(f"[{time_str}] 模拟撤单: {order_id}")
+                Log.logger.debug(f"[{time_str}] 模拟撤单: {order_id}")
                 return True
         except Exception as e:
             bt_time = self.context.get('current_dt')
@@ -774,6 +833,8 @@ class PriceRelatedSlippage:
                 positions = list(self.engine.trade_center.positions.values())
                 if symbol:
                     positions = [pos for pos in positions if pos.symbol == symbol]
+                # 过滤尘埃持仓（浮点精度残留的极小值）
+                positions = [pos for pos in positions if pos.volume > 1e-4]
                 Log.logger.debug(f"返回持仓信息: {len(positions)} 个持仓")
                 return positions
             else:
@@ -818,15 +879,27 @@ class PriceRelatedSlippage:
             Log.logger.error(f"获取成交信息失败: {e}")
             return []
     
+    def _validate_order_volume(self, symbol, volume):
+        """校验下单数量是否满足市场最小交易量要求"""
+        from finhack.trader.backtest.constants import MIN_ORDER_QUANTITY
+        market = self.context.get('settings', {}).get('market', '')
+        min_qty = MIN_ORDER_QUANTITY.get(market, 0)
+        if min_qty > 0 and abs(volume) < min_qty:
+            Log.logger.debug(f"订单数量 {volume} 小于最小交易量 {min_qty}（{market}），忽略: {symbol}")
+            return False
+        return True
+
     def order_buy_sync(self, context, symbol, volume, price=None):
         """便利买入方法
-        
+
         Args:
             context: 回测上下文（兼容策略调用方式）
             symbol: 股票代码
             volume: 数量
             price: 价格（可选）
         """
+        if not self._validate_order_volume(symbol, volume):
+            return None
         from finhack.trader.backtest.models.enums import Side, OrderType
         order_type = OrderType.LIMIT if price else OrderType.MARKET
         return self.place_order_sync('backtest', symbol, Side.BUY, order_type, volume, price)
@@ -840,8 +913,36 @@ class PriceRelatedSlippage:
             volume: 数量
             price: 价格（可选）
         """
+        if not self._validate_order_volume(symbol, volume):
+            return None
         from finhack.trader.backtest.models.enums import Side, OrderType
         order_type = OrderType.LIMIT if price else OrderType.MARKET
+
+        # 期货/合约市场：根据持仓方向自动路由
+        market = self.context.get('settings', {}).get('market', '')
+        if market in ('cn_future', 'global_cryptoswap'):
+            from finhack.trader.backtest.constants import SHORT_POSITION_SUFFIX
+            trade_center = self.context.get('trade_center')
+            if trade_center:
+                long_position = trade_center.positions.get(symbol)
+                short_key = f"{symbol}{SHORT_POSITION_SUFFIX}"
+                short_position = trade_center.positions.get(short_key)
+                long_available = long_position.available_volume if long_position else 0
+                short_available = short_position.available_volume if short_position else 0
+                if long_available <= 0:
+                    if short_available > 0:
+                        # 有空头持仓 → 平空仓（order_sell语义为减仓/平仓）
+                        close_volume = min(volume, short_available)
+                        return self.place_order_sync('backtest', symbol, Side.SHORT_CLOSE, order_type, close_volume, price)
+                    else:
+                        # 无任何持仓 → 开空仓
+                        return self.place_order_sync('backtest', symbol, Side.SHORT_OPEN, order_type, volume, price)
+                elif long_available < volume:
+                    # 多头持仓不足，先平多仓再开空仓
+                    sell_order = self.place_order_sync('backtest', symbol, Side.SELL, order_type, long_available, price)
+                    short_order = self.place_order_sync('backtest', symbol, Side.SHORT_OPEN, order_type, volume - long_available, price)
+                    return short_order if short_order else sell_order
+
         return self.place_order_sync('backtest', symbol, Side.SELL, order_type, volume, price)
 
     def order_short_sync(self, context, symbol, volume, price=None):
@@ -881,6 +982,25 @@ class PriceRelatedSlippage:
         order_type = OrderType.LIMIT if price else OrderType.MARKET
         # 平空仓本质是买入，标记为SHORT_CLOSE类型
         return self.place_order_sync('backtest', symbol, Side.SHORT_CLOSE, order_type, volume, price)
+
+    def close_long_sync(self, context, symbol, volume, price=None):
+        """平多仓方法（平做多仓位）
+
+        用于期货、加密货币等支持做空的市场
+
+        Args:
+            context: 回测上下文（兼容策略调用方式）
+            symbol: 标的代码
+            volume: 数量
+            price: 价格（可选）
+
+        Returns:
+            order_id: 订单ID
+        """
+        from finhack.trader.backtest.models.enums import Side, OrderType
+        order_type = OrderType.LIMIT if price else OrderType.MARKET
+        # 平多仓本质是卖出
+        return self.place_order_sync('backtest', symbol, Side.SELL, order_type, volume, price)
     
     def sell_all_stocks_sync(self, context=None):
         """卖出所有持仓的便利方法"""
@@ -889,13 +1009,14 @@ class PriceRelatedSlippage:
             sell_orders = []
 
             for position in positions:
-                if position.volume > 0:  # 确保有持仓
-                    order_id = self.order_sell_sync(position.symbol, position.volume)
+                # 跳过尘埃持仓（浮点精度残留），避免无意义卖出
+                if position.volume > 1e-4:
+                    order_id = self.order_sell_sync(self.context, position.symbol, position.volume)
                     if order_id:
                         sell_orders.append(order_id)
                         bt_time = self.context.get('current_dt')
                         time_str = bt_time.strftime('%Y-%m-%d %H:%M:%S') if bt_time else '--'
-                        Log.logger.info(f"[{time_str}] 卖出持仓: {position.symbol} 数量: {position.volume}")
+                        Log.logger.debug(f"[{time_str}] 卖出持仓: {position.symbol} 数量: {position.volume}")
 
             return sell_orders
         except Exception as e:
@@ -905,10 +1026,14 @@ class PriceRelatedSlippage:
             return []
     
     def set_benchmark(self, benchmark):
-        """设置基准"""
+        """设置基准（仅在未通过CLI/配置设置时生效）"""
         if self.context and 'settings' in self.context:
-            self.context['settings']['benchmark'] = benchmark
-            Log.logger.info(f"设置基准: {benchmark}")
+            current = self.context['settings'].get('benchmark', '')
+            if not current:
+                self.context['settings']['benchmark'] = benchmark
+                Log.logger.debug(f"设置基准: {benchmark}")
+            else:
+                Log.logger.debug(f"保留已有基准设置: {current}（跳过策略中的 {benchmark}）")
     
     def set_option(self, key, value):
         """设置选项"""
@@ -969,7 +1094,33 @@ class PriceRelatedSlippage:
             settings['slip_value'] = float(slippage) if slippage else 0.001
 
         Log.logger.info(f"设置滑点: slip_type={settings.get('slip_type')}, slip_value={settings.get('slip_value')}")
-    
+
+    def set_funding_rate(self, config):
+        """设置资金费率配置（仅对 global_cryptoswap 市场生效）
+
+        Args:
+            config: FundingRateConfig对象或字典，包含:
+                mode: 'fixed'（固定费率）| 'dynamic'（动态计算）| 'none'（关闭）
+                rate: 固定费率值（如0.0001表示0.01%/8h），mode='fixed'时使用
+                interval_hours: 结算间隔小时数（默认8小时）
+        """
+        settings = self.context.get('settings', {})
+
+        if hasattr(config, 'mode'):
+            settings['funding_rate_mode'] = getattr(config, 'mode', 'fixed')
+            settings['funding_rate'] = getattr(config, 'rate', 0.0001)
+            settings['funding_interval_hours'] = getattr(config, 'interval_hours', 8)
+        elif isinstance(config, dict):
+            settings['funding_rate_mode'] = config.get('mode', 'fixed')
+            settings['funding_rate'] = config.get('rate', 0.0001)
+            settings['funding_interval_hours'] = config.get('interval_hours', 8)
+
+        Log.logger.info(
+            f"设置资金费率: mode={settings.get('funding_rate_mode')}, "
+            f"rate={settings.get('funding_rate')}, "
+            f"interval={settings.get('funding_interval_hours')}h"
+        )
+
     # ==================== 定时任务注册函数 ====================
     
     def run_daily(self, func, time="14:50:00"):
@@ -1050,7 +1201,9 @@ class PriceRelatedSlippage:
     def get_cash_sync(self, context=None):
         """获取当前可用现金"""
         try:
-            if hasattr(self, 'context') and 'account' in self.context:
+            if hasattr(self, 'engine') and hasattr(self.engine, 'trade_center'):
+                return self.engine.trade_center.account.cash_available
+            elif hasattr(self, 'context') and 'account' in self.context:
                 return self.context['account']['cash_available']
             return 0.0
         except Exception as e:

@@ -573,41 +573,44 @@ def _reset_daily_counters(context):
 def _update_positions_market_value(context):
     """
     更新持仓市值
-    
+
     Args:
         context: 回测上下文
     """
     try:
+        from finhack.trader.backtest.constants import SHORT_POSITION_SUFFIX
+        from finhack.trader.backtest.models.enums import PositionSide
+
         positions = context.trade_center.get_positions()
-        
+
         if not positions:
             return
-        
+
         total_market_value = 0.0
-        
+
         for symbol, position in positions.items():
-            if position.volume > 0:
-                # 获取当前价格
-                current_price = context.data_center.get_price(symbol)
-                
-                if current_price and current_price > 0:
-                    # 更新市值
-                    position.last_price = current_price
-                    position.market_value = position.volume * current_price
-                    position.last_sale_price = current_price
-                    position.total_value = position.market_value
-                    
-                    # 更新未实现盈亏
-                    position.unrealized_pnl = position.market_value - (position.volume * position.cost_price)
-                    
-                    total_market_value += position.market_value
-        
+            # 获取实际行情代码（做空持仓key带_SHORT后缀）
+            quote_symbol = symbol[:-len(SHORT_POSITION_SUFFIX)] if symbol.endswith(SHORT_POSITION_SUFFIX) else symbol
+            current_price = context.data_center.get_price(quote_symbol)
+
+            if not current_price or current_price <= 0:
+                continue
+
+            position.last_price = current_price
+            position.last_sale_price = current_price
+
+            # 使用Position模型方法更新（正确处理contract_multiplier和多空方向）
+            position.update_market_price(current_price)
+            position.total_value = position.market_value
+
+            total_market_value += position.market_value
+
         # 更新账户总市值
         context.account.total_value = context.account.cash + total_market_value
-        
+
         if context.logger:
             context.logger.debug(f"持仓市值更新: 总市值 {total_market_value:.2f}")
-        
+
     except Exception as e:
         if context.logger:
             context.logger.error(f"更新持仓市值失败: {str(e)}")
@@ -899,20 +902,42 @@ def _handle_after_market_settlement(context):
 def _update_positions_market_value(context):
     """
     更新持仓市值
-    
+
     Args:
         context: 回测上下文
     """
     try:
+        from finhack.trader.backtest.constants import SHORT_POSITION_SUFFIX
+
         positions = context.trade_center.get_positions()
-        
-        for symbol, position in positions.items():
-            current_price = context.data_center.get_current_price(symbol)
-            if current_price and current_price > 0:
-                position.last_price = current_price
-                position.market_value = position.volume * current_price
-                position.unrealized_pnl = (current_price - position.cost_price) * position.volume
-        
+
+        # BUG 1 fix: 收集需要清除的幽灵持仓（volume≈0）
+        ghost_symbols = []
+        for symbol, position in list(positions.items()):
+            # 跳过零量幽灵持仓
+            if position.volume <= 1e-10:
+                ghost_symbols.append(symbol)
+                continue
+
+            quote_symbol = symbol[:-len(SHORT_POSITION_SUFFIX)] if symbol.endswith(SHORT_POSITION_SUFFIX) else symbol
+            current_price = context.data_center.get_current_price(quote_symbol)
+            if not current_price or current_price <= 0:
+                continue
+
+            position.last_price = current_price
+
+            if position.is_short:
+                # BUG 2 fix: 空头持仓市值计算补充 contract_multiplier
+                position.market_value = position.volume * current_price * position.contract_multiplier
+                position.unrealized_pnl = (position.cost_price - current_price) * position.volume * position.contract_multiplier
+            else:
+                position.market_value = position.volume * current_price * position.contract_multiplier
+                position.unrealized_pnl = (current_price - position.cost_price) * position.volume * position.contract_multiplier
+
+        # 清除幽灵持仓
+        for symbol in ghost_symbols:
+            del positions[symbol]
+
     except Exception as e:
         if context.logger:
             context.logger.error(f"更新持仓市值失败: {str(e)}")

@@ -151,7 +151,8 @@ class FuturePriceCalculator:
     @staticmethod
     def validate_order_price(symbol: str, order_price: float,
                            reference_price: float = None,
-                           prev_settlement: float = None) -> Dict:
+                           prev_settlement: float = None,
+                           query_date: date = None) -> Dict:
         """验证订单价格是否有效
 
         Args:
@@ -159,6 +160,7 @@ class FuturePriceCalculator:
             order_price: 订单价格
             reference_price: 参考价（最新价或买一/卖一价）
             prev_settlement: 前结算价
+            query_date: 查询日期（回测时传入回测日期）
 
         Returns:
             {
@@ -181,7 +183,7 @@ class FuturePriceCalculator:
 
         # 计算涨跌停价
         limits = FuturePriceCalculator.calculate_limit_prices(
-            symbol, ref_price, date.today()
+            symbol, ref_price, query_date or date.today()
         )
 
         # 检查价格是否在涨跌停范围内
@@ -202,9 +204,9 @@ class FuturePriceCalculator:
                 }
 
         # 检查是否符合Tick Size
+        from ...utils.float_validation import is_valid_price
         tick_size = limits['tick_size']
-        tick_count = order_price / tick_size
-        if not abs(tick_count - round(tick_count)) < 1e-6:
+        if not is_valid_price(order_price, tick_size):
             return {
                 'valid': False,
                 'message': f'价格必须是{tick_size}的整数倍',
@@ -349,7 +351,7 @@ class FutureMarginCalculator:
             symbol, position, entry_price, current_price, query_date
         )
 
-        # 当前权益 = 账户余额 + 浮动盈亏 - 初始保证金
+        # 当前权益 = 账户余额(含cash+frozen+margin_used) + 浮动盈亏
         current_equity = account_balance + margin_info['unrealized_pnl']
 
         # 维持保证金
@@ -565,9 +567,8 @@ class FutureDeliveryValidator:
             month = int(month_code[2:4])
             return (year, month)
 
-        # 默认返回当前年月
-        today = date.today()
-        return (today.year, today.month)
+        # 无法解析时返回安全默认值（不会匹配任何交割月检查）
+        return (0, 0)
 
     @staticmethod
     def is_delivery_month(symbol: str, current_date: date) -> bool:

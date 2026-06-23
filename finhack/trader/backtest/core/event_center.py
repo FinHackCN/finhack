@@ -516,17 +516,123 @@ class EventCenter:
 
                 events.append(event)
 
+            # 生成退市事件：从stock list中读取delist_date匹配当前交易日的证券
+            try:
+                delist_events = self._generate_delisting_events(trade_date, market)
+                events.extend(delist_events)
+            except Exception as de:
+                import traceback
+                logger.error(f"[EventCenter] 生成退市事件失败: {de}\n{traceback.format_exc()}")
+
             if events:
-                logger.info(f"[EventCenter] 生成了{len(events)}个公司行为事件")
+                logger.info(f"[EventCenter] 生成了{len(events)}个公司行为事件(含退市)")
             else:
-                logger.debug(f"[EventCenter] 未生成公司行为事件")
+                logger.info(f"[EventCenter] 未生成公司行为事件(含退市) trade_date={trade_date}")
 
             return events
 
         except Exception as e:
             logger.error(f"生成公司行为事件失败: {e}")
             return []
-    
+
+    def _generate_delisting_events(self, trade_date, market):
+        """从stock list中读取delist_date，生成当日退市的DelistingEvent
+
+        Args:
+            trade_date: 当前交易日期
+            market: 市场名称
+
+        Returns:
+            list: DelistingEvent列表
+        """
+        if not self.data_center:
+            return []
+
+        import pandas as pd
+        from ..events.corporate_action_events import DelistingEvent
+        from ..events.base_event import EventType
+
+        try:
+            # 通过data_interface获取stock list
+            data_interface = getattr(self.data_center, 'data_interface', None)
+            if data_interface is None:
+                return []
+
+            stock_list_df = data_interface.get_stock_list(market, use_cache=True)
+            if stock_list_df is None or stock_list_df.empty:
+                return []
+
+            # 检查是否有delist_date列
+            if 'delist_date' not in stock_list_df.columns:
+                return []
+
+            # 确定代码列
+            if 'code' in stock_list_df.columns:
+                code_col = 'code'
+            else:
+                return []
+
+            # 格式化当前交易日期用于匹配
+            trade_date_int = int(trade_date.strftime('%Y%m%d'))
+
+            # 筛选当日退市的证券（delist_date匹配当前交易日）
+            # delist_date列可能是float类型(如20231221.0)，转为int比较
+            delist_col = stock_list_df['delist_date']
+            delisted_mask = delist_col.notna()
+            if delisted_mask.any():
+                # 将非空的delist_date转为int进行比较
+                delist_values = pd.to_numeric(delist_col, errors='coerce')
+                delisted_mask = (delist_values == trade_date_int) & delist_col.notna()
+
+            delisted = stock_list_df[delisted_mask]
+
+            if delisted.empty:
+                return []
+
+            events = []
+            # 退市事件在开盘前处理
+            event_time = datetime.combine(trade_date, time(8, 30, 0))
+
+            for _, row in delisted.iterrows():
+                symbol = str(row[code_col]).strip()
+
+                # 尝试获取前一个交易日收盘价作为清算价格
+                liquidation_price = 0.0
+                try:
+                    quote_data = self.data_center.get_quotes(
+                        codes=symbol,
+                        freq='1d',
+                        time=datetime.combine(trade_date, time(0, 0, 0))
+                    )
+                    if quote_data is not None and not quote_data.empty:
+                        if 'close' in quote_data.columns:
+                            liquidation_price = float(quote_data['close'].iloc[0])
+                except Exception:
+                    pass
+
+                delist_event = DelistingEvent(
+                    event_time=event_time,
+                    symbol=symbol,
+                    delisting_date=trade_date,
+                    delisting_reason='退市',
+                    market=market,
+                    liquidation_price=liquidation_price,
+                    last_trading_date=trade_date,
+                    delisting_type='mandatory'
+                )
+                # 添加priority属性以兼容事件排序
+                delist_event.priority = type('Priority', (), {'value': 2})()  # HIGH=2
+
+                events.append(delist_event)
+                logger.info(f"[EventCenter] 生成退市事件: {symbol}, delist_date={trade_date_int}, "
+                           f"清算价格={liquidation_price}")
+
+            return events
+
+        except Exception as e:
+            logger.warning(f"[EventCenter] 生成退市事件异常: {e}")
+            return []
+
     def process_event(self, event: BaseEvent):
         """处理单个事件
         
@@ -571,15 +677,18 @@ class EventCenter:
         """处理交易相关事件"""
         if not self.trade_center:
             return
-        
+
         try:
             if event.event_type == EventTypeEnum.ORDER_SUBMISSION:
-                self.trade_center.handle_order_submission(event)
+                if hasattr(self.trade_center, 'handle_order_submission'):
+                    self.trade_center.handle_order_submission(event)
             elif event.event_type == EventTypeEnum.ORDER_CANCELLATION:
-                self.trade_center.handle_order_cancellation(event)
+                if hasattr(self.trade_center, 'handle_order_cancellation'):
+                    self.trade_center.handle_order_cancellation(event)
             elif event.event_type == EventTypeEnum.TRY_MATCH:
-                self.trade_center.try_match_orders(event)
-                
+                if hasattr(self.trade_center, 'try_match_orders'):
+                    self.trade_center.try_match_orders(event)
+
         except Exception as e:
             logger.error(f"处理交易事件失败 {event.event_type.value}: {e}")
     
