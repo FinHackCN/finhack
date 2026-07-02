@@ -2505,7 +2505,7 @@ class DataCenter:
 
         market = self._get_market_from_context()
 
-        return self.data_interface.get_factors(
+        result = self.data_interface.get_factors(
             factor_names=factor_names,
             codes=codes,
             market=market,
@@ -2515,6 +2515,12 @@ class DataCenter:
             factor_type='matrix',
             use_cache=True
         )
+
+        # 防未来函数: 按 backtest_time 过滤(因子同样可能含当期/未来值, 如当日收盘才计算的因子)
+        backtest_time = self._get_backtest_time()
+        if backtest_time is not None and result is not None and not result.empty:
+            result = self._filter_future_data(result, backtest_time)
+        return result
     
     def get_trading_calendar(self, market: str = None, start_date=None, end_date=None, **kwargs) -> List[date]:
         """获取交易日历
@@ -2727,7 +2733,11 @@ class DataCenter:
 
         # 过滤时也要处理NaT（无效时间）
         valid_time_mask = time_index.notna()
-        price_filter_mask = time_index <= backtest_time_dt
+        # 严格小于: 不返回 backtest_time 当根 bar(防未来函数)。
+        # 1m: 策略在分钟M只能看到≤M-1的数据, 当根M的收盘价要到M+1才可见(配合撮合1分钟延迟)。
+        # 注: 1d bar时间戳为当日00:00, 严格<对1d日内(如14:50)仍会含当日bar(00:00<14:50),
+        #     1d未来函数需另行通过"日线bar按收盘时刻打时间戳"解决(设计变更, 暂未实施)。
+        price_filter_mask = time_index < backtest_time_dt
         mask = valid_time_mask & price_filter_mask
         filtered = df[mask]
 

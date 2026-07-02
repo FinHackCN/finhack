@@ -10,6 +10,40 @@ from finhack.library.alert import alert
 from finhack.library.monitor import tsMonitor
 import finhack.library.log as Log
 
+
+class _PaginatedNameChange:
+    """包装 pro，使 namechange() 按年分页返回全历史。
+
+    tushare namechange 单次最多返回 10000 条；按 start_date 年度切片循环拉取，
+    合并去重后返回。其他 API 透传给原 pro，故可无缝传给 tsSHelper.getDataAndReplace。
+    """
+    _START_YEAR = 1990
+
+    def __init__(self, pro):
+        self._pro = pro
+
+    def namechange(self, **kwargs):
+        from datetime import datetime
+        frames = []
+        end_year = datetime.now().year
+        for y in range(self._START_YEAR, end_year + 1):
+            try:
+                df = self._pro.namechange(start_date=f'{y}0101', end_date=f'{y}1231')
+            except Exception as e:
+                Log.logger.warning(f'namechange {y} 年获取失败: {e}')
+                continue
+            if df is not None and len(df):
+                frames.append(df)
+                Log.logger.info(f'namechange {y} 年: {len(df)} 条')
+        if not frames:
+            return pd.DataFrame()
+        return pd.concat(frames, ignore_index=True).drop_duplicates()
+
+    def __getattr__(self, name):
+        # 其他属性/方法透传给原 pro（_pro 已在 __init__ 设置，不会触发本方法）
+        return getattr(self._pro, name)
+
+
 class tsAStockBasic:
     @tsMonitor
     def stock_basic(pro,db):
@@ -107,8 +141,11 @@ class tsAStockBasic:
         
     @tsMonitor
     def namechange(pro,db):
+        """获取股票名称变更（按年分页拉全历史，避免单次 10000 条上限）"""
         try:
-            return tsSHelper.getDataAndReplace(pro,'namechange','astock_namechange',db)
+            return tsSHelper.getDataAndReplace(
+                _PaginatedNameChange(pro), 'namechange', 'astock_namechange', db
+            )
         except Exception as e:
             Log.logger.error(f"获取股票名称变更失败: {str(e)}")
             Log.logger.error(traceback.format_exc())

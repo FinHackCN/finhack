@@ -26,6 +26,7 @@ class Account:
     market_value: float = 0.0       # 持仓市值总和
     pnl_unrealized: float = 0.0     # 浮动盈亏总和
     pnl_realized: float = 0.0       # 已实现盈亏总和
+    pnl_funding: float = 0.0        # 累计资金费净额(永续合约funding, 已计入现金但单列以便归因)
     status: AccountStatusEnum = AccountStatusEnum.DISCONNECTED # 账户状态
     timestamp_updated: Optional[datetime] = None # 账户数据最后更新时间
 
@@ -113,6 +114,7 @@ class Account:
             'market_value': self.market_value,
             'pnl_unrealized': self.pnl_unrealized,
             'pnl_realized': self.pnl_realized,
+            'pnl_funding': self.pnl_funding,
             'status': self.status.value,
             'timestamp_updated': self.timestamp_updated.isoformat() if self.timestamp_updated else None,
             'margin_used': self.margin_used,

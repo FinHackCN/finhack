@@ -394,10 +394,14 @@ class TradeCenter:
                 Log.logger.warning(f"订单数量必须是{lot_size}的整数倍: {order.volume}")
                 return False
 
-        # 市场规则验证（限价单才检查价格，市价单由撮合引擎定价）
+        # 市场规则验证（限价单用委托价, 市价单用最新价, 都做价格规则校验: tick/涨跌停/价格笼子）
         if self.market_adapter and hasattr(self.market_adapter, 'validate_order'):
             try:
-                validation_price = order.price if (order.order_type == OrderType.LIMIT and order.price) else -1
+                if order.order_type == OrderType.LIMIT and order.price:
+                    validation_price = order.price
+                else:
+                    # 市价单: 用最新价做规则校验(原实现传-1并被validation_price>0跳过, 导致市价单绕过所有价格规则)
+                    validation_price = self._get_last_price(order.symbol)
                 is_valid, msg = self.market_adapter.validate_order(
                     order.symbol, order.volume,
                     validation_price, order.side.value
@@ -1296,17 +1300,13 @@ class TradeCenter:
             symbol = order.symbol
             Log.logger.debug(f"[{time_str}] 检查订单 {order_id}: {symbol}, 类型: {order.order_type}, 状态: {order.status}, 剩余: {order.remaining_volume}")
 
-            # 检查订单是否已过等待期（延迟撮合）
-            if hasattr(order, 'can_match'):
-                if not order.can_match(current_time):
-                    order_age = order.age_minutes(current_time) if hasattr(order, 'age_minutes') else 0
-                    Log.logger.debug(f"[{time_str}] 跳过订单 {order_id}: 订单尚未到达撮合时间，已等待 {order_age:.2f} 分钟")
-                    continue
-            elif hasattr(order, 'created_at') and order.created_at and current_time:
-                from datetime import timedelta
-                time_diff = (current_time - order.created_at).total_seconds() / 60
-                if time_diff < 1:  # 1分钟延迟
-                    Log.logger.debug(f"[{time_str}] 跳过订单 {order_id}: 订单尚未到达撮合时间，已等待 {time_diff:.2f} 分钟")
+            # 延迟撮合(防未来函数): 仅1m生效——当分钟下的单最早下一分钟撮合,
+            # 避免用当根1m bar的收盘价撮合当分钟订单。1d不延迟(下单即撮合是1d设计,
+            # 1d的未来函数由数据过滤严格<保证, 见 _filter_future_data)。
+            if freq == '1m' and getattr(order, 'created_time', None) and current_time:
+                time_diff = (current_time - order.created_time).total_seconds() / 60
+                if time_diff < 1:
+                    Log.logger.debug(f"[{time_str}] 跳过订单 {order_id}: 1m延迟撮合, 已等待 {time_diff:.2f} 分钟")
                     continue
 
             if symbol not in market_data:
@@ -1352,20 +1352,23 @@ class TradeCenter:
                     Log.logger.debug(f"[{time_str}] [撮合] {order_id} {symbol} 日线市价单成交: {fill_volume}股 @{fill_price:.4f}")
                 else:
                     # 分钟频率：部分成交逻辑（每次撮合只成交剩余量的部分比例）
-                    import random
+                    import random, zlib
+                    # 确定性成交比例: 按"订单ID+当前bar时间"用crc32定种子, 保证可复现
+                    # (同份输入两次回测结果完全一致), 不用全局random以免结果随机漂移
+                    _rng = random.Random(zlib.crc32(f"{order_id}|{current_time.isoformat()}".encode()))
                     # 从配置获取成交比例
                     if order.remaining_volume > self.partial_fill_config['large_order_threshold']:
-                        fill_ratio = random.uniform(
+                        fill_ratio = _rng.uniform(
                             self.partial_fill_config['large_order_min'],
                             self.partial_fill_config['large_order_max']
                         )
                     elif order.remaining_volume > self.partial_fill_config['medium_order_threshold']:
-                        fill_ratio = random.uniform(
+                        fill_ratio = _rng.uniform(
                             self.partial_fill_config['medium_order_min'],
                             self.partial_fill_config['medium_order_max']
                         )
                     else:
-                        fill_ratio = random.uniform(
+                        fill_ratio = _rng.uniform(
                             self.partial_fill_config['small_order_min'],
                             self.partial_fill_config['small_order_max']
                         )  # 小订单更容易全部成交
@@ -2230,6 +2233,9 @@ class BacktestEngine:
         adapter = getattr(self.trade_center, 'market_adapter', None)
         if adapter and hasattr(adapter, 'set_current_date'):
             adapter.set_current_date(current_date)
+        # 同步数据中心引用（供 validate_order 取前收盘/标的元数据，如 cn_stock 涨跌停校验）
+        if adapter and hasattr(adapter, 'set_data_center') and self.data_center is not None:
+            adapter.set_data_center(self.data_center)
 
     def _has_pending_orders(self):
         """检查是否有挂单（未成交的订单）
@@ -3395,18 +3401,25 @@ class BacktestEngine:
                 'date': current_time.strftime('%Y-%m-%d'),
                 'total_assets': self.trade_center.account.total_assets,
                 'cash': self.trade_center.account.cash_available,
+                'cash_frozen': self.trade_center.account.cash_frozen,
+                'margin_used': getattr(self.trade_center.account, 'margin_used', 0.0),
                 'positions_value': self.trade_center.account.market_value,
                 'pnl_realized': self.trade_center.account.pnl_realized,
-                'pnl_unrealized': sum(pos.unrealized_pnl for pos in self.trade_center.positions.values())
+                'pnl_unrealized': sum(pos.unrealized_pnl for pos in self.trade_center.positions.values()),
+                'pnl_funding': self.trade_center.account.pnl_funding
             }
             self.context['logs']['daily_history'].append(daily_record)
-            
+
             Log.logger.debug(f"记录每日净值: {daily_record['date']}, 总资产: {daily_record['total_assets']:.2f}")
-            
+
             # 打印每日资产情况
+            # 对账关系: 总资产 = 可用现金 + 冻结资金 + 保证金占用 + 持仓市值
+            #   非保证金市场: 保证金占用=0, 持仓市值=持仓市价
+            #   保证金市场:   持仓市值=浮动盈亏(开仓只扣保证金未扣全额)
+            # 盈亏归因: 总资产 - 起始资金 ≈ 已实现盈亏 + 未实现盈亏 + 资金费 - 累计手续费(开/平仓)
             Log.logger.info(f"日期: {daily_record['date']}, 总资产: {daily_record['total_assets']:.2f}, "
-                           f"现金: {daily_record['cash']:.2f}, 持仓市值: {daily_record['positions_value']:.2f}, "
-                           f"已实现盈亏: {daily_record['pnl_realized']:.2f}, 未实现盈亏: {daily_record['pnl_unrealized']:.2f}")
+                           f"可用现金: {daily_record['cash']:.2f}, 冻结资金: {daily_record['cash_frozen']:.2f}, 保证金占用: {daily_record['margin_used']:.2f}, 持仓市值: {daily_record['positions_value']:.2f}, "
+                           f"已实现盈亏: {daily_record['pnl_realized']:.2f}, 未实现盈亏: {daily_record['pnl_unrealized']:.2f}, 资金费: {daily_record['pnl_funding']:.2f}")
             
         except Exception as e:
             Log.logger.error(f"处理日终事件失败: {e}")
@@ -3571,9 +3584,13 @@ class BacktestEngine:
         if total_paid > 0 or total_received > 0:
             self.trade_center._update_account_value()
             net = total_received - total_paid
+            # 资金费已计入 cash_available(并经_update_account_value反映到总资产),
+            # 此处单列累计到 pnl_funding, 使盈亏归因可对账(已实现+未实现+资金费 ≈ 总资产-起始),
+            # 不并入 pnl_realized 以保留"交易盈亏"与"资金费收入"的区分。
+            self.trade_center.account.pnl_funding += net
             Log.logger.info(
                 f"[资金费率结算] 支付={total_paid:.4f}, 收取={total_received:.4f}, "
-                f"净额={net:.4f}, 费率={funding_rate:.6f}"
+                f"净额={net:.4f}, 费率={funding_rate:.6f}, 累计资金费={self.trade_center.account.pnl_funding:.4f}"
             )
 
     def _calculate_dynamic_funding_rate(self, symbol, current_price, current_time):

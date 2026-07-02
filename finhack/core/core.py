@@ -190,7 +190,8 @@ class Core:
         # constant.py / global_var.py，导致其它进程在 import 时读到写了一半的文件
         # （典型现象：ImportError: cannot import name 'LOGS_DIR'）。
         # 改为先写临时文件再 os.replace 原子替换，保证磁盘上的文件始终完整可用。
-        tmp = path + '.tmp'
+        # 临时文件名带 pid，避免多进程共用同一 tmp 名导致互相 os.replace 抢占失败。
+        tmp = f"{path}.tmp.{os.getpid()}"
         with open(tmp, 'w') as f:
             f.write(content)
         os.replace(tmp, path)

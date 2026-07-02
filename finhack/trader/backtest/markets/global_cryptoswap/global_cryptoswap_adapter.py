@@ -150,3 +150,48 @@ class GlobalCryptoSwapMarketAdapter(GlobalCryptoSpotMarketAdapter):
         events.sort(key=lambda x: x.event_time)
 
         return events
+
+    def _generate_daily_events_min(self, trade_date: date, schedule: Dict[str, time], frequency: str) -> List[BaseEvent]:
+        """生成分钟线频率事件序列（增加资金费率结算和保证金检查事件）
+
+        与 _generate_daily_events_1d 对齐：每8小时插入 资金费率结算 + 保证金检查 事件对。
+        资金费率结算先于保证金检查执行，确保保证金检查反映扣除后的真实权益。
+
+        修复：此前 1m/分钟频率回落到基类 GlobalCryptoSpotMarketAdapter._generate_daily_events_min
+        （仅委托 BaseMinutelyEventGenerator，不含资金费事件），导致永续合约分钟级回测不结算
+        资金费率（实测 crypto_swap 1m 结算次数=0，而 1d 有 2373 次、累计 -30927 USDT）。
+        此处显式补齐，使分钟级永续回测与日线一样计入资金费成本。
+        """
+        events = super()._generate_daily_events_min(trade_date, schedule, frequency)
+
+        # 资金费率结算时间（每8小时，与主流交易所对齐）
+        settlement_times = [
+            time(8, 0),    # 08:00 结算
+            time(16, 0),   # 16:00 结算
+            time(0, 0),    # 00:00 结算
+        ]
+
+        funding_events = []
+        for t in settlement_times:
+            # 先资金费率结算
+            funding_events.append(MarketEvent(
+                event_type=EventTypeEnum.FUNDING_RATE_SETTLE,
+                event_time=datetime.combine(trade_date, t),
+                market='global_cryptoswap',
+                frequency=frequency,
+                event_description="资金费率结算"
+            ))
+            # 再保证金检查（在funding扣除后检查真实权益）
+            funding_events.append(MarketEvent(
+                event_type=EventTypeEnum.MARGIN_CALL_CHECK,
+                event_time=datetime.combine(trade_date, t),
+                market='global_cryptoswap',
+                frequency=frequency,
+                event_description="保证金检查"
+            ))
+
+        # 合并并按时间排序
+        events.extend(funding_events)
+        events.sort(key=lambda x: x.event_time)
+
+        return events
