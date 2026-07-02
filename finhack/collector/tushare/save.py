@@ -28,6 +28,7 @@ class TushareSaver:
         # 定义代码列表表名与输出映射
         self.list_tables_map = {
             'astock_basic': {'output_path': 'market/reference/cn_stock/cn_stock_list.csv', 'region': 'cn', 'type': 'stock'},
+            'astock_namechange': {'output_path': 'market/reference/cn_stock/cn_stock_namechange.csv', 'region': 'cn', 'type': 'stock'},
             'astock_index_basic': {'output_path': 'market/reference/cn_index/cn_index_list.csv', 'region': 'cn', 'type': 'index'},
             'cb_basic': {'output_path': 'market/reference/cn_cb/cn_cb_list.csv', 'region': 'cn', 'type': 'cb'},
             'fund_basic': {'output_path': 'market/reference/cn_fund/cn_fund_list.csv', 'region': 'cn', 'type': 'fund'},
@@ -423,7 +424,13 @@ class TushareSaver:
                 new_df['delist_date'] = df['delist_date']
                 new_df['ext_1'] = ''
                 new_df['ext_2'] = ''
-                
+
+            elif table_name == 'astock_namechange':
+                # 名称变更历史：保留 name/start_date/end_date/change_reason（按日精确 ST 的数据源）
+                new_df['start_date'] = df['start_date'] if 'start_date' in df.columns else ''
+                new_df['end_date'] = df['end_date'] if 'end_date' in df.columns else ''
+                new_df['change_reason'] = df['change_reason'] if 'change_reason' in df.columns else ''
+
             elif table_name == 'astock_index_basic':
                 new_df['exchange'] = df['market']
                 new_df['market'] = df['market']
@@ -483,15 +490,23 @@ class TushareSaver:
                 new_df['ext_1'] = df['isin'] if 'isin' in df.columns else ''
                 new_df['ext_2'] = ''
                 
+            # namechange 用自己的列结构（保留 start_date/end_date/change_reason，按日精确 ST 的数据源）
+            if table_name == 'astock_namechange':
+                nc_cols = ['code', 'name', 'start_date', 'end_date', 'change_reason']
+                for col in nc_cols:
+                    if col not in new_df.columns:
+                        new_df[col] = ''
+                return new_df[nc_cols]
+
             # 确保所有必要的列都存在
             required_columns = ['code', 'name', 'region', 'exchange', 'market', 'type', 'category', 'list_date', 'delist_date', 'ext_1', 'ext_2']
             for col in required_columns:
                 if col not in new_df.columns:
                     new_df[col] = ''
-            
+
             # 设置列顺序
             new_df = new_df[required_columns]
-            
+
             return new_df
             
         except Exception as e:

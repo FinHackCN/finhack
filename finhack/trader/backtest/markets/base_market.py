@@ -32,6 +32,9 @@ class BaseMarket(ABC):
         # 回测当前日期（由引擎通过 set_current_date 同步）
         self._current_date = date.today()
 
+        # 数据中心引用（由引擎通过 set_data_center 同步；供 validate_order 取前收盘等）
+        self._data_center = None
+
         # 从配置加载市场参数
         self.supported_frequencies = config.get('supported_frequencies', ['1d'])
         self.timezone = config.get('timezone', 'Asia/Shanghai')
@@ -105,6 +108,14 @@ class BaseMarket(ABC):
             date: 回测当前日期
         """
         return self._current_date
+
+    def set_data_center(self, data_center):
+        """注入数据中心引用（由引擎调用，供 validate_order 等取前收盘/标的元数据）
+
+        Args:
+            data_center: DataCenter 实例
+        """
+        self._data_center = data_center
     
     @abstractmethod
     def generate_daily_events(self, trade_date: date, frequency: str = '1d') -> List[BaseEvent]:

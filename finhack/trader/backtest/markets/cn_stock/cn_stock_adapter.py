@@ -12,6 +12,8 @@ from ..base_market import BaseMarket
 from ..base_minutely_events import BaseMinutelyEventGenerator
 from ..base_daily_events import BaseDailyEventGenerator
 from ...events.event_types import BaseEvent, MarketEvent, EventTypeEnum
+from .cn_stock_calculator import StockPriceCalculator
+from .cn_stock_trading_rules_versions import is_st_stock, st_status_from_namechange
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +40,176 @@ class CnStockMarketAdapter(BaseMarket):
         self.t_plus_one = config.get('t_plus_one', True)  # T+1制度
         self.price_limit_enabled = config.get('price_limit_enabled', True)  # 涨跌停限制
         self.daily_price_limit = config.get('daily_price_limit', 0.10)  # 10%涨跌停
-        
+
+        # 标的元数据缓存（name/list_date/category，用于 ST/新股/板块判定）
+        self._stock_meta_cache = None  # type: ignore
+        # 名称变更历史缓存（按日精确 ST 的数据源；为空则回退静态快照）
+        self._namechange_cache = None  # type: ignore
+
         logger.info(f"中国股票市场适配器初始化完成，支持频率: {self.supported_frequencies}")
+
+    # ==================== 涨跌停校验 ====================
+
+    def validate_order(self, symbol: str, volume: float, price: float,
+                       side: str) -> Tuple[bool, str]:
+        """下单关卡：涨跌停 + 价格区间校验（覆盖 BaseMarket 的空实现）
+
+        Args:
+            symbol: 标的代码
+            volume: 委托数量
+            price: 委托价（限价单）或最新价（市价单，由引擎传入）
+            side: 'buy' / 'sell'
+
+        Returns:
+            (是否通过, 错误信息)
+        """
+        # 1) 基础校验（量、价>0）
+        try:
+            is_valid, msg = super().validate_order(symbol, volume, price, side)
+            if not is_valid:
+                return is_valid, msg
+        except Exception:
+            return True, ""
+
+        # 无数据中心（如单元测试）→ 不做涨跌停校验
+        if not self._data_center or not price or price <= 0:
+            return True, ""
+
+        try:
+            prev_close = self._get_prev_close(symbol)
+            # 无前收盘（如上市首日）→ 无法校验，放行
+            if not prev_close or prev_close <= 0:
+                return True, ""
+
+            is_st, list_date, category = self._get_stock_meta(symbol)
+            result = StockPriceCalculator.validate_order_price(
+                symbol, price, side, prev_close, self._current_date,
+                is_st=is_st, list_date=list_date, category=category,
+            )
+            if not result['valid']:
+                return False, result['message']
+
+            # 封板语义（价格近似）：买入价==涨停价 → 视为封涨停，拒买；
+            # 卖出价==跌停价 → 视为封跌停，拒卖。
+            upper = result.get('limit_upper')
+            lower = result.get('limit_lower')
+            eps = 1e-9
+            if upper and abs(price - upper) < eps and str(side).lower() == 'buy':
+                return False, f'{symbol} 已涨停，买入被拒（涨停价 {upper:.2f}）'
+            if lower and abs(price - lower) < eps and str(side).lower() == 'sell':
+                return False, f'{symbol} 已跌停，卖出被拒（跌停价 {lower:.2f}）'
+
+            return True, ""
+        except Exception as e:
+            logger.debug(f"涨跌停校验异常 {symbol}: {e}，放行")
+            return True, ""
+
+    def _get_prev_close(self, symbol: str) -> float:
+        """取严格早于当前交易日的最后一根日 K 收盘价（前收盘）"""
+        if not self._data_center:
+            return 0.0
+        try:
+            df = self._data_center.get_klines(
+                [symbol], freq='1d', end_time=self._current_date
+            )
+            if df is None or getattr(df, 'empty', True):
+                return 0.0
+            # 规整成带 time/code 列的 DataFrame
+            work = df.reset_index() if df.index.names != [None] else df.copy()
+            if 'time' not in work.columns or 'code' not in work.columns:
+                # 兜底：取列名
+                return 0.0
+            work = work[work['code'] == symbol]
+            # 仅保留 date < 当前交易日
+            cur = self._current_date
+            times = work['time']
+            if hasattr(times.iloc[0], 'date'):
+                mask = times.map(lambda t: t.date() < cur)
+            else:
+                mask = times.map(lambda t: str(t)[:10] < str(cur))
+            work = work[mask]
+            if work.empty:
+                return 0.0
+            return float(work.sort_values('time').iloc[-1]['close'])
+        except Exception as e:
+            logger.debug(f"获取 {symbol} 前收盘失败: {e}")
+            return 0.0
+
+    def _get_stock_meta(self, symbol: str) -> Tuple[bool, Any, Any]:
+        """从 cn_stock_list 取 (is_st, list_date, category)；缓存 DataFrame"""
+        code = symbol.split('.')[0]
+        if self._stock_meta_cache is None:
+            self._stock_meta_cache = False  # sentinel: 已尝试
+            try:
+                dc = self._data_center
+                di = getattr(dc, 'data_interface', None) or dc
+                df = di.get_stock_list('cn_stock', use_cache=True)
+                if df is not None and not df.empty and 'code' in df.columns:
+                    self._stock_meta_cache = df.set_index('code')
+            except Exception as e:
+                logger.debug(f"加载 cn_stock 标的列表失败: {e}")
+
+        is_st = False
+        list_date = None
+        category = None
+        cache = self._stock_meta_cache
+        if hasattr(cache, 'loc') and code in cache.index:
+            row = cache.loc[code]
+            if isinstance(row, type(cache)):  # 多行重复 code
+                row = row.iloc[0]
+            name = row.get('name') if hasattr(row, 'get') else None
+            is_st = self._is_st_as_of(code, name)
+            ld = row.get('list_date') if hasattr(row, 'get') else None
+            if ld is not None and str(ld) not in ('None', 'nan', ''):
+                try:
+                    list_date = datetime.strptime(str(ld)[:8], '%Y%m%d').date()
+                except Exception:
+                    list_date = None
+            cat = row.get('category') if hasattr(row, 'get') else None
+            category = None if (cat is None or str(cat) in ('nan',)) else cat
+        return is_st, list_date, category
+
+    def _load_namechange(self):
+        """加载 cn_stock_namechange.csv（名称变更历史）；不存在返回 None"""
+        if self._namechange_cache is not None:
+            return self._namechange_cache if self._namechange_cache is not False else None
+        try:
+            import os
+            import pandas as _pd
+            dc = self._data_center
+            di = getattr(dc, 'data_interface', None) or dc
+            ref_dir = getattr(di, 'reference_data_dir', None)
+            if not ref_dir:
+                return None
+            path = os.path.join(ref_dir, 'cn_stock', 'cn_stock_namechange.csv')
+            if not os.path.exists(path):
+                self._namechange_cache = False  # 标记：已尝试但无文件
+                return None
+            df = _pd.read_csv(path)
+            if 'code' not in df.columns:
+                # 兜底：tushare 原始列名 ts_code
+                if 'ts_code' in df.columns:
+                    df = df.rename(columns={'ts_code': 'code'})
+            df['code'] = df['code'].astype(str)
+            self._namechange_cache = df
+            return df
+        except Exception as e:
+            logger.debug(f"加载 cn_stock_namechange 失败: {e}")
+            self._namechange_cache = False
+            return None
+
+    def _is_st_as_of(self, code: str, snapshot_name=None) -> bool:
+        """按日精确判 ST：优先用 namechange 历史；无记录回退静态快照名"""
+        try:
+            nc = self._load_namechange()
+            if nc is not None:
+                verdict = st_status_from_namechange(code, self._current_date, nc)
+                if verdict is not None:
+                    return verdict
+        except Exception as e:
+            logger.debug(f"namechange ST 判定异常 {code}: {e}")
+        # 回退：静态快照名
+        return is_st_stock(snapshot_name)
     
     def _get_default_config(self) -> Dict[str, Any]:
         """获取中国股票市场默认配置"""
