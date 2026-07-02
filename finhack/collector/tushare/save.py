@@ -597,14 +597,8 @@ class TushareSaver:
                     for code, code_df in code_groups:
                         # 构建文件路径
                         code_file = os.path.join(year_dir, f"{code}.csv")
-                        
-                        # 如果是当前年份且文件已存在，先删除
-                        if year == self.current_year and os.path.exists(code_file):
-                            try:
-                                os.remove(code_file)
-                            except Exception as e:
-                                Log.logger.warning(f"删除文件失败: {code_file}, 错误: {str(e)}")
-                        
+                        # _save_csv 已改为原子 os.replace 覆盖，无需预先删除（原"先删后写"有空窗风险）
+
                         # 提交保存任务
                         futures.append(executor.submit(
                             self._save_csv, code_df, code_file, sort=True, sort_by=['time']))
@@ -825,18 +819,32 @@ class TushareSaver:
             return pd.DataFrame()
     
     def _save_csv(self, df, filepath, sort=False, sort_by=None, header=False):
-        """优化的保存CSV文件方法"""
+        """优化的保存CSV文件方法（原子写：tmp→fsync→os.replace）"""
+        import tempfile
         try:
             # 避免修改原始数据
             df = df.copy()
-            
+
             # 排序
             if sort and sort_by:
                 df = df.sort_values(sort_by)
-            
-            # 保存文件
-            df.to_csv(filepath, index=False, header=header)
-                
+
+            # 原子保存：临时文件同目录 → fsync → os.replace（覆盖已存在文件，无空窗）
+            dirname = os.path.dirname(os.path.abspath(filepath)) or '.'
+            fd, tmp = tempfile.mkstemp(dir=dirname, prefix='.awcsv_', suffix='.tmp')
+            try:
+                os.close(fd)
+                df.to_csv(tmp, index=False, header=header)
+                with open(tmp, 'rb') as f:
+                    os.fsync(f.fileno())
+                os.replace(tmp, filepath)
+            except Exception:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+                raise
+
         except Exception as e:
             Log.logger.error(f"保存文件 {filepath} 时发生错误: {str(e)}")
             Log.logger.error(traceback.format_exc())
