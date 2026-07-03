@@ -22,7 +22,8 @@ class TushareSaver:
             'cb_daily': 'cn_cb',
             'fund_daily': 'cn_fund',
             'fx_daily': 'global_fx',
-            'hk_daily': 'hk_stock'
+            'hk_daily': 'hk_stock',
+            'futures_daily': 'cn_future'
         }
         
         # 定义代码列表表名与输出映射
@@ -80,6 +81,7 @@ class TushareSaver:
             'cn_index': '%Y-%m-%d 09:30:00+08:00',
             'cn_cb': '%Y-%m-%d 09:30:00+08:00',
             'cn_fund': '%Y-%m-%d 09:30:00+08:00',
+            'cn_future': '%Y-%m-%d 09:30:00+08:00',
             'hk_stock': '%Y-%m-%d 10:00:00+08:00',
             'global_fx': '%Y-%m-%d 00:00:00+08:00'
         }
