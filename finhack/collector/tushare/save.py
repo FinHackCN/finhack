@@ -812,7 +812,15 @@ class TushareSaver:
             
             # 确保列顺序正确
             new_df = new_df[columns]
-            
+
+            # 丢弃无 OHLC 的行：tushare 对当日无成交的合约返回 NULL OHLC(仅有结算价),
+            # 这些行对 OHLCV 回测无用且会产生 NaN。对每天都有成交的市场(如A股)无影响。
+            before = len(new_df)
+            new_df = new_df.dropna(subset=['open', 'high', 'low', 'close'])
+            dropped = before - len(new_df)
+            if dropped > 0:
+                Log.logger.info(f"{dataname}: 丢弃 {dropped} 行无OHLC数据(无成交日, {before}→{len(new_df)})")
+
             return new_df
             
         except Exception as e:
