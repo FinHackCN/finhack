@@ -847,6 +847,7 @@ class TushareSaver:
                 df.to_csv(tmp, index=False, header=header)
                 with open(tmp, 'rb') as f:
                     os.fsync(f.fileno())
+                os.chmod(tmp, 0o644)  # mkstemp默认0600, 改0644让回测等其它用户可读
                 os.replace(tmp, filepath)
             except Exception:
                 try:

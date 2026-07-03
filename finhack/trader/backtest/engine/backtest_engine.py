@@ -2378,6 +2378,104 @@ class BacktestEngine:
 
         return None
 
+    def _precheck_data(self, market, frequency, universe, start_date, end_date, calendar):
+        """回测前数据预校验（warning 模式：只告警，绝不阻断回测）。
+
+        防止坏数据（残缺/缺失/异常值）静默流入回测——这是"坏数据→坏回测"的最后一道闸门。
+        检查项：
+          1. universe 覆盖率：codebased 有数据的标的数 / universe
+          2. OHLC 合理性：抽样 high>=low>0、close>0、无空值
+          3. adj_factor 对齐(cn_stock/cn_fund)：复权因子表存在且非空
+          4. corporate_actions 非空(cn_stock)：跨度>60交易日时应有分红送股记录
+        任何异常只 Log.logger.warning；预校验自身出错也被吞掉，确保不影响回测。
+        """
+        import os as _os
+        tag = "[数据预校验]"
+        try:
+            mdir = getattr(self.data_center, 'market_data_dir', None)
+            if not mdir or not _os.path.isdir(mdir):
+                Log.logger.warning(f"{tag} 取不到数据目录({mdir})，跳过预校验")
+                return
+            # 解析年份范围
+            try:
+                sy = int(str(start_date)[:4]); ey = int(str(end_date)[:4])
+                years = list(range(sy, ey + 1))
+            except Exception:
+                years = []
+            risks = []
+
+            # ---- 1. universe 覆盖率 ----
+            if universe and years:
+                cb_base = _os.path.join(mdir, 'kline', 'codebased', str(market), str(frequency))
+                avail = set()
+                for y in years:
+                    yd = _os.path.join(cb_base, str(y))
+                    if _os.path.isdir(yd):
+                        for fn in _os.listdir(yd):
+                            if fn.endswith('.csv'):
+                                avail.add(fn[:-4])
+                uni = set(universe)
+                covered = uni & avail
+                cov = len(covered) / len(uni) if uni else 1.0
+                if cov < 0.5:
+                    risks.append(f"universe 覆盖率仅 {cov*100:.1f}%({len(covered)}/{len(uni)})，大量标的缺 codebased {frequency} 数据 → 可能静默用空/缺数据")
+                elif cov < 0.9:
+                    risks.append(f"universe 覆盖率 {cov*100:.1f}%({len(covered)}/{len(uni)})，部分标的缺数据")
+
+            # ---- 2. OHLC 合理性（抽样最近年份的若干标的）----
+            if years:
+                sample_dir = _os.path.join(mdir, 'kline', 'codebased', str(market), str(frequency), str(years[-1]))
+                if _os.path.isdir(sample_dir):
+                    import random as _r
+                    files = [f for f in _os.listdir(sample_dir) if f.endswith('.csv')]
+                    _r.shuffle(files)
+                    bad = 0; checked = 0
+                    for fn in files[:10]:
+                        try:
+                            with _os.open(_os.path.join(sample_dir, fn)) as fh:
+                                rows = fh.read().strip().split('\n')[-200:]
+                            for line in rows:
+                                p = line.split(',')
+                                if len(p) < 8: continue
+                                try:
+                                    o, h, l, c = float(p[2]), float(p[3]), float(p[4]), float(p[5])
+                                except ValueError:
+                                    continue
+                                checked += 1
+                                if not (h >= l > 0 and o > 0 and c > 0):
+                                    bad += 1
+                        except Exception:
+                            continue
+                    if checked and bad / checked > 0.001:
+                        risks.append(f"OHLC 异常：抽样 {checked} 行有 {bad} 行 high<low/≤0/NaN({bad*100//checked}%)")
+
+            # ---- 3. adj_factor 对齐(cn_stock/cn_fund) ----
+            if market in ('cn_stock', 'cn_fund') and years:
+                adj_name = 'cn_stock_adj.csv' if market == 'cn_stock' else 'cn_fund_adj.csv'
+                adj_file = _os.path.join(mdir, 'reference', str(market), adj_name)
+                if not _os.path.exists(adj_file) or _os.path.getsize(adj_file) < 100:
+                    risks.append(f"复权因子表缺失或为空：{adj_file} → 复权价不正确(除权日虚假跳变)")
+
+            # ---- 4. corporate_actions 非空(cn_stock, 跨度>60交易日) ----
+            if market == 'cn_stock' and calendar and len(calendar) > 60:
+                try:
+                    mid = calendar[len(calendar) // 2]
+                    ca = self.data_center.get_corporate_actions(mid, market)
+                    if ca is None or (hasattr(ca, '__len__') and len(ca) == 0):
+                        risks.append(f"corporate_actions 在 {mid.date()} 返回空 → 分红送股可能整体未加载，复权/成本基准将失真")
+                except Exception as e:
+                    risks.append(f"corporate_actions 查询异常：{e} → 分红数据可能不可用")
+
+            # ---- 输出 ----
+            if risks:
+                Log.logger.warning(f"{tag} 发现 {len(risks)} 项数据风险(warning模式未阻断，但回测结果可信度存疑)：")
+                for r in risks:
+                    Log.logger.warning(f"{tag}   - {r}")
+            else:
+                Log.logger.info(f"{tag} 通过：universe 覆盖/adj/corp_actions/OHLC 抽样均正常")
+        except Exception as e:
+            Log.logger.warning(f"{tag} 预校验自身异常(已忽略，不影响回测)：{e}")
+
     def run_sync(self, start_date: str, end_date: str, strategy, scheduled_tasks: List):
         """运行回测 - 同步版本"""
         import time as _run_perf_time
@@ -2436,7 +2534,20 @@ class BacktestEngine:
         # 获取市场设置
         market = self.context.get('settings', {}).get('market', 'cn_stock')
         frequency = self.context.get('settings', {}).get('freq', '1d')
-        
+
+        # ===== 数据预校验（warning 模式）：回测前体检，坏数据只告警不阻断 =====
+        try:
+            self._precheck_data(
+                market=market,
+                frequency=frequency,
+                universe=self.context.get('universe', None),
+                start_date=start_date,
+                end_date=end_date,
+                calendar=calendar,
+            )
+        except Exception as _e:
+            Log.logger.warning(f"[数据预校验] 预校验调用异常(已忽略，不影响回测)：{_e}")
+
         # 如果是1分钟频率，预加载前两个月的数据
         if frequency == '1m':
             # 检查是否启用预加载（可通过配置禁用）
