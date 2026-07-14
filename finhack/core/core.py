@@ -316,6 +316,14 @@ finhack collector save --vendor=tushare                  # 导出数据到CSV
 finhack collector count --vendor=tushare                 # 数据库统计
 
 ================================
+数据刷新模块 (data) —— 全链路一把梭
+================================
+finhack data refresh --project_path={path}               # 全链路: collector→save→merge→time2code→1d转换→backup
+finhack data refresh --project_path={path} --only=conv_1d # 只跑某步(collector,save,merge_list,merge_kline,time2code,conv_1d,backup)
+finhack data refresh --project_path={path} --skip=collector # 跳过某步(逗号分隔)
+finhack data refresh --project_path={path} --timeout=3600 # 每步超时3600s(cron防卡死)
+
+================================
 检查模块 (check)
 ================================
 finhack check                                           # 检查全部（data, cache, factors）
