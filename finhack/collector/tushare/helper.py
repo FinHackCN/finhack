@@ -575,8 +575,26 @@ class tsSHelper:
                     
                 return max_date
             except Exception as query_error:
-                Log.logger.error(f"查询表 {table} 的最大日期时出错: {str(query_error)}")
-                return '20000104'  # 查询出错时返回2000年1月4日
+                # 【bug 3 修复】查询出错绝不静默退回 20000104 —— 那会触发从 2000 年全量重抓(石器时代)。
+                # 先去掉 ts_code 过滤重查全表 MAX(原错误多来自 ts_code 过滤或瞬态 DB 锁);
+                # 重查到日期就从真实最大日续传; 仍失败则回退近 7 天 + CRITICAL 告警,
+                # 宁可少抓几天, 也绝不从 2000 重抓 26 年。注: 表不存在/真空表(合法从零)走上面 548/560 仍返回 20000104。
+                Log.logger.error(f"查询表 {table} 最大日期出错(ts_code={ts_code}): {query_error}; 尝试无 ts_code 重查全表 MAX")
+                try:
+                    r2 = DB.select_to_list(f"SELECT MAX({filed}) as max_date FROM {table}", db)
+                    if r2 and r2[0].get('max_date'):
+                        md = str(r2[0]['max_date'])
+                        Log.logger.warning(f"重查成功: 表 {table} 真实最大日={md}, 从此续传(不再退回 2000)")
+                        return md
+                except Exception as e2:
+                    Log.logger.error(f"无 ts_code 重查仍失败: {e2}")
+                from datetime import datetime as _dt, timedelta as _td
+                _fb = (_dt.now() - _td(days=7)).strftime('%Y%m%d')
+                Log.logger.critical(f"⚠️ 表 {table} 连续查询失败, 兜底回退近7天({_fb})而非2000; 请检查 DB/锁")
+                return _fb
         except Exception as e:
-            Log.logger.error(f"处理表 {table} 的最后日期时出错: {str(e)}")
-            return '20000104'  # 出错时返回2000年1月4日
+            # 外层兜底同理: 不退回 20000104(会触发全量重抓)
+            from datetime import datetime as _dt, timedelta as _td
+            _fb = (_dt.now() - _td(days=7)).strftime('%Y%m%d')
+            Log.logger.critical(f"⚠️ 处理表 {table} 最后日期异常: {e}; 兜底回退近7天({_fb})而非2000, 请检查")
+            return _fb
