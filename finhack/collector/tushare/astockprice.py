@@ -310,8 +310,11 @@ class tsAStockPrice:
                 if result and len(result) > 0:
                     count = result[0].get('count', 0)
                     if count == 0:
-                        Log.logger.warning(f"{api}: 检查点日期 {last_date} 在数据库中无数据，将重置检查点")
-                        return cls.reset_checkpoint(api, table)
+                        # 【bug 2 修复】检查点当天 0 行 ≠ 检查点坏了 —— 多半是上次跑到一半
+                        # (循环里"删当天→写"之间被中断)。原来直接 reset_checkpoint 删掉检查点,
+                        # 会逼 fallback 退回早期日期(即便有 bug3 兜底也只回近7天、仍丢历史)。
+                        # 正确做法: 保留检查点, 由采集循环自己重抓这一天补上(自愈)。
+                        Log.logger.warning(f"{api}: 检查点日期 {last_date} 当天0行(疑上次中断), 保留检查点, 由循环重抓自愈")
                     else:
                         Log.logger.debug(f"{api}: 检查点验证通过，日期 {last_date} 有 {count} 条数据")
         except Exception as e:
@@ -511,17 +514,12 @@ class tsAStockPrice:
                 # 从检查点恢复
                 last_date = checkpoint["last_date"]
                 Log.logger.info(f"daily: 从检查点恢复，使用日期 {last_date}")
-                
-                # 删除检查点日期的所有数据，确保重新获取完整数据
-                try:
-                    DB.delete(f"DELETE FROM {table} WHERE trade_date = '{last_date}'", db)
-                    Log.logger.info(f"daily: 已删除日期 {last_date} 的所有数据，准备重新获取")
-                except Exception as e:
-                    # 如果是表不存在错误，则继续执行
-                    if "no such table" in str(e).lower():
-                        Log.logger.warning(f"daily: 表 {table} 不存在，将使用初始日期")
-                    else:
-                        Log.logger.error(f"daily: 删除日期 {last_date} 的数据时出错: {str(e)}")
+
+                # 【bug 1 修复】不再在这里预删除检查点当天数据。
+                # 原来在 fetch 之前就 DELETE trade_date=last_date, 一旦中途被中断, 这天就 0 行,
+                # 叠加 bug2(verify 误重置) + bug3(fallback 退回2000) = 从石器时代全量重抓。
+                # 下面的循环每个交易日本来就是"fetch -> 校验 -> DELETE当天 -> 写入"的顺序,
+                # 循环第一轮(current_start=last_date)会安全地替换掉检查点当天, 无需这里提前删。
             else:
                 # 从数据库获取最后日期并删除可能的重复数据
                 last_date = tsSHelper.getLastDateAndDelete(table=table, filed='trade_date', ts_code='000001.SZ', db=db)
