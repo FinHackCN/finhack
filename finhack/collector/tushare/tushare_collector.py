@@ -674,8 +674,10 @@ class TushareCollector:
             self.mTread(tsAStockOther, 'cyq_perf')
             
             # 暂时不获取的数据
-            # self.mTread(tsAStockOther, 'cyq_chips')
             # broker_recommend
+            # 【已启用】cyq_chips 筹码分布: rename bug 已修(SQLite 可用)。注意: 全量重建模式,
+            # 每次运行 ~5000股×6000行≈30M行 + 5000次API调用(~10分钟), 非增量。如太慢可改增量。
+            self.mTread(tsAStockOther, 'cyq_chips')
             
             return True
         except Exception as e:
@@ -880,8 +882,9 @@ class TushareCollector:
             Log.logger.info("获取可转债行情...")
             self.mTread(tsCB, 'cb_daily', 'cb_basic')
             
-            # 暂时不获取的数据
-            # self.mTread(tsCB, 'cb_price_chg')
+            # 【已启用】可转债价格变动/份额: rename bug 已修(SQLite 可用)。CB 约1000个, 轻量。
+            self.mTread(tsCB, 'cb_price_chg')
+            self.mTread(tsCB, 'cb_share')
             
             return True
         except Exception as e:
