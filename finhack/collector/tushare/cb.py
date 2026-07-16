@@ -75,9 +75,15 @@ class tsCB:
                             Log.logger.error(info)
                             break
             
-        DB.exec('rename table '+table+' to '+table+'_old;',db);
-        DB.exec('rename table '+table+'_tmp to '+table+';',db);
-        DB.exec("drop table if exists "+table+'_old',db)
+        # 【SQLite 兼容】原 "rename table X to Y" 是 MySQL 专有语法, SQLite 不认,
+        # 导致 _tmp 堆了数据却换不过去、正式表永远空。改用 "ALTER TABLE X RENAME TO Y"(两者通用)。
+        # 首次运行无正式表时第一条会失败, try 跳过即可。
+        try:
+            DB.exec(f"ALTER TABLE {table} RENAME TO {table}_old", db)
+        except Exception:
+            pass
+        DB.exec(f"ALTER TABLE {table}_tmp RENAME TO {table}", db)
+        DB.exec(f"DROP TABLE IF EXISTS {table}_old", db)
         tsSHelper.setIndex(table,db)  
         
 
@@ -119,7 +125,13 @@ class tsCB:
                             Log.logger.error(info)
                             break
             
-        DB.exec('rename table '+table+' to '+table+'_old;',db);
-        DB.exec('rename table '+table+'_tmp to '+table+';',db);
-        DB.exec("drop table if exists "+table+'_old',db)
+        # 【SQLite 兼容】原 "rename table X to Y" 是 MySQL 专有语法, SQLite 不认,
+        # 导致 _tmp 堆了数据却换不过去、正式表永远空。改用 "ALTER TABLE X RENAME TO Y"(两者通用)。
+        # 首次运行无正式表时第一条会失败, try 跳过即可。
+        try:
+            DB.exec(f"ALTER TABLE {table} RENAME TO {table}_old", db)
+        except Exception:
+            pass
+        DB.exec(f"ALTER TABLE {table}_tmp RENAME TO {table}", db)
+        DB.exec(f"DROP TABLE IF EXISTS {table}_old", db)
         tsSHelper.setIndex(table,db)  
