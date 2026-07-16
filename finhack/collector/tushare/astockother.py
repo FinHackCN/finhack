@@ -159,8 +159,10 @@ class tsAStockOther:
 
     @tsMonitor
     def cyq_chips(pro,db):
-        pass
-    #感觉tushare的这个接口好像有问题
+        """筹码分布 cyq_chips。tushare 接口实测可用: pro.cyq_chips(ts_code=X) 返回单股全历史 ~6000 行。
+        早年用 pass + "接口好像有问题" 注释停用, 真实根因是 rename(MySQL 语法)在 SQLite 上失败 →
+        正式表空, 被误判成"接口坏"; 叠加数据量大(5000股 × 6000行 ≈ 30M 行)。现已修 rename(SQLite 兼容)。
+        注: pass 是空操作, 其下代码本就会执行; 且本表需加入采集任务列表才会真正跑。"""
         table='astock_other_cyq_chips'
         DB.exec("drop table if exists "+table+"_tmp",db)
         # 不需要获取engine对象，直接使用db连接名
@@ -196,9 +198,14 @@ class tsAStockOther:
                             Log.logger.error(info)
                             break
             
-        DB.exec('rename table '+table+' to '+table+'_old;',db);
-        DB.exec('rename table '+table+'_tmp to '+table+';',db);
-        DB.exec("drop table if exists "+table+'_old',db)
+        # 【SQLite 兼容】原 "rename table X to Y" 是 MySQL 语法, SQLite 不认 → _tmp 堆数据却换不过去。
+        # 改用 ALTER TABLE(通用), 首次无正式表则跳过第一条。
+        try:
+            DB.exec(f"ALTER TABLE {table} RENAME TO {table}_old", db)
+        except Exception:
+            pass
+        DB.exec(f"ALTER TABLE {table}_tmp RENAME TO {table}", db)
+        DB.exec(f"DROP TABLE IF EXISTS {table}_old", db)
         tsSHelper.setIndex(table,db)        
         
         # engine=DB.get_db_engine(db)
