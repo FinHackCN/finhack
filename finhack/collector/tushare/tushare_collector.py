@@ -882,9 +882,11 @@ class TushareCollector:
             Log.logger.info("获取可转债行情...")
             self.mTread(tsCB, 'cb_daily', 'cb_basic')
             
-            # 【已启用】可转债价格变动/份额: rename bug 已修(SQLite 可用)。CB 约1000个, 轻量。
-            self.mTread(tsCB, 'cb_price_chg')
+            # 可转债份额: rename bug 已修, 实测 token 有权限, 正常采集
             self.mTread(tsCB, 'cb_share')
+            # 【禁用】cb_price_chg: 实测 token 无此接口权限(报"您没有接口(cb_price_chg)访问权限"),
+            # 永久错误, 重试也成功不了。cb.py 已加"权限错误立即放弃"。要启用需升级 tushare 权限。
+            # self.mTread(tsCB, 'cb_price_chg')
             
             return True
         except Exception as e:
