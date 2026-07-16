@@ -159,54 +159,46 @@ class tsAStockOther:
 
     @tsMonitor
     def cyq_chips(pro,db):
-        """筹码分布 cyq_chips。tushare 接口实测可用: pro.cyq_chips(ts_code=X) 返回单股全历史 ~6000 行。
-        早年用 pass + "接口好像有问题" 注释停用, 真实根因是 rename(MySQL 语法)在 SQLite 上失败 →
-        正式表空, 被误判成"接口坏"; 叠加数据量大(5000股 × 6000行 ≈ 30M 行)。现已修 rename(SQLite 兼容)。
-        注: pass 是空操作, 其下代码本就会执行; 且本表需加入采集任务列表才会真正跑。"""
+        """筹码分布 cyq_chips —— 增量模式。每只股票从其最大交易日续抓, 只写新增, 不再每次全量重建。
+        tushare cyq_chips 必传 ts_code 且单次最多 ~6000 行(近60天), 故无法按 trade_date 批量、也拿不到完整历史;
+        调用次数固定 5000/次(~10分钟, endpoint 限制), 但写入从全量30M降到每日增量 ~50万行。
+        首次运行每股票抓近60天(一次性~30M), 之后每日每股票只补新增几天。自然可续(每股票独立 lastdate)。"""
         table='astock_other_cyq_chips'
-        DB.exec("drop table if exists "+table+"_tmp",db)
-        # 不需要获取engine对象，直接使用db连接名
-        # engine = DB.get_db_engine(db)
+        today=datetime.datetime.now().strftime("%Y%m%d")
         data=tsSHelper.getAllAStock(True,pro,db)
         stock_list=data['ts_code'].tolist()
-        
+        done=ok=0
         for ts_code in stock_list:
-            try_times=0
-            while True:
-                try:
-                    df = pro.cyq_chips(ts_code=ts_code)
-                    #df.to_sql('astock_other_cyq_chips_tmp', engine, index=False, if_exists='append', chunksize=5000)
-                    DB.safe_to_sql(df, table+"_tmp", db, index=False, if_exists='append', chunksize=5000)
-                    break
-                except Exception as e:
-                    if "每天最多访问" in str(e) or "每小时最多访问" in str(e):
-                        Log.logger.warning("cyq_chips:触发最多访问。\n"+str(e)) 
-                        return
-                    if "最多访问" in str(e):
-                        Log.logger.warning("cyq_chips:触发限流，等待重试。\n"+str(e))
-                        time.sleep(15)
-                        continue
-                    else:
+            try:
+                # 该股票在表里的最大交易日(表空返回默认早日期); 同时删掉当天以便完整重抓(幂等)
+                lastdate=tsSHelper.getLastDateAndDelete(table,'trade_date',ts_code=ts_code,db=db)
+                try_times=0; df=None
+                while True:
+                    try:
+                        df=pro.cyq_chips(ts_code=ts_code, start_date=lastdate, end_date=today)
+                        break
+                    except Exception as e:
+                        if "每天最多访问" in str(e) or "每小时最多访问" in str(e):
+                            Log.logger.warning(f"cyq_chips 触发时段访问上限, 终止: {e}"); return
+                        if "最多访问" in str(e) or "频率超限" in str(e):
+                            time.sleep(15); continue
                         if try_times<10:
-                            try_times=try_times+1;
-                            Log.logger.error("cyq_chips:函数异常，等待重试。\n"+str(e))
-                            time.sleep(15)
-                            continue
-                        else:
-                            info = traceback.format_exc()
-                            alert.send('cyq_chips','函数异常',str(info))
-                            Log.logger.error(info)
-                            break
-            
-        # 【SQLite 兼容】原 "rename table X to Y" 是 MySQL 语法, SQLite 不认 → _tmp 堆数据却换不过去。
-        # 改用 ALTER TABLE(通用), 首次无正式表则跳过第一条。
-        try:
-            DB.exec(f"ALTER TABLE {table} RENAME TO {table}_old", db)
-        except Exception:
-            pass
-        DB.exec(f"ALTER TABLE {table}_tmp RENAME TO {table}", db)
-        DB.exec(f"DROP TABLE IF EXISTS {table}_old", db)
-        tsSHelper.setIndex(table,db)        
+                            try_times+=1
+                            Log.logger.error(f"cyq_chips {ts_code} 异常, 重试#{try_times}: {e}")
+                            time.sleep(15); continue
+                        Log.logger.error(f"cyq_chips {ts_code} 重试耗尽, 跳过: {e}"); df=None; break
+                if df is not None and not df.empty:
+                    df=df.drop_duplicates(subset=['ts_code','trade_date','price'],keep='first')
+                    DB.safe_to_sql(df, table, db, index=False, if_exists='append', chunksize=5000)
+                    ok+=1
+                done+=1
+                if done%500==0:
+                    Log.logger.info(f"cyq_chips 进度: {done}/{len(stock_list)}, 有新增 {ok} 只")
+            except Exception as e:
+                Log.logger.error(f"cyq_chips 处理 {ts_code} 未预期错误: {e}")
+            time.sleep(0.12)  # 贴 500/分钟天花板
+        Log.logger.info(f"cyq_chips 完成: {done}/{len(stock_list)} 只, {ok} 只有新增写入")
+        tsSHelper.setIndex(table,db)
         
         # engine=DB.get_db_engine(db)
         # if True:
