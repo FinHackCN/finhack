@@ -178,6 +178,9 @@ class tsAStockOther:
                         df=pro.cyq_chips(ts_code=ts_code, start_date=lastdate, end_date=today)
                         break
                     except Exception as e:
+                        if "没有接口" in str(e) or "访问权限" in str(e) or "没有权限" in str(e):
+                            # 永久错误: token 无此接口权限, 整表立即放弃(否则 5000股×10×15s 重试 = 几十小时)
+                            Log.logger.error(f"cyq_chips: token 无此接口权限, 整表跳过(不重试): {str(e).split('。')[0][:80]}"); return
                         if "每天最多访问" in str(e) or "每小时最多访问" in str(e):
                             Log.logger.warning(f"cyq_chips 触发时段访问上限, 终止: {e}"); return
                         if "最多访问" in str(e) or "频率超限" in str(e):
