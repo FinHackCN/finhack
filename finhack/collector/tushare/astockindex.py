@@ -37,6 +37,8 @@ class tsAStockIndex:
     @staticmethod
     def _process_index_daily_worker(pro, db, index_list, today):
         """
+        [已废弃/不再调用] 旧的逐代码逐日抓取worker, 每行一次API调用, 极慢。
+        index_daily() 已改为按 trade_date 逐日抓(1次拿全天全部指数)。保留此函数仅作存档, 勿再调用。
         线程工作函数，处理指数日线数据
         """
         table = "astock_index_daily"
@@ -92,67 +94,55 @@ class tsAStockIndex:
 
     @tsMonitor
     def index_daily(pro, db):
-        # 先检查 000001.SH 的最后日期来决定执行次数
-        check_lastdate = tsSHelper.getLastDateAndDelete('astock_index_daily', 'trade_date', ts_code='000001.SH', db=db)
-        
-        if check_lastdate == '20000101':
-            n = 3  # 如果是初始日期，执行3遍
-            Log.logger.info("检测到初始状态(000001.SH的最后日期为20000101)，将执行3轮数据获取")
-        else:
-            n = 1  # 否则执行1遍
-            Log.logger.info("检测到正常状态，将执行1轮数据获取")
-        
-        # 获取所有指数列表
-        data = tsSHelper.getAllAStockIndex(pro, db)
-        index_list = data['ts_code'].tolist()
-        today = datetime.datetime.now().strftime("%Y%m%d")
-        
-        # 执行指定次数的数据获取
-        for round_num in range(n):
-            Log.logger.info(f"开始第{round_num + 1}轮数据获取，共{n}轮")
-            
-            # 将指数列表分成3个部分，每个线程处理一部分
-            chunk_size = len(index_list) // 3
-            if chunk_size == 0:
-                chunk_size = 1
-            
-            index_chunks = [
-                index_list[i:i + chunk_size] 
-                for i in range(0, len(index_list), chunk_size)
-            ]
-            
-            # 如果分割后超过3个块，将多余的合并到前面的块中
-            while len(index_chunks) > 3:
-                index_chunks[2].extend(index_chunks.pop())
-            
-            Log.logger.info(f"将{len(index_list)}个指数分配给3个线程处理")
-            
-            # 使用线程池执行
-            with ThreadPoolExecutor(max_workers=3) as executor:
-                futures = []
-                for i, chunk in enumerate(index_chunks):
-                    if chunk:  # 确保块不为空
-                        future = executor.submit(
-                            tsAStockIndex._process_index_daily_worker, 
-                            pro, db, chunk, today
-                        )
-                        futures.append(future)
-                        Log.logger.info(f"线程{i+1}开始处理{len(chunk)}个指数")
-                
-                # 等待所有线程完成
-                for i, future in enumerate(futures):
-                    try:
-                        future.result()
-                        Log.logger.info(f"线程{i+1}处理完成")
-                    except Exception as e:
-                        Log.logger.error(f"线程{i+1}执行出错: {str(e)}")
-            
-            Log.logger.info(f"第{round_num + 1}轮数据获取完成")
-            
-            # 如果需要执行多轮，在轮次之间添加适当延迟
-            if round_num < n - 1:
-                Log.logger.info("等待10秒后开始下一轮...")
-                time.sleep(10)
+        """指数日线 —— 按 trade_date 逐日抓(1次调用返回当天全部~8000个指数)。
+
+        【效率优化】原实现按 ts_code × 日期 双重循环, 每行一次 API 调用, 8000指数×数千日=百万级
+        调用, 全卡在 tushare 500次/分钟限流上, 跑几天才几百个代码。改为按交易日抓:
+        调用量从 (代码×日) 降到 (日), 全量回填 ~6300 个交易日按限速约十几分钟, 之后每天增量 1 次。
+        500/min 是硬天花板, 并发无益, 故顺序抓贴着限速即可。
+        注: 起点取全表最大交易日(增量)。若要给空代码补全历史, 把下方 start 改回 '20000104' 跑一次。
+        """
+        table = "astock_index_daily"
+        # 起点 = 全表最大交易日(增量续传); getLastDateAndDelete 会删掉当天以便完整重抓
+        lastdate = tsSHelper.getLastDateAndDelete(table, 'trade_date', ts_code='', db=db)
+        start = datetime.datetime.strptime(lastdate, "%Y%m%d")
+        end = datetime.datetime.now()
+        cur = start
+        ok_days = empty_days = 0
+        while cur <= end:
+            day = cur.strftime("%Y%m%d")
+            df = None
+            try_times = 0
+            while True:  # 单日抓取 + 限流重试
+                try:
+                    df = pro.index_daily(trade_date=day)  # 1 次拿当天全部指数
+                    break
+                except Exception as e:
+                    msg = str(e)
+                    if "每天最多访问" in msg or "每小时最多访问" in msg:
+                        Log.logger.warning(f"index_daily 触发时段访问上限, 终止: {msg}")
+                        return
+                    if "最多访问" in msg or "频率超限" in msg:
+                        time.sleep(15); continue
+                    if try_times < 10:
+                        try_times += 1
+                        Log.logger.error(f"index_daily {day} 异常, 重试#{try_times}: {msg}")
+                        time.sleep(15); continue
+                    Log.logger.error(f"index_daily {day} 重试耗尽, 跳过: {msg}")
+                    df = None; break
+            if df is not None and not df.empty:
+                df = df.drop_duplicates(subset=['ts_code', 'trade_date'], keep='first')
+                with tsAStockIndex._lock:
+                    DB.delete(f"DELETE FROM {table} WHERE trade_date='{day}'", db)  # 删当天再写, 幂等
+                    DB.safe_to_sql(df, table, db, index=False, if_exists='append', chunksize=5000)
+                ok_days += 1
+                if ok_days % 50 == 0:
+                    Log.logger.info(f"index_daily 进度: 已写 {ok_days} 个交易日, 当前 {day}, 本日 {len(df)} 条")
+            else:
+                empty_days += 1
+            cur += datetime.timedelta(days=1)
+            time.sleep(0.12)  # ≈8次/秒, 贴着 500/分钟天花板, 不触发限流
+        Log.logger.info(f"index_daily 完成: {start.date()}~{end.date()}, 有数据{ok_days}天, 空{empty_days}天")
 
     @tsMonitor
     def index_basic(pro,db):
