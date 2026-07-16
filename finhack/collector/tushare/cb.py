@@ -56,7 +56,7 @@ class tsCB:
                     DB.safe_to_sql(df, table+"_tmp", db, index=False, if_exists='append', chunksize=5000)
                     break
                 except Exception as e:
-                    if "没有接口" in str(e) or "访问权限" in str(e) or "没有权限" in str(e):
+                    if tsSHelper.is_permanent_error(e):
                         # 永久错误: token 无此接口权限, 重试再多次也没用 → 整表立即放弃(不再 10×重试 浪费时间)
                         Log.logger.error(api+": token 无此接口权限, 整表跳过: "+str(e).split('。')[0][:80])
                         return
@@ -110,7 +110,7 @@ class tsCB:
                     DB.safe_to_sql(df, table+"_tmp", db, index=False, if_exists='append', chunksize=5000)
                     break
                 except Exception as e:
-                    if "没有接口" in str(e) or "访问权限" in str(e) or "没有权限" in str(e):
+                    if tsSHelper.is_permanent_error(e):
                         # 永久错误: token 无此接口权限, 重试再多次也没用 → 整表立即放弃(不再 10×重试 浪费时间)
                         Log.logger.error(api+": token 无此接口权限, 整表跳过: "+str(e).split('。')[0][:80])
                         return

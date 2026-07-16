@@ -21,6 +21,20 @@ class tsSHelper:
     """
     
     @staticmethod
+    def is_permanent_error(e):
+        """是否为永久性错误(接口名错 / token 无权限 / 参数错)。这类错误重试再多次也不会成功,
+        应立即放弃整表, 不要走 10×重试 把流程拖成几小时。覆盖 tushare 的几种常见永久错误措辞。"""
+        msg = str(e)
+        return any(k in msg for k in [
+            "请指定正确的接口名",   # 接口名错或 token 无此接口
+            "您没有接口",           # 您没有接口(xxx)访问权限
+            "没有接口",             # 通用"没有接口"
+            "访问权限",             # ...访问权限
+            "没有权限",             # 通用无权限
+            "权限的具体详情",       # 权限不足提示的尾巴
+        ])
+
+    @staticmethod
     def check_database_directory(db_name):
         """
         检查数据库目录是否存在并且有写权限，如果不存在则创建
@@ -318,6 +332,10 @@ class tsSHelper:
                 Log.logger.info(f"{api}: 数据同步完成，共{len(data)}条记录")
                 return True
             except Exception as api_error:
+                if tsSHelper.is_permanent_error(api_error):
+                    # 永久错误(接口名错/token无权限/参数错): 重试/重调都没用, 整表立即放弃, 不重试不刷屏
+                    Log.logger.error(f"{api}: 接口名错误或无权限, 整表跳过(不重试): {str(api_error).split('。')[0][:80]}")
+                    return False
                 if "每天最多访问" in str(api_error) or "每小时最多访问" in str(api_error):
                     Log.logger.warning(f"{api}: 触发访问限制。\n{str(api_error)}")
                     return False
@@ -429,6 +447,10 @@ class tsSHelper:
                         DB.to_sql(df, table, db, 'append')
                     break
                 except Exception as e:
+                    if tsSHelper.is_permanent_error(e):
+                        # 永久错误(接口名错/token无权限): 立即放弃整表, 不走 10×重试
+                        Log.logger.error(api+": 接口名错误或无权限, 整表跳过(不重试): "+str(e).split('。')[0][:80])
+                        return
                     if "每分钟最多访问" in str(e):
                         Log.logger.warning(api+":触发限流，等待重试。\n"+str(e))
                         time.sleep(15)
@@ -480,6 +502,10 @@ class tsSHelper:
                     DB.to_sql(df, f"{table}_tmp", db, 'append')
                     break
                 except Exception as e:
+                    if tsSHelper.is_permanent_error(e):
+                        # 永久错误(接口名错/token无权限): 立即放弃整表, 不走 10×重试
+                        Log.logger.error(api+": 接口名错误或无权限, 整表跳过(不重试): "+str(e).split('。')[0][:80])
+                        return
                     if "每分钟最多访问" in str(e):
                         Log.logger.warning(api+":触发限流，等待重试。\n"+str(e))
                         time.sleep(15)
