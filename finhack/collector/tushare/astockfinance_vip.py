@@ -108,7 +108,16 @@ class tsAStockFinanceVIP:
             
             # 找出需要更新的期间（不在现有期间中的）
             periods_to_update = [p for p in all_periods if p not in existing_periods]
-            
+
+            # 【修死循环】排除"已尝试且为空"的老期间(>1年前): 空期间不写数据表, 不排除会每次重抓最老的空期间,
+            # 永远卡在那里(如 express 卡在 2000-2003 空 7 年)。近 1 年的空期间保留, 允许重试(财报可能晚出)。
+            cutoff = (datetime.datetime.now() - datetime.timedelta(days=365)).strftime('%Y%m%d')
+            attempted_empty = tsAStockFinanceVIP._attempted_empty_old_periods(table_name, cutoff, db)
+            if attempted_empty:
+                before = len(periods_to_update)
+                periods_to_update = [p for p in periods_to_update if p not in attempted_empty]
+                Log.logger.info(f"表 {table_name}: 跳过 {before - len(periods_to_update)} 个已尝试过的老空期间(<{cutoff})")
+
             if not periods_to_update:
                 Log.logger.info(f"表 {table_name} 的所有期间数据都已存在，无需更新")
                 return []
@@ -128,6 +137,36 @@ class tsAStockFinanceVIP:
             all_periods = tsAStockFinanceVIP.get_next_quarter_periods()
             return [all_periods[0]] if all_periods else []
     
+    @staticmethod
+    def _ensure_attempt_table(db='default'):
+        """已尝试期间追踪表 —— 修"空期间死循环": 返回空的期间不写数据表, 若不记下来, 每次都当它
+        "不存在"重新抓, 永远卡在最老的空期间(如 express 卡在 2000-2003)。"""
+        try:
+            DB.exec("CREATE TABLE IF NOT EXISTS _vip_period_attempts (table_name TEXT, end_date TEXT, had_data INTEGER, attempt_ts TEXT, PRIMARY KEY(table_name, end_date))", db)
+        except Exception as e:
+            Log.logger.warning(f"创建 _vip_period_attempts 失败: {e}")
+
+    @staticmethod
+    def _record_period_attempt(table_name, end_date, had_data, db='default'):
+        """记录一个期间已尝试过(had_data: 是否有数据)。INSERT OR REPLACE: 同期间重试会刷新状态。"""
+        tsAStockFinanceVIP._ensure_attempt_table(db)
+        try:
+            hd = 1 if had_data else 0
+            DB.exec(f"INSERT OR REPLACE INTO _vip_period_attempts(table_name,end_date,had_data,attempt_ts) VALUES('{table_name}','{end_date}',{hd},datetime('now'))", db)
+        except Exception as e:
+            Log.logger.warning(f"记录期间尝试失败 {table_name}/{end_date}: {e}")
+
+    @staticmethod
+    def _attempted_empty_old_periods(table_name, before_period, db='default'):
+        """返回"已尝试且为空、且期间早于 before_period"的列表 —— 这些老空期间永久跳过, 避免死循环。
+        近期(>= before_period)的空期间不跳过, 留给上层重试(财报数据可能晚出)。"""
+        tsAStockFinanceVIP._ensure_attempt_table(db)
+        try:
+            rows = DB.select_to_list(f"SELECT end_date FROM _vip_period_attempts WHERE table_name='{table_name}' AND had_data=0 AND end_date < '{before_period}'", db)
+            return [r['end_date'] for r in rows] if rows else []
+        except Exception:
+            return []
+
     @staticmethod
     def collect_vip_data(pro, api_name, table_name, fields, db='default', max_retries=3):
         """
@@ -186,9 +225,11 @@ class tsAStockFinanceVIP:
                             DB.safe_to_sql(df, table_name, db, index=False, if_exists='append', chunksize=5000)
                             Log.logger.info(f"{api_name} - 成功获取并保存期间 {period} 的数据，共 {len(df)} 条记录")
                             success_count += 1
+                            tsAStockFinanceVIP._record_period_attempt(table_name, period, True, db)
                         else:
                             Log.logger.warning(f"{api_name} - 期间 {period} 没有返回数据")
-                            success_count += 1  # 空数据也算成功，避免无限重试
+                            success_count += 1  # 空数据也算成功，避免无限重试(批内)
+                            tsAStockFinanceVIP._record_period_attempt(table_name, period, False, db)  # 记录空期间, 跨run跳过, 避免死循环
                         
                         # 避免请求过于频繁
                         time.sleep(0.5)
