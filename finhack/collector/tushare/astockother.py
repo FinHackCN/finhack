@@ -44,24 +44,30 @@ class tsAStockOther:
                         DB.safe_to_sql(df, table, db, index=False, if_exists='append', chunksize=5000)
                     break
                 except Exception as e:
-                    if "每天最多访问" in str(e) or "每小时最多访问" in str(e):
-                        Log.logger.warning(f"report_rc:日期{day}触发最多访问。\n{str(e)}")
+                    msg = str(e)
+                    if tsSHelper.is_permanent_error(e):
+                        Log.logger.error(f"report_rc: 永久错误, 整表跳过: {msg.split('。')[0][:80]}"); return
+                    # 小时/天级配额(如 tushare 的 "10次/小时"): 本时段配额已用完, 重试再多次也没用
+                    # → 立即放弃整表(原代码只认"每小时最多访问", 对不上实际措辞, 导致每天 10× 重试白磨几小时)
+                    if "次/小时" in msg or "次/天" in msg or "每小时最多访问" in msg or "每天最多访问" in msg:
+                        Log.logger.warning(f"report_rc: 触发小时/天级配额上限, 整表放弃(下次 run 续传): {msg.split('。')[0][:80]}")
                         return
-                    elif "每分钟最多访问" in str(e):
-                        Log.logger.warning(f"report_rc:日期{day}触发限流，等待重试。\n{str(e)}")
-                        time.sleep(15)
-                        continue
+                    # 分钟级限流(如 "1次/分钟"): 等 60 秒到下一分钟槽位再试, 限 5 次防死循环
+                    if "次/分钟" in msg or "每分钟最多访问" in msg or "频率超限" in msg:
+                        try_times += 1
+                        if try_times > 5:
+                            Log.logger.warning(f"report_rc: 限流重试 {try_times} 次仍失败(疑配额耗尽), 整表放弃: {msg.split('。')[0][:60]}"); return
+                        time.sleep(60); continue
+                    # 其它异常: 有限重试 10 次
+                    if try_times < 10:
+                        try_times += 1
+                        Log.logger.error(f"report_rc:日期{day}异常, 重试#{try_times}: {msg.split('。')[0][:80]}")
+                        time.sleep(15); continue
                     else:
-                        if try_times < 10:
-                            try_times += 1
-                            Log.logger.error(f"report_rc:日期{day}函数异常，等待重试。\n{str(e)}")
-                            time.sleep(15)
-                            continue
-                        else:
-                            info = traceback.format_exc()
-                            alert.send('report_rc', f'日期{day}函数异常', str(info))
-                            Log.logger.error(info)  
-                            break  # 跳过这一天，继续下一天
+                        info = traceback.format_exc()
+                        alert.send('report_rc', f'日期{day}函数异常', str(info))
+                        Log.logger.error(info)
+                        break  # 跳过这一天，继续下一天
             
             # 移动到下一天
             current_date += datetime.timedelta(days=1)
