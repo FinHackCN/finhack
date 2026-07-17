@@ -178,6 +178,9 @@ class tsAStockOther:
                         df=pro.cyq_chips(ts_code=ts_code, start_date=lastdate, end_date=today)
                         break
                     except Exception as e:
+                        if tsSHelper.is_no_data_error(e):
+                            # 该股票无筹码数据(永久), 跳过这只继续下一只 —— 不重试, 也别 return(会误杀整表)
+                            break
                         if tsSHelper.is_permanent_error(e):
                             # 永久错误: token 无此接口权限, 整表立即放弃(否则 5000股×10×15s 重试 = 几十小时)
                             Log.logger.error(f"cyq_chips: token 无此接口权限, 整表跳过(不重试): {str(e).split('。')[0][:80]}"); return

@@ -35,6 +35,13 @@ class tsSHelper:
         ])
 
     @staticmethod
+    def is_no_data_error(e):
+        """是否为"该项无数据"错误(如某只股票无筹码分布/财报)。与 is_permanent_error 区别:
+        这不是整表问题, 而是"单个标的没数据" —— 应跳过这一项继续下一项, 而不是放弃整表、也不该重试。"""
+        msg = str(e)
+        return any(k in msg for k in ["指定数据不存在", "数据不存在", "无数据"])
+
+    @staticmethod
     def check_database_directory(db_name):
         """
         检查数据库目录是否存在并且有写权限，如果不存在则创建
