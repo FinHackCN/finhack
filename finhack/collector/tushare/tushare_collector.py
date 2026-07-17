@@ -675,9 +675,10 @@ class TushareCollector:
             
             # 暂时不获取的数据
             # broker_recommend
-            # 【已启用】cyq_chips 筹码分布: rename bug 已修(SQLite 可用)。注意: 全量重建模式,
-            # 每次运行 ~5000股×6000行≈30M行 + 5000次API调用(~10分钟), 非增量。如太慢可改增量。
-            self.mTread(tsAStockOther, 'cyq_chips')
+            # 【禁用】cyq_chips 筹码分布: rename bug 已修、增量也改好, 但 endpoint 强制按股票逐个抓,
+            # 5000股×~3.5s ≈ 5小时/轮(每天都这么久), 且喂的是 finhack-dc 的 DB。性价比低, 暂关。
+            # 需要时再开(届时可并行化+加索引, 降到~30min)。
+            # self.mTread(tsAStockOther, 'cyq_chips')
             
             return True
         except Exception as e:
