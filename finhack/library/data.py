@@ -927,11 +927,10 @@ class DataInterface:
             # 智能判断：决定使用Parquet还是CSV
             # Parquet适合：代码数量多（>100）、单年份（大文件一次性读取高效）
             # CSV适合：代码数量少（<=100）、任意年份（日期前缀预过滤已大幅优化）
-            use_parquet = (
-                PARQUET_AVAILABLE and
-                len(years) == 1 and  # 单年份
-                len(codes) > 100  # 代码数量较多时Parquet更高效
-            )
+            # flat parquet 是完整源(DB 直生), 优先用它(不再限制单年/>100 代码)。
+            # 原来 single-code/跨年 走 per-code CSV, 而 CSV 可能部分缺失(如 2026 只有1-3月),
+            # 导致查 4-6 月拿到不完整数据。改用 parquet 为主路径可避免。
+            use_parquet = PARQUET_AVAILABLE
 
             logger.debug(f"[CodeBased] use_parquet={use_parquet}, 年份={years}, 代码数={len(codes)}")
 
@@ -988,10 +987,21 @@ class DataInterface:
                 # 去重：防止同一(time, code)重复（期货跨年后缀统一可能导致）
                 result = result.drop_duplicates(subset=['time', 'code'], keep='last')
                 result.set_index(['time', 'code'], inplace=True)
-                return result
-            else:
-                return pd.DataFrame()
-                
+                if not result.empty:
+                    return result
+                # CSV 有数据但不在查询区间(如 2026 只有1-3月而查4-6月) → 落到下面 parquet 兜底
+            # 【兜底】CSV 无数据 / 不在区间 / 缺失 → 从 flat parquet 读(完整源)
+            # _try_load_parquet_cache 内部已按 codes+时间过滤并建好(time,code)索引, 直接返回即可
+            if PARQUET_AVAILABLE:
+                try:
+                    fb = self._try_load_parquet_cache(market, freq, start_dt, end_dt, codes, fields)
+                    if fb is not None and not fb.empty:
+                        logger.info(f"[CodeBased] CSV 无数据/不在区间, 兜底从 flat parquet 读 {len(fb)} 条 (market={market})")
+                        return fb
+                except Exception as fe:
+                    logger.warning(f"[CodeBased] parquet 兜底读取失败: {fe}")
+            return pd.DataFrame()
+
         except Exception as e:
             logger.error(f"加载codebased K线数据失败: {e}")
             return pd.DataFrame()
