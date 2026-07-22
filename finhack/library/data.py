@@ -1711,6 +1711,73 @@ class DataInterface:
         
         return result_df
     
+    def save_factors(self, df_factors: pd.DataFrame, factor_list: List[str],
+                     market: str, freq: str, factor_type: str = 'matrix',
+                     max_workers: int = 8, buffer_size: int = 50) -> bool:
+        """保存因子数据到磁盘，与 get_factors 读取格式严格对称。
+
+        matrix: {factors}/matrix/{market}/{freq}/{year}/{code}/{factor_name}.pkl
+                每个 pkl 为一个 pd.Series，index=time(datetime, name='time')，value=因子值
+        vector: {factors}/vector/{market}/{freq}/{factor_name}.pkl （整表，含 time/code 列）
+
+        Args:
+            df_factors: MultiIndex(time, code) 的 DataFrame，需包含 factor_list 中的列
+            factor_list: 要保存的因子名列表
+            market/freq: 市场与频率
+            factor_type: 'matrix' 或 'vector'
+        Returns:
+            bool: 是否保存成功
+        """
+        try:
+            if df_factors is None or df_factors.empty:
+                logger.warning("save_factors: 输入为空，跳过保存")
+                return False
+            if not isinstance(df_factors.index, pd.MultiIndex) or \
+               'time' not in df_factors.index.names or 'code' not in df_factors.index.names:
+                logger.error(f"save_factors: 索引需为 MultiIndex(time, code)，实际 {getattr(df_factors.index, 'names', None)}")
+                return False
+
+            # 重建索引确保 time 为 datetime（与读取端 tz 处理对称：写无 tz）
+            times = pd.to_datetime(df_factors.index.get_level_values('time'))
+            codes = df_factors.index.get_level_values('code')
+            df = df_factors.set_axis(
+                pd.MultiIndex.from_arrays([times, codes], names=['time', 'code']))
+
+            if factor_type == 'vector':
+                base = os.path.join(self.factors_data_dir, 'vector', market, freq)
+                os.makedirs(base, exist_ok=True)
+                for factor_name in factor_list:
+                    if factor_name not in df.columns:
+                        continue
+                    df[[factor_name]].reset_index().to_pickle(
+                        os.path.join(base, f"{factor_name}.pkl"))
+                logger.info(f"save_factors: vector 保存完成 {factor_list}")
+                return True
+
+            # matrix: 按 (year, code, factor) 写 pkl
+            count = 0
+            for factor_name in factor_list:
+                if factor_name not in df.columns:
+                    logger.warning(f"save_factors: 因子 {factor_name} 不在列中，跳过")
+                    continue
+                # 按 code 分组，每组为一个 Series(index=time)；再按 year 分文件
+                for code, grp in df[factor_name].groupby(level='code'):
+                    s = grp.droplevel('code')
+                    s.name = factor_name
+                    for year, year_s in s.groupby(s.index.year):
+                        if year_s.empty:
+                            continue
+                        save_dir = os.path.join(self.factors_data_dir, 'matrix',
+                                                market, freq, str(year), str(code))
+                        os.makedirs(save_dir, exist_ok=True)
+                        year_s.to_pickle(os.path.join(save_dir, f"{factor_name}.pkl"))
+                        count += 1
+            logger.info(f"save_factors: matrix 保存完成, 因子={factor_list}, 写入文件数={count}")
+            return True
+        except Exception as e:
+            logger.exception(f"save_factors 失败: {e}")
+            return False
+
     def _load_matrix_factors(self, factor_names: List[str], codes: List[str],
                            market: str, freq: str, start_date: str, end_date: str) -> pd.DataFrame:
         """加载matrix格式因子数据"""
