@@ -69,13 +69,8 @@ def covariance(x, y, window=10):
     if type(y)==type(()):
         y=y[0]
  
-    grouped=x.groupby('code')
-    cov_all=[]
-    for name,group in grouped:
-        cov=group.rolling(window).cov(y.loc[name])
-        cov_all.append(cov)
-    df=pd.concat(cov_all)
-    return df
+    df=pd.DataFrame({'x':x,'y':y}).sort_index()
+    return df.groupby('code', group_keys=False).apply(lambda g: g['x'].rolling(window).cov(g['y']))
 def corr(x, y, window=10):
     return correlation(x, y, window)
 def correlation(x, y, window=10):
@@ -85,14 +80,8 @@ def correlation(x, y, window=10):
     if type(y)==type(()):
         y=y[0]
         
-    df=pd.DataFrame()
-    grouped=x.groupby('code')
-    corr_all=[]
-    for name,group in grouped:
-        corr=group.rolling(window).corr(y.loc[name])
-        corr_all.append(corr)
-    df=pd.concat(corr_all)
-    return df
+    df=pd.DataFrame({'x':x,'y':y}).sort_index()
+    return df.groupby('code', group_keys=False).apply(lambda g: g['x'].rolling(window).corr(g['y']))
     
 def log(df):
     df=np.log(df)
@@ -199,10 +188,13 @@ def delta(df, period=1):
     return df
 
 
-#此函数应该是会存在未来数据
+#横截面标准化：Alpha101 定义 scale(x, a) = x * a / sum(|x|)，sum 在横截面(同一时刻所有股票)上进行
 def scale(df, k=1):
-    #return df.mul(k).div(np.abs(df).sum())
-    return df/1000
+    if type(df)==type(()):
+        df=df[0]
+    # 用 transform 保持原索引结构，避免 groupby.apply 引入额外层级；sum=0 时置 0
+    abs_sum = df.groupby('time').transform(lambda x: np.abs(x).sum())
+    return df.mul(k).div(abs_sum.replace(0, np.nan)).fillna(0)
 
 def prod(df, window=10):
     return product(df,window)
@@ -819,7 +811,9 @@ class alphaEngine():
 
             time_ranges = factorManager.timeSplit(start_date, end_date, freq)
             Log.logger.info(f"时间范围拆分为 {len(time_ranges)} 个区间: {time_ranges}")
-                
+
+            all_results = []  # 收集各时间区间的计算结果，用于跨区间合并
+
             # 遍历时间区间
             for i, (range_start, range_end) in enumerate(time_ranges):
                 Log.logger.info(f"处理Alpha时间区间 [{i+1}/{len(time_ranges)}]: {range_start} - {range_end}")
@@ -866,8 +860,8 @@ class alphaEngine():
                     Log.logger.debug(f"Alpha数据样本:\n{df.head()}")
 
                 if df.empty:
-                    Log.logger.warning(f"Alpha数据为空，无法计算: {alpha_name}")
-                    return {"name": alpha_name, "result": pd.DataFrame()}
+                    Log.logger.warning(f"Alpha数据为空，跳过该区间: {alpha_name} [{range_start}-{range_end}]")
+                    continue
                 
                 try:
                     Log.logger.debug("开始处理Alpha公式中的列名替换")
@@ -1060,15 +1054,22 @@ class alphaEngine():
                     Log.logger.error(f"因子名: {alpha_name}, 数据量: {len(result_df)}")
                     traceback.print_exc()
                 
-                Log.logger.info(f"计算Alpha因子 {alpha_name} 成功，最终数据量: {len(result_df)}")
+                Log.logger.info(f"计算Alpha因子 {alpha_name} 区间 [{range_start}-{range_end}] 成功，数据量: {len(result_df)}")
                 if len(result_df) > 0:
                     Log.logger.debug(f"Alpha结果数据样本:\n{result_df.head()}")
-                
-                computation_time = time.time() - t1
-                Log.logger.info(f"Alpha因子 {alpha_name} 计算耗时: {computation_time:.2f} 秒")
-                
-                return {"name": alpha_name, "result": result_df}
-                
+
+                all_results.append(result_df)
+
+            # 所有时间区间处理完毕，汇总结果
+            computation_time = time.time() - t1
+            if all_results:
+                final_result = pd.concat(all_results)
+                Log.logger.info(f"Alpha因子 {alpha_name} 全部区间完成: {len(all_results)} 个区间, 合并后数据量: {len(final_result)}, 总耗时: {computation_time:.2f} 秒")
+                return {"name": alpha_name, "result": final_result}
+            else:
+                Log.logger.warning(f"Alpha因子 {alpha_name} 所有区间均无有效结果, 总耗时: {computation_time:.2f} 秒")
+                return {"name": alpha_name, "result": pd.DataFrame()}
+
         except Exception as e:
             Log.logger.error(f"计算Alpha因子 {alpha_item['name']} 失败: {str(e)}")
             Log.logger.error(f"Alpha项信息: {alpha_item}")
