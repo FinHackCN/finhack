@@ -859,6 +859,12 @@ class alphaEngine():
                 if len(df) > 0:
                     Log.logger.debug(f"Alpha数据样本:\n{df.head()}")
 
+                # 防御：去除重复 (time,code) 行（多市场数据质量参差；get_factors 读取时已去重，mock/其他来源未必）
+                if isinstance(df.index, pd.MultiIndex) and df.index.duplicated().any():
+                    _dup = int(df.index.duplicated().sum())
+                    df = df[~df.index.duplicated(keep='last')]
+                    Log.logger.debug(f"去除重复索引行 {_dup} 条")
+
                 if df.empty:
                     Log.logger.warning(f"Alpha数据为空，跳过该区间: {alpha_name} [{range_start}-{range_end}]")
                     continue
