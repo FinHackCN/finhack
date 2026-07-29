@@ -18,6 +18,17 @@ import finhack.library.log as Log
 
 class factorManager:
     @staticmethod
+    def loadFactorsByCodeChunk(matrix_list=[], code_list=[], market='cn_stock', freq='1d',
+                               start_date="20200101", end_date="20201231", chunk_size=50):
+        """按 code chunk 迭代加载因子（1m 等大数据集用，避免全量进内存）。
+        返回生成器，每 chunk 一个 DataFrame（索引 time,code）。"""
+        import glob
+        di = get_data_interface()
+        codes = code_list if code_list else None
+        yield from di._iter_matrix_factors_by_code_chunk(
+            matrix_list, codes, market, freq, start_date, end_date, chunk_size)
+
+    @staticmethod
     def inspectFactor(factor_name, factor_type="matrix", market='cn_stock', freq='1m', start_date=None, end_date=None, only_exists=False):
         """
         检查因子的基本信息，包括开始日期、结束日期、文件大小和代码数量
@@ -53,9 +64,18 @@ class factorManager:
             if end_date is not None:
                 end_date = f"{end_date[:4]}-{end_date[4:6]}-{end_date[6:8]}"
             
+            # only_exists 时走文件存在性检查（避免 1m 全市场全量加载 OOM）
+            if only_exists:
+                import glob
+                for pat in (f"{factor_name}.pkl", f"{factor_name}_0.pkl"):
+                    if glob.glob(os.path.join(DATA_DIR, 'factors', factor_type, market, freq, '*', '*', pat)):
+                        result["exists"] = True
+                        return result
+                return result
+
             # 获取数据接口
             data_interface = get_data_interface()
-            
+
             try:
                 # 尝试获取因子数据以检查是否存在
                 factor_df = data_interface.get_factors(
