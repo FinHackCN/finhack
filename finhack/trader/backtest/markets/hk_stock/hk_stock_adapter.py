@@ -268,11 +268,12 @@ class HKStockMarketAdapter(BaseMarket):
 
         # 确定是否启用随机收市
         random_close_time = None
-        if trade_date >= date(2021, 10, 29) and self.random_close_enabled:
+        trade_day = trade_date.date() if isinstance(trade_date, datetime) else trade_date
+        if trade_day >= date(2021, 10, 29) and self.random_close_enabled:
             # 计算随机收市时间（16:08-16:10之间）
             seed = int(hashlib.md5(str(trade_date).encode()).hexdigest(), 16)
             random_seconds = seed % 121  # 0-120秒
-            random_close_time = time(16, 8, 0) + timedelta(seconds=random_seconds)
+            random_close_time = (datetime.combine(trade_day, time(16, 8, 0)) + timedelta(seconds=random_seconds)).time()
 
         if frequency == '1d':
             # 日频事件

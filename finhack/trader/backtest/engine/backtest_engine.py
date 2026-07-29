@@ -3067,9 +3067,17 @@ class BacktestEngine:
 
         try:
             # 尝试多个可能的路径
-            possible_paths = [
+            ref_paths = []
+            try:
+                from finhack.library.data import get_data_interface
+                ref_paths.append(os.path.join(get_data_interface().reference_data_dir, market, f'{market}_calendar.csv'))
+            except Exception:
+                pass
+            possible_paths = ref_paths + [
                 # demo_project 路径
                 os.path.join(self.context.get('project_path', ''), 'data', 'market', 'reference', market, f'{market}_calendar.csv'),
+                # cwd 路径
+                os.path.join(os.getcwd(), 'demo_project', 'data', 'market', 'reference', market, f'{market}_calendar.csv'),
                 # mysql_project 路径
                 os.path.join(os.path.dirname(self.context.get('project_path', '')), 'mysql_project', 'data', 'market', 'reference', market, f'{market}_calendar.csv'),
             ]

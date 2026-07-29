@@ -1886,6 +1886,67 @@ class DataInterface:
         logger.info(f"Successfully loaded factors: {existing_cols}, missing: {list(missing_cols)}")
         return result_df[factor_names]
     
+    def _iter_matrix_factors_by_code_chunk(self, factor_names: List[str], codes: List[str],
+                                            market: str, freq: str, start_date: str, end_date: str,
+                                            chunk_size: int = 50):
+        """按 code chunk 迭代加载 matrix 因子（1m 等大数据集用，避免全量进内存）。
+        每个 chunk yield 一个 DataFrame（索引 time,code）。逻辑与 _load_matrix_factors 一致，
+        仅外层按 code 分批。"""
+        import glob
+        start_date, end_date = self._normalize_dates(start_date, end_date)
+        start_dt = pd.to_datetime(start_date)
+        end_dt = pd.to_datetime(end_date)
+        start_year = start_dt.year
+        end_year = end_dt.year
+
+        target_codes = codes
+        if target_codes is None:
+            sl = self.get_stock_list(market=market)
+            target_codes = sl['code'].tolist() if (sl is not None and not sl.empty) else []
+        if not target_codes:
+            return
+
+        for i in range(0, len(target_codes), chunk_size):
+            chunk_codes = target_codes[i:i + chunk_size]
+            chunk_data = []
+            for year in range(start_year, end_year + 1):
+                base = os.path.join(self.factors_data_dir, 'matrix', market, freq, str(year))
+                if not os.path.exists(base):
+                    continue
+                for code in chunk_codes:
+                    stock_path = os.path.join(base, code)
+                    if not os.path.exists(stock_path):
+                        continue
+                    for fn in factor_names:
+                        factor_file = None
+                        for ff in [os.path.join(stock_path, f"{fn}.pkl"),
+                                   os.path.join(stock_path, f"{fn}_0.pkl")]:
+                            if os.path.exists(ff):
+                                factor_file = ff
+                                break
+                        if factor_file is None:
+                            continue
+                        try:
+                            with open(factor_file, 'rb') as f:
+                                s = pickle.load(f)
+                            if isinstance(s, pd.Series) and not s.empty:
+                                if hasattr(s.index, 'tz') and s.index.tz is not None:
+                                    s.index = s.index.tz_localize(None)
+                                else:
+                                    s.index = pd.to_datetime(s.index)
+                                fs = s[(s.index >= start_dt) & (s.index <= end_dt)]
+                                if not fs.empty:
+                                    df = fs.to_frame(name=fn)
+                                    df['code'] = code
+                                    chunk_data.append(df.reset_index().set_index(['time', 'code']))
+                        except Exception as e:
+                            logger.warning(f"读取或处理因子文件失败 {factor_file}: {e}")
+            if chunk_data:
+                df = pd.concat(chunk_data, axis=0, sort=False)
+                if df.index.duplicated().any():
+                    df = df.groupby(level=[0, 1]).last()
+                yield df
+
     def _load_vector_factors(self, factor_names: List[str], codes: List[str],
                            market: str, freq: str, start_date: str, end_date: str) -> pd.DataFrame:
         """加载vector格式因子数据"""
