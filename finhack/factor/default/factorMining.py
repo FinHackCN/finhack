@@ -1,366 +1,190 @@
-import sys
-import os
+# -*- coding: utf-8 -*-
+"""
+因子挖掘（重写版，market-aware）。
+
+与旧版差异：
+  - 取数：factorManager.loadFactors / list_factors（替代 getFactors/getFactorsList）
+  - 字段：(time, code) 索引（无 ts_code/trade_date 双轨）
+  - 公式计算：alphaEngine.calc / get_df（新接口，market/code_list 参数化）
+  - 结果：MySQL factors_mining（兼容）+ parquet 降级
+  - market 参数贯穿
+
+gplearn 的遗传编程 + LLM(gpt/kimi) 生成逻辑保留，仅适配新数据契约。
+"""
 import time
-import random
-import pandas as pd
 import numpy as np
-import gplearn as gp
-from gplearn.genetic import SymbolicTransformer
+import pandas as pd
 
-from finhack.library.config import Config
+try:
+    import gplearn as gp
+    from gplearn.genetic import SymbolicTransformer
+    _HAS_GPLEARN = True
+except Exception:
+    _HAS_GPLEARN = False
+
 from finhack.library.db import DB
-
 import finhack.factor.default.alphaEngine as alphaFunc
 from finhack.factor.default.alphaEngine import alphaEngine
 from finhack.factor.default.factorAnalyzer import factorAnalyzer
 from finhack.factor.default.factorManager import factorManager
 from runtime.constant import *
-from finhack.library.ai import AI
+import finhack.library.log as Log
 
+
+def _db_exec(sql, conn='finhack'):
+    try:
+        DB.exec(sql, conn)
+        return True
+    except Exception as e:
+        Log.logger.warning(f"DB exec 降级({conn}): {e}")
+        return False
 
 
 class factorMining():
 
-    def kimi(prompt,model,stock_list):
-        return factorMining.openai(prompt,model,stock_list,'kimi')
-        pass
+    # ============ LLM 挖掘（gpt/kimi）============
+    @staticmethod
+    def kimi(prompt, model, code_list, market='cn_stock', freq='1d'):
+        return factorMining.openai(prompt, model, code_list, market, freq, 'kimi')
 
-    def gpt(prompt,model,stock_list):
-        return factorMining.openai(prompt,model,stock_list,'gpt')
-        pass
+    @staticmethod
+    def gpt(prompt, model, code_list, market='cn_stock', freq='1d'):
+        return factorMining.openai(prompt, model, code_list, market, freq, 'gpt')
 
-    def openai(prompt,model,stock_list,s="gpt"):
-        
-        flist=factorManager.getFactorsList()+['open','high','low','close','amount','volume','vwap','returns']
-        
+    @staticmethod
+    def openai(prompt, model, code_list, market='cn_stock', freq='1d', s='gpt',
+               start_date='', end_date=''):
+        from finhack.library.ai import AI
+        # 可用字段 = 已入库因子 + 基础 OHLCV 派生
+        flist = (factorManager.list_factors(market=market, freq=freq)
+                 + ['open', 'high', 'low', 'close', 'amount', 'volume', 'vwap', 'returns'])
+
         while True:
             print("本批次alpha公式生成中...\n")
-            prompt=AI.load_prompt('autoalpha')
-            if s=="gpt":
-                res=AI.ChatGPT(prompt,model)
-            elif s=="kimi":
-                res=AI.Kimi(prompt,model)
-            lines = res.splitlines()
-            alphas = [line for line in lines if '$' in line and '(' in line]
-            # 遍历列表，逐行输出
-            
+            full_prompt = AI.load_prompt('autoalpha')
+            res = AI.ChatGPT(full_prompt, model) if s == 'gpt' else AI.Kimi(full_prompt, model)
+            alphas = [ln for ln in res.splitlines() if '$' in ln and '(' in ln]
             print("\n".join(alphas))
-            print("\n已自动生成如上alpha公式，正在对有效因子进行分析...\n")
-            
+            print("\n已自动生成如上alpha公式，正在分析...\n")
+
             for alpha in alphas:
-                col_list=alphaEngine.get_col_list(alpha)
-                
-                valid=True
-                for col in col_list:
-                    if col[1:] not in flist:
-                        valid=False
-                        break
-                if not valid:
+                col_list = alphaEngine.get_col_list(alpha)
+                if any(c[1:] not in flist for c in col_list):
                     continue
-                
-                
-                diff_date,max_date,df_check=alphaEngine.get_df(formula=alpha,df=pd.DataFrame(),name='alpha',check=False,ignore_notice=True,stock_list=stock_list,diff=False)
-                df_alpha=alphaEngine.calc(formula=alpha,df=df_check,name='alpha',check=False,save=False,ignore_notice=True)
-                if df_alpha.empty:
-                    #print('err')
+                # 准备底数据 + 计算
+                df_check = alphaEngine.get_df(formula=alpha, code_list=code_list,
+                                              market=market, freq=freq, start_date=start_date, end_date=end_date)
+                if df_check.empty:
                     continue
-                
-                df_analys=df_check.copy()
-                df_analys['alpha']=df_alpha
-                df_analys=df_analys[['alpha']]
-                df_base=factorManager.getFactors(factor_list=['open','close'],cache=True)
+                df_alpha = alphaEngine.calc(formula=alpha, df=df_check.copy(), market=market, freq=freq)
+                if df_alpha is None or df_alpha.empty:
+                    continue
+                df_analys = df_check[['open', 'close']].copy()
+                df_analys['alpha'] = df_alpha
+                factorAnalyzer.analys('alpha', df=df_analys, formula=alpha, source='chatgpt',
+                                      table='factors_mining', ignore_error=True,
+                                      market=market, freq=freq, start_date=start_date, end_date=end_date)
 
-                merged_df = df_analys.merge(df_base, left_index=True, right_index=True, how='left')
-
-                factorAnalyzer.analys('alpha',df=merged_df,formula=alpha,source='chatgpt',table='factors_mining',ignore_error=True)
-                #print("\n")
-
-
-
-    def gplearn(train,label,_df_tmp,df_check,source='gplearn'):
-        df_tmp=_df_tmp
+    # ============ 遗传编程挖掘（gplearn）============
+    @staticmethod
+    def gplearn(train, label, df_tmp, df_check, source='gplearn',
+                market='cn_stock', freq='1d', start_date='', end_date=''):
+        if not _HAS_GPLEARN:
+            Log.logger.error("gplearn 未安装，无法运行因子挖掘")
+            return
 
         init_function = ['add', 'sub', 'mul', 'div', 'sqrt', 'abs', 'sin', 'cos', 'tan']
 
-        def trans_xy(xy,key='x'):
-        
-            status=True
-            
-            if(len(xy)<100):
-                status=False
-                return status,xy
-            if not 'numpy' in str(type(xy)):
-                xy=np.zeros(len(xy))
-                status=False
-                return status,xy
+        def trans_xy(xy, key='x'):
+            """gplearn 的 numpy 数组 → 带 (time,code) 索引的 Series，供 alphaFunc 使用"""
+            status = True
+            if len(xy) < 100:
+                return False, xy
+            if 'numpy' not in str(type(xy)):
+                return False, np.zeros(len(xy))
             if 'numpy.memmap' in str(type(xy)):
-                xy=np.array(xy)   
-                
-            if xy.max()==xy.min():
-                xy=np.zeros(len(xy))
-                status=False
-                return status,xy
-                
-            if(type(xy)==type(np.ndarray([]))):
-                df_xy=df_tmp.copy()
-                df_xy[key]=xy
-                xy=df_xy
-                xy=xy.set_index(['ts_code','trade_date'])
-                xy=xy[key]   
-            return status,xy
-            
-        def check_window(window):
-            status=True
-            if window.max()==window.min() and window.mean()>0:
-                window = int(window[0])
-            else:
-                status=False
-                window=np.zeros(len(window))
-            return status,window
-        
-        
-        def _correlation(x,y):
-            # status,window=check_window(window)
-            # if not status:
-            #     return window
-            status,x=trans_xy(x,'x')
-            if not status:
-                return x
-            status,y=trans_xy(y,'y')
-            if not status:
-                return y
-            df=alphaFunc.correlation(x,y)
-            return np.nan_to_num(df.values)
-        
-        
-        
-        def _covariance(x,y):
-            # status,window=check_window(window)
-            # if not status:
-            #     return window
-            status,x=trans_xy(x,'x')
-            if not status:
-                return x
-            status,y=trans_xy(y,'y')
-            if not status:
-                return y
-            df=alphaFunc.covariance(x,y)
-            return np.nan_to_num(df.values)
-            
-        
-        def _rank(x):
-            status,x=trans_xy(x,'x')
-            if not status:
-                return x
-            df=alphaFunc.rank(x)
-            return np.nan_to_num(df.values)    
-         
-        def _rank(x):
-            status,x=trans_xy(x,'x')
-            if not status:
-                return x
-            df=alphaFunc.rank(x)
-            return np.nan_to_num(df.values)       
-            
-        def _log(x):
-            if x.max()==x.min() and x.mean()==0:
-                return np.zeros(len(x))
-            status,x=trans_xy(x,'x')
-            if not status:
-                return x
-            df=alphaFunc.log(x)
-            return np.nan_to_num(df.values)   
-        
-        def _ts_sum(x):
-            # status,window=check_window(window)
-            # if not status:
-            #     return window
-            status,x=trans_xy(x,'x')
-            if not status:
-                return x
-            df=alphaFunc.ts_sum(x)
-            return np.nan_to_num(df.values)
-            
-        def _delta(x):
-            status,x=trans_xy(x,'x')
-            if not status:
-                return x
-            df=alphaFunc.delta(x)
-            return np.nan_to_num(df.values)   
-            
-        def _product(x):
-            status,x=trans_xy(x,'x')
-            if not status:
-                return x
-            df=alphaFunc.product(x)
-            return np.nan_to_num(df.values)  
-            
-        def _ts_min(x):
-            status,x=trans_xy(x,'x')
-            if not status:
-                return x
-            df=alphaFunc.ts_min(x)
-            return np.nan_to_num(df.values)  
-            
-            
-        def _ts_max(x):
-            status,x=trans_xy(x,'x')
-            if not status:
-                return x
-            df=alphaFunc.ts_max(x)
-            return np.nan_to_num(df.values)  
-            
-        def _delay_1(x):
-            status,x=trans_xy(x,'x')
-            if not status:
-                return x
-            df=alphaFunc.delay(x,1)
-            return np.nan_to_num(df.values)      
-         
-        def _delay_3(x):
-            status,x=trans_xy(x,'x')
-            if not status:
-                return x
-            df=alphaFunc.delay(x,3)
-            return np.nan_to_num(df.values)  
-        
-        def _delay_5(x):
-            status,x=trans_xy(x,'x')
-            if not status:
-                return x
-            df=alphaFunc.delay(x,5)
-            return np.nan_to_num(df.values)  
-        
-        def _delay_7(x):
-            status,x=trans_xy(x,'x')
-            if not status:
-                return x
-            df=alphaFunc.delay(x,7)
-            return np.nan_to_num(df.values)  
-            
-        def _stddev(x):
-            status,x=trans_xy(x,'x')
-            if not status:
-                return x
-            df=alphaFunc.stddev(x)
-            return np.nan_to_num(df.values)     
-          
-        def _ts_rank(x):
-            status,x=trans_xy(x,'x')
-            if not status:
-                return x
-            df=alphaFunc.ts_rank(x)
-            return np.nan_to_num(df.values)    
-            
-        def _ts_argmax(x):
-            status,x=trans_xy(x,'x')
-            if not status:
-                return x
-            df=alphaFunc.ts_argmax(x)
-            return np.nan_to_num(df.values)  
-            
-        def _ts_argmin(x):
-            status,x=trans_xy(x,'x')
-            if not status:
-                return x
-            df=alphaFunc.ts_argmin(x)
-            return np.nan_to_num(df.values)  
-            
-        def _lowday(x):
-            status,x=trans_xy(x,'x')
-            if not status:
-                return x
-            df=alphaFunc.lowday(x)
-            return np.nan_to_num(df.values)  
-            
-        def _highday(x):
-            status,x=trans_xy(x,'x')
-            if not status:
-                return x
-            df=alphaFunc.highday(x)
-            return np.nan_to_num(df.values) 
-           
-        def _sumac(x):
-            status,x=trans_xy(x,'x')
-            if not status:
-                return x
-            df=alphaFunc.sumac(x)
-            return np.nan_to_num(df.values)    
-           
-        function_set = [
-            gp.functions.make_function(function = _covariance,name = 'covariance',arity = 2),
-            gp.functions.make_function(function = _correlation,name = 'correlation',arity = 2),
-            gp.functions.make_function(function = _rank,name = 'rank',arity = 1),
-            gp.functions.make_function(function = _log,name = 'log',arity = 1),
-            gp.functions.make_function(function = alphaFunc.min,name = 'min',arity = 2),
-            gp.functions.make_function(function = alphaFunc.max,name = 'max',arity = 2),
-            gp.functions.make_function(function = _ts_sum,name = 'ts_sum',arity = 1),
-            gp.functions.make_function(function = _delta,name = 'delta',arity = 1),
-            gp.functions.make_function(function = _product,name = 'product',arity = 1),
-            gp.functions.make_function(function = _ts_min,name = 'ts_min',arity = 1),
-            gp.functions.make_function(function = _ts_max,name = 'ts_max',arity = 1),
-            gp.functions.make_function(function = _delay_1,name = 'delay_1',arity = 1),
-            gp.functions.make_function(function = _delay_3,name = 'delay_3',arity = 1),
-            gp.functions.make_function(function = _delay_5,name = 'delay_5',arity = 1),
-            gp.functions.make_function(function = _delay_7,name = 'delay_7',arity = 1),
-            gp.functions.make_function(function = _ts_rank,name = 'ts_rank',arity = 1),
-            gp.functions.make_function(function = _stddev,name = 'stddev',arity = 1),
-            gp.functions.make_function(function = _ts_argmax,name = 'ts_argmax',arity = 1),
-            gp.functions.make_function(function = _ts_argmin,name = 'ts_argmin',arity = 1),
-            gp.functions.make_function(function = _lowday,name = 'lowday',arity = 1),
-            gp.functions.make_function(function = _highday,name = 'highday',arity = 1),
-            gp.functions.make_function(function = alphaFunc.sign,name = 'sign',arity = 1)
-            
-        ]
+                xy = np.array(xy)
+            if xy.max() == xy.min():
+                return False, np.zeros(len(xy))
+            if isinstance(xy, np.ndarray):
+                s = df_tmp.copy()
+                s[key] = xy
+                xy = s[key]   # 继承 df_tmp 的 (time, code) 索引
+            return status, xy
 
-        
-        gp1 = SymbolicTransformer(  
-                                    generations=10, #整数，可选(默认值=20)要进化的代数
-                                    population_size=500,# 整数，可选(默认值=1000)，每一代群体中的公式数量
-                                    hall_of_fame=100, # 备选因子的数量
-                                    n_components=50,#最终筛选出的最优因子的数量
-                                    function_set=function_set+init_function , # 函数集
-                                    parsimony_coefficient=0.002, # 节俭系数
-                                    tournament_size=20,  # 作为父代的数量
-                                    init_depth=(2, 5),  # 公式树的初始化深度
-                                    max_samples=0.9, 
-                                    verbose=1,
-                                    #const_range = (0,0),
-                                    p_crossover=0.9,  # 交叉变异概率
-                                    p_subtree_mutation=0.01,  # 子树变异概率
-                                    p_hoist_mutation=0.01,  # Hoist 变异概率
-                                    p_point_mutation=0.01,  # 点变异概率
-                                    p_point_replace=0.05,  # 点替代概率                             
-                                    feature_names=list('$'+n for n in train.columns),
-                                    random_state=int(time.time()),  # 随机数种子
-                                    n_jobs=1
-                            )
-        
-        
-        gp1.fit(train,label)
-        new_df2 = gp1.transform(train)
-        
-        
-        alphas=[]
-        
-        for formula in gp1:
-            alphas.append(str(formula))
-        
-        alphas=list(set(alphas))
-        
+        def wrap1(name):
+            def f(x):
+                st, x = trans_xy(x, 'x')
+                if not st:
+                    return x
+                return np.nan_to_num(getattr(alphaFunc, name)(x).values)
+            return f
+
+        def wrap2(name):
+            def f(x, y):
+                st, x = trans_xy(x, 'x')
+                if not st:
+                    return x
+                st, y = trans_xy(y, 'y')
+                if not st:
+                    return y
+                return np.nan_to_num(getattr(alphaFunc, name)(x, y).values)
+            return f
+
+        arity1 = ['rank', 'log', 'ts_sum', 'delta', 'product', 'ts_min', 'ts_max',
+                  'ts_rank', 'stddev', 'ts_argmax', 'ts_argmin', 'lowday', 'highday', 'sumac', 'sign']
+        arity2_pairs = ['correlation', 'covariance']   # 这两个 alphaFunc 是 (x,y,window)
+        # min/max 在 alphaFunc 是 (x,y)；delay_n 单独
+        function_set = []
+        for nm in arity1:
+            try:
+                function_set.append(gp.functions.make_function(function=wrap1(nm), name=nm, arity=1))
+            except Exception:
+                pass
+        for nm in arity2_pairs:
+            try:
+                function_set.append(gp.functions.make_function(function=wrap2(nm), name=nm, arity=2))
+            except Exception:
+                pass
+        for nm in ['min', 'max']:
+            try:
+                function_set.append(gp.functions.make_function(
+                    function=wrap2(nm) if False else (lambda x, y, _n=nm: np.nan_to_num(getattr(alphaFunc, _n)(x, y))),
+                    name=nm, arity=2))
+            except Exception:
+                pass
+        for d in [1, 3, 5, 7]:
+            def _delay(x, _d=d):
+                st, x = trans_xy(x, 'x')
+                if not st:
+                    return x
+                return np.nan_to_num(alphaFunc.delay(x, _d).values)
+            try:
+                function_set.append(gp.functions.make_function(function=_delay, name=f'delay_{d}', arity=1))
+            except Exception:
+                pass
+
+        gp1 = SymbolicTransformer(
+            generations=10, population_size=500, hall_of_fame=100, n_components=50,
+            function_set=function_set + init_function, parsimony_coefficient=0.002,
+            tournament_size=20, init_depth=(2, 5), max_samples=0.9, verbose=1,
+            p_crossover=0.9, p_subtree_mutation=0.01, p_hoist_mutation=0.01,
+            p_point_mutation=0.01, p_point_replace=0.05,
+            feature_names=list('$' + n for n in train.columns),
+            random_state=int(time.time()), n_jobs=1)
+
+        gp1.fit(train, label)
+        _ = gp1.transform(train)
+
+        alphas = list(set(str(f) for f in gp1))
         print(alphas)
-         
+
         for alpha in alphas:
-            df_alpha=alphaEngine.calc(formula=alpha,df=df_check.copy(),name='alpha',check=False,save=False,ignore_notice=True,diff=False)
-            if df_alpha.empty:
-                #print('err')
+            df_alpha = alphaEngine.calc(formula=alpha, df=df_check.copy(), market=market, freq=freq)
+            if df_alpha is None or df_alpha.empty:
                 continue
-            
-            df_analys=df_check.copy()
-            df_analys['alpha']=df_alpha
-            df_analys=df_analys[['open','close','alpha']]
-            factorAnalyzer.analys('alpha',df=df_analys,formula=alpha,source=source,table='factors_mining',ignore_error=True)
-            #print("\n")
-        
-         
-        
+            df_analys = df_check[['open', 'close']].copy()
+            df_analys['alpha'] = df_alpha
+            factorAnalyzer.analys('alpha', df=df_analys, formula=alpha, source=source,
+                                  table='factors_mining', ignore_error=True,
+                                  market=market, freq=freq, start_date=start_date, end_date=end_date)
