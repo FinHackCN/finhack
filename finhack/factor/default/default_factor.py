@@ -2,7 +2,8 @@ import random
 from runtime.constant import *
 from finhack.library.config import Config
 # from finhack.factor.default.preCheck import preCheck
-# from finhack.factor.default.indicatorEngine import indicatorCompute
+# 单股因子计算(compute)待迁移：indicatorEngine 仅提供批量接口 computeIndicator，详见 compute()
+from finhack.factor.default.indicatorEngine import indicatorEngine
 from finhack.factor.default.alphaEngine import alphaEngine
 from finhack.market.astock.astock import AStock
 from finhack.factor.default.taskRunner import taskRunner
@@ -26,10 +27,11 @@ class DefaultFactor:
         
         
     def compute(self):
-        factor=self.args.factor
-        code=self.args.code
-        df=indicatorCompute.computeFactorByStock(code,factor)
-        print(df)
+        # 旧版 indicatorCompute.computeFactorByStock 在当前版未迁移（indicatorEngine 仅提供
+        # 批量接口 computeIndicator）。如需单股计算，可用：
+        #   indicatorEngine.computeIndicator(market, freq, [factor], code_list=[code])
+        # 算完落盘后用 factorManager.loadFactors 读回。
+        raise NotImplementedError("单股因子计算(compute)待迁移到 indicatorEngine")
 
 
     def todb(self):

@@ -79,7 +79,7 @@ class factorManager:
                     result["code_count"] = len(factor_df.index.get_level_values('code').unique())
                     
                     # 获取时间范围
-                    times = factor_df.index.get_level_values('date')
+                    times = factor_df.index.get_level_values('time')
                     result["start_date"] = times.min().strftime("%Y%m%d")
                     result["end_date"] = times.max().strftime("%Y%m%d")
                     
@@ -468,5 +468,18 @@ class factorManager:
         with open(path+'all','w') as file_object:
             file_object.write("\n".join(return_fileds))  
         
-        #print("\n".join(return_fileds))  
+        #print("\n".join(return_fileds))
         return return_fileds
+
+    @staticmethod
+    def list_factors(market='cn_stock', freq='1d', factor_type='matrix'):
+        """列出已入库的因子名（扫 factors/{factor_type}/{market}/{freq}/ 目录）。
+        替代旧版依赖 MySQL factors_list 表的 getFactorsList，纯目录扫描、市场参数化。"""
+        base = os.path.join(DATA_DIR, 'factors', factor_type, market, freq)
+        factors = set()
+        if os.path.exists(base):
+            for root, dirs, files in os.walk(base):
+                for f in files:
+                    if f.endswith('.pkl') and not f.endswith('index.pkl'):
+                        factors.add(f[:-4])
+        return sorted(factors)
