@@ -1082,4 +1082,76 @@ class alphaEngine():
             Log.logger.error(f"计算参数: market={market}, freq={freq}, start_date={start_date}, end_date={end_date}")
             traceback.print_exc()
             return {"name": alpha_item["name"], "result": pd.DataFrame()}
+
+    # ============ 单公式计算工具（供 factorMining 等复用）============
+    @staticmethod
+    def _prep_formula(formula):
+        """公式预处理：语法转换 + alpha191 特殊字段展开 + 三元"""
+        formula = formula.replace("||", " | ").replace("&&", " & ").replace("^", " ** ").replace("\n", " ")
+        # alpha191 #69 的 dtm/dbm 等（无 indicator 定义时的兜底展开）
+        formula = formula.replace("$dtm", " ($open<=delay($open,1)?0:max(($high-$open),($open-delay($open,1)))) ")
+        formula = formula.replace("$dbm", " ($open>=delay($open,1)?0:max(($open-$low),($open-delay($open,1)))) ")
+        formula = formula.replace("$tr", " max(max($high-$low,abs($high-delay($close,1))),abs($low-delay($close,1))) ")
+        formula = formula.replace("$hd", " $high-delay($high,1) ")
+        formula = formula.replace("$ld", " delay($low,1)-$low ")
+        if '?' in formula:
+            formula = ternary_trans(formula)
+        return formula
+
+    @staticmethod
+    def get_df(formula='', df=pd.DataFrame(), code_list=[], market='cn_stock', freq='1d',
+               start_date='', end_date=''):
+        """准备公式依赖的数据。df 非空时直接用；否则按公式字段 loadFactors。
+        返回 DataFrame（索引 time, code）。"""
+        try:
+            if df is None or df.empty:
+                col_list = alphaEngine.get_col_list(formula)
+                df = factorManager.loadFactors(
+                    matrix_list=[c[1:] for c in col_list],
+                    code_list=code_list, market=market, freq=freq,
+                    start_date=start_date, end_date=end_date)
+            if df is None or df.empty:
+                return pd.DataFrame()
+            if isinstance(df.index, pd.MultiIndex):
+                df = df.sort_index()
+            return df
+        except Exception as e:
+            Log.logger.error(f"get_df error: {e}")
+            return pd.DataFrame()
+
+    @staticmethod
+    def calc(formula='', df=pd.DataFrame(), name='alpha', save=False,
+             market='cn_stock', freq='1d', code_list=[], start_date='', end_date=''):
+        """在给定 df 上计算单个 alpha 公式，返回结果 Series（索引 time,code）。
+        df 为空时自动 loadFactors；save=True 时落盘为因子。"""
+        try:
+            # 跳过当前引擎不支持的公式（依赖行业/市值/基准等外部数据）
+            for todo in ['indneutralize', 'cap', 'filter', 'self', 'banchmarkindex']:
+                if todo in formula:
+                    return pd.Series()
+            formula = alphaEngine._prep_formula(formula)
+            col_list = alphaEngine.get_col_list(formula)
+            if df is None or df.empty:
+                df = alphaEngine.get_df(formula=formula, code_list=code_list, market=market, freq=freq,
+                                        start_date=start_date, end_date=end_date)
+            if df is None or df.empty:
+                return pd.Series()
+            for col in col_list:
+                clean = col[1:]
+                if clean not in df.columns:
+                    return pd.Series()
+                formula = formula.replace(col, f"df['{clean}']")
+                df[clean] = df[clean].astype(float)
+            res = eval(formula)
+            if isinstance(res, pd.DataFrame):
+                res = res.iloc[:, 0]
+            if not isinstance(res, pd.Series):
+                res = pd.Series(res, index=df.index)
+            if save and not res.empty:
+                res.name = name
+                factorManager.saveFactors(res.to_frame(name=name), [name], market, freq)
+            return res
+        except Exception as e:
+            Log.logger.debug(f"calc error: {formula} -> {e}")
+            return pd.Series()
         
