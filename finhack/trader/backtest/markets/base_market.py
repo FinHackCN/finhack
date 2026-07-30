@@ -27,6 +27,9 @@ class BaseMarket(ABC):
             config: 市场配置
         """
         self.market_name = market_name
+        # 合并 market_context.MARKET_CONFIG（单一来源：is_derivatives/margin_ratio/fees/t_plus/...）
+        from finhack.library import market_context
+        config = {**market_context.get_market_config(market_name), **(config or {})}
         self.config = config
 
         # 回测当前日期（由引擎通过 set_current_date 同步）
@@ -286,6 +289,47 @@ class BaseMarket(ABC):
         """
         lot_size = self.get_lot_size(symbol)
         return round(volume / lot_size) * lot_size
+
+    # ============ 衍生品/交易规则接口（从 market_context config 读，新市场 override 即可）============
+    def is_derivatives(self) -> bool:
+        """是否衍生品（保证金/T+0/允许空头/dust）。cn_future/cryptoswap=True。"""
+        return bool(self.config.get('is_derivatives', False))
+
+    def get_margin_ratio(self, symbol: str = None) -> float:
+        """保证金率；非衍生品=1.0（全款）。"""
+        return float(self.config.get('margin_ratio', 1.0))
+
+    def is_t_plus_one(self, symbol: str = '') -> bool:
+        return int(self.config.get('t_plus', 1)) == 1
+
+    def is_t_plus_zero_allowed(self, symbol: str = '') -> bool:
+        return int(self.config.get('t_plus', 1)) == 0
+
+    def get_position_rounding_policy(self) -> dict:
+        """持仓精度/dust/空头策略。现货 use_dust=False/allow_short=False；衍生品 True。"""
+        deriv = self.is_derivatives()
+        return {'use_dust_threshold': deriv,
+                'dust_threshold': self.config.get('dust_threshold', 1e-4),
+                'allow_short': deriv,
+                'allow_partial_close': deriv}
+
+    def has_funding_rate(self) -> bool:
+        return bool(self.config.get('has_funding_rate', False))
+
+    def get_funding_config(self):
+        return self.config.get('funding', None)
+
+    def get_tick_size(self, symbol: str) -> float:
+        """最小变动价位；默认 0（不取整），cn_future 等 override。"""
+        return 0.0
+
+    def get_contract_size(self, symbol: str) -> float:
+        """合约乘数；默认 1.0，衍生品 override。"""
+        return float(self.config.get('contract_size', 1.0))
+
+    def get_short_open_cash_model(self) -> str:
+        """空头开仓扣款模式：'full_amount'（现货）/ 'margin_only'（衍生品）。"""
+        return 'margin_only' if self.is_derivatives() else 'full_amount'
     
     @classmethod
     def load_from_config_file(cls, market_name: str, config_file: str):
