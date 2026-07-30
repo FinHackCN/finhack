@@ -300,84 +300,36 @@ class BacktestTrader:
         self._apply_market_defaults(market)
 
     def _apply_market_defaults(self, market: str):
-        """根据市场类型设置默认参数（仅在用户未显式指定时覆盖）"""
+        """根据市场类型设置默认参数（仅在用户未显式指定时覆盖）。
+        市场配置统一从 library/market_context.MARKET_CONFIG 读取（单一来源）。"""
+        from finhack.library import market_context
         settings = self.context['settings']
         account = self.context['account']
 
-        # 各市场默认值映射（名称与markets/目录下的adapter名称一致）
-        MARKET_DEFAULTS = {
-            'cn_stock': {
-                'currency': 'CNY',
-                'account_type': AccountTypeEnum.CASH,
-                'open_tax': 0.0,
-                'close_tax': 0.001,       # 印花税卖出千一
-                'open_commission': 0.0003, # 佣金万三
-                'close_commission': 0.0003,
-                'min_commission': 5.0,
-                'slip_value': 0.001,
-            },
-            'cn_fund': {
-                'currency': 'CNY',
-                'account_type': AccountTypeEnum.CASH,
-                'open_tax': 0.0,
-                'close_tax': 0.0,          # ETF免印花税
-                'open_commission': 0.0003,
-                'close_commission': 0.0003,
-                'min_commission': 5.0,
-                'slip_value': 0.001,
-            },
-            'cn_future': {
-                'currency': 'CNY',
-                'account_type': AccountTypeEnum.FUTURES,
-                'open_tax': 0.0,           # 期货无印花税
-                'close_tax': 0.0,
-                'open_commission': 0.0001,  # 期货费率较低
-                'close_commission': 0.0001,
-                'min_commission': 5.0,
-                'slip_value': 0.0005,
-            },
-            'global_cryptospot': {
-                'currency': 'USD',
-                'account_type': AccountTypeEnum.CRYPTO,
-                'open_tax': 0.0,           # 加密货币无印花税
-                'close_tax': 0.0,
-                'open_commission': 0.001,  # 0.1% taker费率
-                'close_commission': 0.001,
-                'min_commission': 0.0,     # 加密货币无最低手续费
-                'slip_value': 0.0005,
-            },
-            'global_cryptoswap': {
-                'currency': 'USD',
-                'account_type': AccountTypeEnum.CRYPTO,
-                'open_tax': 0.0,
-                'close_tax': 0.0,
-                'open_commission': 0.0004,  # 0.04% 合约费率
-                'close_commission': 0.0004,
-                'min_commission': 0.0,
-                'slip_value': 0.0005,
-                'funding_rate_mode': 'fixed',      # 'fixed' | 'dynamic' | 'none'
-                'funding_rate': 0.0001,            # 0.01% per 8h
-                'funding_interval_hours': 8,       # 每8小时结算
-            },
-        }
+        cfg = market_context.get_market_config(market)
 
-        defaults = MARKET_DEFAULTS.get(market, MARKET_DEFAULTS['cn_stock'])
+        # 货币和账户类型
+        account['currency'] = cfg['currency']
+        account['account_type'] = getattr(AccountTypeEnum, cfg['account_type'], AccountTypeEnum.CASH)
 
-        # 设置货币和账户类型
-        account['currency'] = defaults['currency']
-        account['account_type'] = defaults['account_type']
-
-        # 设置费率（仅在用户未通过args显式指定时使用默认值）
+        # 费率（用户 args 优先，否则用市场默认）
         args_dict = self.args.__dict__
+        fees = cfg.get('fees', {})
         for fee_key in ['open_tax', 'close_tax', 'open_commission', 'close_commission',
-                        'min_commission', 'slip_value',
-                        'funding_rate_mode', 'funding_rate', 'funding_interval_hours']:
-            # 如果用户通过args传入了值，使用用户的；否则使用市场默认值（如果存在）
+                        'min_commission', 'slip_value']:
             if fee_key not in args_dict or getattr(self.args, fee_key, None) is None:
-                if fee_key in defaults:
-                    settings[fee_key] = defaults[fee_key]
+                if fee_key in fees:
+                    settings[fee_key] = fees[fee_key]
 
-        Log.logger.info(f"[市场默认] {market}: currency={defaults['currency']}, "
+        # 资金费率（cryptoswap）
+        funding = cfg.get('funding')
+        if funding:
+            for fk, ck in [('funding_rate_mode', 'mode'), ('funding_rate', 'rate'),
+                           ('funding_interval_hours', 'interval_hours')]:
+                if fk not in args_dict or getattr(self.args, fk, None) is None:
+                    settings[fk] = funding.get(ck)
+
+        Log.logger.info(f"[市场默认] {market}: currency={cfg['currency']}, "
                        f"close_tax={settings.get('close_tax')}, "
                        f"open_commission={settings.get('open_commission')}")
         
