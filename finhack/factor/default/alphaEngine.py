@@ -841,6 +841,20 @@ class alphaEngine():
                 Log.logger.info(f"调整Alpha计算窗口 - 原始: {range_start}, 调整后: {adjusted_start_date}")
                 
                 Log.logger.info(f"开始加载Alpha依赖数据 - 字段: {[s.replace('$', '', 1) for s in col_list]}")
+                # 1m/秒级频率：按 code chunk 加载计算，避免全量进内存（alpha191 含横截面 rank，
+                # chunk 下变 chunk 内排名，语义变，符合"先跑通再优化"）
+                if ('m' in freq) or ('s' in freq):
+                    _prep = alphaEngine._prep_formula(formula)
+                    _prep_cols = alphaEngine.get_col_list(_prep)
+                    for _chunk_df in factorManager.loadFactorsByCodeChunk(
+                                matrix_list=[s.replace('$', '', 1) for s in _prep_cols],
+                                code_list=code_list, market=market, freq=freq,
+                                start_date=adjusted_start_date, end_date=range_end, chunk_size=50):
+                        _r = alphaEngine._process_alpha_df(_chunk_df, _prep, alpha_name,
+                                                            range_start, range_end, market, freq)
+                        if _r is not None and not _r.empty:
+                            all_results.append(_r)
+                    continue
                 df = factorManager.loadFactors(
                             matrix_list=[s.replace('$', '', 1) for s in col_list],
                             vector_list=[],
@@ -1154,4 +1168,66 @@ class alphaEngine():
         except Exception as e:
             Log.logger.debug(f"calc error: {formula} -> {e}")
             return pd.Series()
+
+    @staticmethod
+    def _process_alpha_df(df, formula, alpha_name, range_start, range_end,
+                          market='cn_stock', freq='1d'):
+        """在给定 df（全量或 chunk）上算 alpha 并存盘。供 computeAlpha 的 1d/1m 两种模式复用。
+        formula 应已 _prep_formula 预处理（含 dtm/dbm 展开）。返回 result_df 或 None。"""
+        import datetime as _dt
+        if df is None or df.empty:
+            return None
+        if isinstance(df.index, pd.MultiIndex) and df.index.duplicated().any():
+            df = df[~df.index.duplicated(keep='last')]
+        if df.empty:
+            return None
+        try:
+            cols = alphaEngine.get_col_list(formula)
+            for col in cols:
+                clean = col[1:]
+                if clean not in df.columns:
+                    return None
+                formula = formula.replace(col, f"df['{clean}']")
+                df[clean] = df[clean].astype(float)
+            res = eval(formula)
+            if isinstance(res, pd.DataFrame):
+                res = res.iloc[:, 0]
+            if not isinstance(res, pd.Series):
+                res = pd.Series(res, index=df.index)
+            result_df = pd.DataFrame({alpha_name: res})
+            if result_df.empty:
+                return None
+            # 日期过滤（只保留 range_start~range_end）
+            rs = range_start if range_start != 'now' else _dt.datetime.now().strftime('%Y%m%d')
+            re_ = range_end if range_end != 'now' else _dt.datetime.now().strftime('%Y%m%d')
+            try:
+                if isinstance(result_df.index, pd.MultiIndex):
+                    times = result_df.index.get_level_values('time')
+                else:
+                    times = result_df.index
+                if not pd.api.types.is_datetime64_any_dtype(times):
+                    times = pd.to_datetime(times)
+                s_dt = pd.to_datetime(rs)
+                e_dt = pd.to_datetime(re_) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+                result_df = result_df[(times >= s_dt) & (times <= e_dt)]
+            except Exception as e:
+                Log.logger.debug(f"_process_alpha_df 日期过滤跳过: {e}")
+            if result_df.empty:
+                return None
+            if 'time' in result_df.columns:
+                result_df = result_df.reset_index(drop=True)
+            else:
+                result_df = result_df.reset_index(drop=False)
+            try:
+                result_df = result_df.sort_values(by=['time', 'code']).set_index(['time', 'code'])
+            except Exception:
+                pass
+            try:
+                factorManager.saveFactors(result_df, [alpha_name], market, freq)
+            except Exception as e:
+                Log.logger.error(f"_process_alpha_df save 失败: {e}")
+            return result_df
+        except Exception as e:
+            Log.logger.debug(f"_process_alpha_df error: {formula} -> {e}")
+            return None
         
