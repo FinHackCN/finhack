@@ -299,40 +299,51 @@ class TradeCenter:
         return market == 'cn_stock'
 
     def _is_cn_future(self):
-        """检查当前市场是否为期货"""
+        """检查当前市场是否为期货（有交割）。优先问 adapter。"""
+        if self.market_adapter:
+            try:
+                return self.market_adapter.has_delivery()
+            except Exception:
+                pass
         market = self.context.get('settings', {}).get('market', '')
         return market == 'cn_future'
 
     def _is_crypto_swap(self):
-        """检查当前市场是否为加密货币永续合约"""
+        """检查当前市场是否为加密永续（有资金费率）。优先问 adapter。"""
+        if self.market_adapter:
+            try:
+                return self.market_adapter.has_funding_rate()
+            except Exception:
+                pass
         market = self.context.get('settings', {}).get('market', '')
         return market == 'global_cryptoswap'
 
     def _uses_margin(self):
-        """检查当前市场是否使用保证金模式"""
+        """检查当前市场是否使用保证金模式（衍生品）。优先问 adapter。"""
+        if self.market_adapter:
+            try:
+                return self.market_adapter.is_derivatives()
+            except Exception:
+                pass
         return self._is_cn_future() or self._is_crypto_swap()
 
     def _get_contract_size(self, symbol):
-        """获取合约乘数"""
-        if not self._is_cn_future() and not self._is_crypto_swap():
-            return 1
-        try:
-            if self.market_adapter and hasattr(self.market_adapter, 'get_contract_size'):
+        """获取合约乘数（统一走 adapter；非衍生品 adapter 返回 1.0）。"""
+        if self.market_adapter:
+            try:
                 return self.market_adapter.get_contract_size(symbol)
-        except Exception as e:
-            Log.logger.warning(f"[乘数] {symbol} 获取合约乘数失败: {e}")
+            except Exception as e:
+                Log.logger.warning(f"[乘数] {symbol} 获取合约乘数失败: {e}")
         return 1
 
     def _get_margin_ratio(self, symbol):
-        """获取保证金比例"""
-        if not self._uses_margin():
-            return 1.0
-        try:
-            if hasattr(self.market_adapter, 'get_margin_ratio'):
+        """获取保证金比例（统一走 adapter；非衍生品 adapter 返回 1.0）。"""
+        if self.market_adapter:
+            try:
                 return self.market_adapter.get_margin_ratio(symbol)
-        except Exception:
-            pass
-        return 0.12 if self._is_cn_future() else DEFAULT_CRYPTO_MARGIN_RATIO
+            except Exception:
+                pass
+        return 1.0
 
     def _get_futures_contract_value(self, symbol, volume, price):
         """计算合约价值（含乘数）"""
@@ -703,7 +714,7 @@ class TradeCenter:
             # 期货/合约市场无多头持仓时，SELL自动转为SHORT_OPEN（开空仓）
             market = self.context.get('settings', {}).get('market', '')
             if order.symbol not in self.positions:
-                if market in ('cn_future', 'global_cryptoswap'):
+                if self._uses_margin():
                     order.side = Side.SHORT_OPEN
                 else:
                     order.status = OrderStatus.REJECTED
@@ -714,16 +725,16 @@ class TradeCenter:
                 position = self.positions[order.symbol]
                 if position.available_volume < order.volume:
                     # 期货/合约市场：无多头持仓(total≈0)时转为开空仓
-                    if market in ('cn_future', 'global_cryptoswap') and position.volume <= POSITION_DUST_THRESHOLD:
+                    if self._uses_margin() and position.volume <= POSITION_DUST_THRESHOLD:
                         order.side = Side.SHORT_OPEN
                     # 有持仓但冻结中(available≈0)：拒绝
-                    elif market in ('cn_future', 'global_cryptoswap') and position.volume > POSITION_DUST_THRESHOLD and position.available_volume <= POSITION_DUST_THRESHOLD:
+                    elif self._uses_margin() and position.volume > POSITION_DUST_THRESHOLD and position.available_volume <= POSITION_DUST_THRESHOLD:
                         order.status = OrderStatus.REJECTED
                         order.rejected_reason = "持仓冻结中，无法卖出"
                         Log.logger.warning(f"持仓冻结中，订单被拒绝: {order.order_id}")
                         return
                     # 期货/合约市场：有可用持仓但不足时，缩减至可用量（部分平仓）
-                    elif market in ('cn_future', 'global_cryptoswap') and position.available_volume > POSITION_DUST_THRESHOLD:
+                    elif self._uses_margin() and position.available_volume > POSITION_DUST_THRESHOLD:
                         original_volume = order.volume
                         order.volume = position.available_volume
                         Log.logger.info(
@@ -818,15 +829,8 @@ class TradeCenter:
                     del self.positions[trade.symbol]
 
         elif trade.side == Side.SHORT_OPEN:
-            # 开空仓：减少现金（作为保证金），创建空头持仓
-            from finhack.trader.backtest.constants import DEFAULT_MARGIN_RATIO
-            market = self.context.get('settings', {}).get('market', '')
-            if market == 'cn_future':
-                # 期货：只扣除保证金+手续费
-                margin = trade.amount * DEFAULT_MARGIN_RATIO
-                self.account.cash_available -= (margin + trade.commission + trade.tax)
-            elif market == 'global_cryptoswap':
-                # 永续合约：只扣除保证金+手续费
+            # 开空仓：减少现金（衍生品扣保证金，现货扣全款）—— 统一走 adapter
+            if self.market_adapter and self.market_adapter.get_short_open_cash_model() == 'margin_only':
                 margin_ratio = self._get_margin_ratio(trade.symbol)
                 margin = trade.amount * margin_ratio
                 self.account.cash_available -= (margin + trade.commission + trade.tax)
@@ -1050,7 +1054,7 @@ class TradeCenter:
             if available_volume < order.volume:
                 # 期货市场：无多头持仓时允许SELL，后续撮合时转为SHORT_OPEN
                 market = self.context.get('settings', {}).get('market', '')
-                if market in ('cn_future', 'global_cryptoswap') and available_volume == 0:
+                if self._uses_margin() and available_volume == 0:
                     pass  # 允许通过，撮合时会转为SHORT_OPEN
                 else:
                     Log.logger.warning(
@@ -1141,8 +1145,7 @@ class TradeCenter:
 
         仅期货市场有tick_size概念，其他市场返回0（不做取整）。
         """
-        market = self.context.get('settings', {}).get('market', 'cn_stock')
-        if market == 'cn_future':
+        if self._is_cn_future():
             try:
                 from finhack.trader.backtest.markets.cn_future.future_trading_rules_versions import get_tick_size
                 return get_tick_size(symbol)
@@ -1548,7 +1551,7 @@ class TradeCenter:
                     # BUG 3 fix: 期货市场：无多头持仓(total=0)时自动转为开空仓
                     market = self.context.get('settings', {}).get('market', '')
                     total_volume = position.volume if position else 0
-                    if market in ('cn_future', 'global_cryptoswap') and total_volume <= POSITION_DUST_THRESHOLD:
+                    if self._uses_margin() and total_volume <= POSITION_DUST_THRESHOLD:
                         order.side = Side.SHORT_OPEN
                         margin = self._get_futures_margin(order.symbol, fill_volume, fill_price)
                         total_required = margin + total_cost
@@ -1564,7 +1567,7 @@ class TradeCenter:
                             if order.order_id in self.active_orders:
                                 del self.active_orders[order.order_id]
                             return
-                    elif market in ('cn_future', 'global_cryptoswap') and total_volume > POSITION_DUST_THRESHOLD and available_volume <= POSITION_DUST_THRESHOLD:
+                    elif self._uses_margin() and total_volume > POSITION_DUST_THRESHOLD and available_volume <= POSITION_DUST_THRESHOLD:
                         # 有持仓但被冻结，拒绝订单
                         Log.logger.error(f"[{time_str}] 持仓冻结中，卖出被拒绝: {order.symbol} "
                                        f"总持仓{total_volume}，可用{available_volume}")
@@ -1575,7 +1578,7 @@ class TradeCenter:
                         return
                     else:
                         # 期货/合约市场：有可用持仓但不足时，缩减至可用量（部分平仓）
-                        if market in ('cn_future', 'global_cryptoswap') and available_volume > POSITION_DUST_THRESHOLD:
+                        if self._uses_margin() and available_volume > POSITION_DUST_THRESHOLD:
                             original_volume = fill_volume
                             fill_volume = available_volume
                             # 重新计算缩减后的成交金额和手续费
@@ -2205,16 +2208,32 @@ class BacktestEngine:
         
         for event_type in dynamic_events:
             self.event_center.event_bus.register_handler(event_type, self._process_event_sync)
-    
+
     def _is_cn_future(self):
-        """检查当前市场是否为期货"""
+        """检查当前市场是否为期货（有交割）。优先问 adapter，否则 fallback market==。"""
+        adapter = getattr(self, 'market_adapter', None)
+        if adapter:
+            try: return adapter.has_delivery()
+            except Exception: pass
         market = self.context.get('settings', {}).get('market', '')
         return market == 'cn_future'
 
     def _is_crypto_swap(self):
-        """检查当前市场是否为加密货币永续合约"""
+        """检查当前市场是否为加密永续（有资金费率）。优先问 adapter。"""
+        adapter = getattr(self, 'market_adapter', None)
+        if adapter:
+            try: return adapter.has_funding_rate()
+            except Exception: pass
         market = self.context.get('settings', {}).get('market', '')
         return market == 'global_cryptoswap'
+
+    def _uses_margin(self):
+        """检查当前市场是否使用保证金（衍生品）。优先问 adapter。"""
+        adapter = getattr(self, 'market_adapter', None)
+        if adapter:
+            try: return adapter.is_derivatives()
+            except Exception: pass
+        return self._is_cn_future() or self._is_crypto_swap()
 
     def _sync_backtest_date(self, current_date: date):
         """同步回测日期到所有市场适配器
