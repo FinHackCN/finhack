@@ -74,12 +74,15 @@ class Core:
 
         #读取args文件下所有分区
         my_args_group_list=Config.get_section_list('args')
-        args, unknown = self.parser.parse_known_args()
+        # 移除 argv 的 key=value（含=），避免被 argparse 当 module/action 位置参数
+        _kv = [a for a in sys.argv[1:] if '=' in a and not a.startswith('-')]
+        _argv = [a for a in sys.argv[1:] if a not in _kv]
+        args, unknown = self.parser.parse_known_args(_argv)
 
         # 处理命令行传递的额外参数（支持 key=value 格式）
         # 保存命令行参数，用于后续覆盖配置文件参数
         cmdline_args = {}
-        for arg_str in unknown:
+        for arg_str in _kv:
             if '=' in arg_str:
                 key, value = arg_str.split('=', 1)
                 # 移除开头的 --（如果有）
@@ -151,7 +154,7 @@ class Core:
         for arg,default in args_list.items():
                 group = self.parser.add_argument_group(my_args_group)
                 group.add_argument('--'+arg,metavar='', default=default)
-        args=self.parse_args()
+        args=self.parse_args(_argv)
 
         # 【关键】手动设置命令行参数到args对象
         # 因为parse_args只处理--key value格式，不处理key=value格式
@@ -279,8 +282,8 @@ class Core:
         
     
     #重新解析参数（动态注册了新的--key参数后需要重新解析）
-    def parse_args(self):
-        args, unknown = self.parser.parse_known_args()
+    def parse_args(self, argv=None):
+        args, unknown = self.parser.parse_known_args(argv)
         self.args = args
         return args
 
