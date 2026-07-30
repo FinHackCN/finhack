@@ -841,20 +841,19 @@ class alphaEngine():
                 Log.logger.info(f"调整Alpha计算窗口 - 原始: {range_start}, 调整后: {adjusted_start_date}")
                 
                 Log.logger.info(f"开始加载Alpha依赖数据 - 字段: {[s.replace('$', '', 1) for s in col_list]}")
-                # 1m/秒级频率：按 code chunk 加载计算，避免全量进内存（alpha191 含横截面 rank，
-                # chunk 下变 chunk 内排名，语义变，符合"先跑通再优化"）
-                if ('m' in freq) or ('s' in freq):
-                    _prep = alphaEngine._prep_formula(formula)
-                    _prep_cols = alphaEngine.get_col_list(_prep)
-                    for _chunk_df in factorManager.loadFactorsByCodeChunk(
-                                matrix_list=[s.replace('$', '', 1) for s in _prep_cols],
-                                code_list=code_list, market=market, freq=freq,
-                                start_date=adjusted_start_date, end_date=range_end, chunk_size=50):
-                        _r = alphaEngine._process_alpha_df(_chunk_df, _prep, alpha_name,
-                                                            range_start, range_end, market, freq)
-                        if _r is not None and not _r.empty:
-                            all_results.append(_r)
-                    continue
+                # 统一 freq 感知加载：loadFactorsAuto 内部按 freq 自动 chunk(1m)/全量(1d)。
+                # 1d/1m 都走 _process_alpha_df（去重→列替换→eval→结果处理→存盘），消除双路径。
+                _prep = alphaEngine._prep_formula(formula)
+                _prep_cols = alphaEngine.get_col_list(_prep)
+                for _chunk_df in factorManager.loadFactorsAuto(
+                            matrix_list=[s.replace('$', '', 1) for s in _prep_cols],
+                            code_list=code_list, market=market, freq=freq,
+                            start_date=adjusted_start_date, end_date=range_end):
+                    _r = alphaEngine._process_alpha_df(_chunk_df, _prep, alpha_name,
+                                                       range_start, range_end, market, freq)
+                    if _r is not None and not _r.empty:
+                        all_results.append(_r)
+                continue  # 下方 1d 旧路径（df=loadFactors + 内联列替换/eval/save）已被上方取代，保留待清理
                 df = factorManager.loadFactors(
                             matrix_list=[s.replace('$', '', 1) for s in col_list],
                             vector_list=[],

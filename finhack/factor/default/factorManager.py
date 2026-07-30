@@ -18,6 +18,22 @@ import finhack.library.log as Log
 
 class factorManager:
     @staticmethod
+    def loadFactorsAuto(matrix_list=[], vector_list=[], code_list=[], market='cn_stock', freq='1d',
+                        start_date="20200101", end_date="20201231", chunk_size=50, cache=True):
+        """freq 感知加载（统一入口）。高频('m'/'s')按 code chunk 迭代；低频全量 yield 一次。
+        调用方统一 `for df in loadFactorsAuto(...)` 遍历，无需关心 freq。"""
+        if ('m' in freq) or ('s' in freq):
+            yield from factorManager.loadFactorsByCodeChunk(
+                matrix_list=matrix_list, code_list=code_list, market=market, freq=freq,
+                start_date=start_date, end_date=end_date, chunk_size=chunk_size)
+        else:
+            df = factorManager.loadFactors(
+                matrix_list=matrix_list, vector_list=vector_list, code_list=code_list,
+                market=market, freq=freq, start_date=start_date, end_date=end_date, cache=cache)
+            if df is not None and not df.empty:
+                yield df
+
+    @staticmethod
     def loadFactorsByCodeChunk(matrix_list=[], code_list=[], market='cn_stock', freq='1d',
                                start_date="20200101", end_date="20201231", chunk_size=50):
         """按 code chunk 迭代加载因子（1m 等大数据集用，避免全量进内存）。

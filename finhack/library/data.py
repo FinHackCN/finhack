@@ -175,41 +175,22 @@ class LRUCache:
 
 
 class MarketConfig:
-    """市场配置类，定义各市场类型的特性"""
-    
-    # 支持的市场类型和频率组合
-    MARKET_FREQ_SUPPORT = {
-        'cn_stock': ['1d', '1m'],
-        'cn_fund': ['1d', '1m'],
-        'cn_future': ['1d', '1m'],  # 支持1d和1m数据
-        'cn_index': ['1d', '1m'],
-        'cn_cb': ['1d', '1m'],
-        'global_cryptospot': ['1d', '1m'],  # 支持1d和1m数据
-        'global_cryptoswap': ['1d', '1m'],  # 支持1d和1m数据
-        'global_fx': ['1d'],
-        'hk_stock': ['1d'],
-    }
-    
-    # 支持复权的市场
-    ADJ_SUPPORTED_MARKETS = ['cn_stock', 'cn_fund']
-    
-    # 7x24交易的市场（无节假日）
-    CONTINUOUS_MARKETS = ['global_cryptospot', 'global_cryptoswap']
-    
+    """市场配置（thin wrapper，委托 library/market_context.MARKET_CONFIG 单一来源）。
+    保留类方法向后兼容；市场属性（freq_support/adj/continuous/fees/...）以 market_context 为准。"""
     @classmethod
     def is_freq_supported(cls, market: str, freq: str) -> bool:
-        """检查市场是否支持指定频率"""
-        return market in cls.MARKET_FREQ_SUPPORT and freq in cls.MARKET_FREQ_SUPPORT[market]
-    
+        from finhack.library.market_context import is_freq_supported
+        return is_freq_supported(market, freq)
+
     @classmethod
     def supports_adjustment(cls, market: str) -> bool:
-        """检查市场是否支持复权"""
-        return market in cls.ADJ_SUPPORTED_MARKETS
-    
+        from finhack.library.market_context import supports_adj
+        return supports_adj(market)
+
     @classmethod
     def is_continuous_market(cls, market: str) -> bool:
-        """检查是否为连续交易市场"""
-        return market in cls.CONTINUOUS_MARKETS
+        from finhack.library.market_context import is_continuous
+        return is_continuous(market)
 
 
 class DataInterface:
