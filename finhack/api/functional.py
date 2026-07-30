@@ -123,6 +123,8 @@ def backtest(strategy, market='cn_stock', freq='1d', start_date='', end_date='',
     sys.argv = ['finhack', 'trader', 'run', '--vendor=backtest', f'--project_path={proj}',
                 f'market={market}', f'freq={freq}', f'start_time={start_date}', f'end_time={end_date}',
                 f'strategy={strategy}', f'cash={cash}', f'account_type={account_type}']
+    for _k, _v in kwargs.items():
+        sys.argv.append(f'{_k}={_v}')
     try:
         main()
     except SystemExit:
