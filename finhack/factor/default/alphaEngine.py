@@ -41,15 +41,24 @@ class RewriteNode(ast.NodeTransformer):
 def ternary_trans(formula):
     if not '?' in formula:
         return formula
+    formula = formula.strip()
+    import re
+    _cols = re.findall(r'\$[a-zA-Z0-9_]+', formula)
+    _ph = {}
+    for i, c in enumerate(_cols):
+        p = f'_col{i}_'
+        _ph[p] = c
+        formula = formula.replace(c, p)
     formula=formula.replace('?',' if ')
     formula=formula.replace(':',' else ')
     tree=ast.parse(formula)
-    #print(ast.dump(tree))
     for node in ast.walk(tree):
-        ast.fix_missing_locations(RewriteNode().visit(node)) 
-    formula=ast.unparse(tree)
-#    print("\n转义公式:"+formula+"\n")
+        ast.fix_missing_locations(RewriteNode().visit(node))
+    formula=ast.unparse(tree).replace('\n', ' ')
+    for p, c in _ph.items():
+        formula = formula.replace(p, c)
     return formula
+
 def and_trans(formula):
     tree=ast.parse(formula)
     Log.logger.debug(formula)
