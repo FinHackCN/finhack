@@ -143,6 +143,13 @@ class factorAnalyzer():
 
             df = df.reset_index()
             df[t_col] = pd.to_datetime(df[t_col])
+            # 1m/分钟级：resample 到日（每 code 每日最后值），避免 groupby(time) 数十万点超时；
+            # 语义=1m 因子(每日最后值) vs 日收益，同时降噪
+            if freq in ('1m', '5m', '15m', '30m', '1h'):
+                df['_date'] = df[t_col].dt.normalize()
+                df = df.groupby([c_col, '_date']).last().reset_index()
+                df[t_col] = df['_date']
+                df = df.drop(columns=['_date'])
             if start_date != '':
                 df = df[df[t_col] >= pd.to_datetime(start_date)]
             if end_date != '':
