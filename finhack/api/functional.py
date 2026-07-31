@@ -74,6 +74,17 @@ def analyze(factor_name, market='cn_stock', freq='1d', start_date='', end_date='
         code_list=code_list or [], days=list(days), **kwargs)
 
 
+def analyze_detail(factor_name, market='cn_stock', freq='1d', start_date='', end_date='',
+                   code_list=None, n_quantiles=10, days=(1, 2, 3, 5, 8, 13, 21)):
+    """深度因子分析（dashboard 用）：返回 IC 时序/IC 衰减/分位分层/多空/分布 dict。
+    与 analyze 对称，但返回丰富结构供前端画图（不写库）。"""
+    _ensure_path()
+    from finhack.factor.default.factorAnalyzer import factorAnalyzer
+    return factorAnalyzer.factor_detail(
+        factor_name, market=market, freq=freq, start_date=start_date, end_date=end_date,
+        code_list=code_list, n_quantiles=n_quantiles, days=days)
+
+
 def mine(prompt='', model='gpt-4', method='gpt', market='cn_stock', freq='1d',
          code_list=None, start_date='', end_date='', **kwargs):
     """因子挖掘（LLM 生成公式 → 计算 → 分析）。method='gpt'/'kimi'。

@@ -1162,7 +1162,7 @@ class PriceRelatedSlippage:
         from datetime import datetime as _dt
         settings = self.context.get('settings', {})
         market = settings.get('market', 'unknown')
-        strategy = settings.get('strategy', 'unknown')
+        strategy = settings.get('strategy_name') or settings.get('strategy') or 'unknown'
         instance_id = f"{_dt.now().strftime('%Y%m%d_%H%M%S')}_{market}_{strategy}"
         result = {
             'instance_id': instance_id,
@@ -1171,7 +1171,7 @@ class PriceRelatedSlippage:
             'freq': settings.get('freq', '1d'),
             'start_date': settings.get('start_date', ''),
             'end_date': settings.get('end_date', ''),
-            'cash': settings.get('cash', 1000000),
+            'cash': settings.get('initial_capital', settings.get('cash', 1000000)),
             'performance': self.context.get('performance', {}) or {},
             'trades': self.context.get('logs', {}).get('all_trades', []),
             'daily_history': self.context.get('logs', {}).get('daily_history', []),

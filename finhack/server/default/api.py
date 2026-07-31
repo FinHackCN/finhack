@@ -135,7 +135,8 @@ def backtests():
 
 @api_bp.route('/backtest/<instance_id>')
 def backtest_detail(instance_id):
-    """回测详情（净值/绩效/交易）"""
+    """回测详情：净值(策略+基准+超额)/回撤/daily_history/绩效/交易(分页)。
+    净值优先用 daily_history.total_assets（引擎最可靠源），回退 cumprod(returns)。"""
     from runtime.constant import DATA_DIR
     import numpy as np
     bt_dir = os.path.join(DATA_DIR, 'backtest')
@@ -144,22 +145,58 @@ def backtest_detail(instance_id):
         return jsonify({'error': 'not found'}), 404
     with open(files[0], 'rb') as f:
         r = pickle.load(f)
-    returns = r.get('performance', {}).get('returns', [])
-    bench = r.get('performance', {}).get('bench_returns', [])
-    nav = (np.cumprod([1 + x for x in returns]) - 1).tolist() if returns else []
-    bench_nav = (np.cumprod([1 + x for x in bench]) - 1).tolist() if bench else []
-    # 交易记录简化（避免过大）
-    trades = r.get('trades', [])[:500]
+    perf = r.get('performance', {}) or {}
+    daily_history = r.get('daily_history', []) or []
+    initial = float(r.get('cash', 1000000)) or 1000000.0
+
+    # 净值曲线 + 日期（优先 daily_history）
+    dates = [d.get('date') for d in daily_history] if daily_history else []
+    if daily_history:
+        equity = np.array([float(d.get('total_assets', initial)) for d in daily_history], dtype=float)
+    else:
+        rets = np.array(perf.get('returns', []), dtype=float)
+        equity = np.cumprod(1 + rets) * initial if len(rets) else np.array([initial])
+    nav = (equity / equity[0] - 1).tolist()
+
+    # 回撤（underwater）
+    peak = np.maximum.accumulate(equity)
+    drawdown = (equity / peak - 1).tolist()
+
+    # 基准净值（从 bench_returns）
+    bench_rets = np.array(perf.get('bench_returns', []), dtype=float)
+    bench_nav = (np.cumprod(1 + bench_rets) - 1).tolist() if len(bench_rets) else []
+
+    # 超额（对齐长度）
+    n = min(len(nav), len(bench_nav))
+    excess_nav = [nav[i] - bench_nav[i] for i in range(n)] if n else []
+
+    # 交易分页
+    all_trades = r.get('trades', []) or []
+    page = max(1, int(request.args.get('page', 1)))
+    size = min(500, max(1, int(request.args.get('size', 50))))
+    trades_page = all_trades[(page - 1) * size: page * size]
+
     return jsonify({
         'instance_id': r.get('instance_id'),
         'market': r.get('market'),
         'strategy': r.get('strategy'),
+        'freq': r.get('freq'),
+        'start_date': r.get('start_date'),
+        'end_date': r.get('end_date'),
+        'cash': r.get('cash'),
+        'dates': dates,
         'nav': nav,
         'bench_nav': bench_nav,
-        'indicators': r.get('performance', {}).get('indicators', {}),
-        'trade_num': r.get('performance', {}).get('trade_num'),
-        'win_ratio': r.get('performance', {}).get('win_ratio'),
-        'trades': trades,
+        'excess_nav': excess_nav,
+        'drawdown': drawdown,
+        'daily_history': daily_history,
+        'indicators': perf.get('indicators', {}),
+        'benchmark': perf.get('benchmark', {}),
+        'trade_num': perf.get('trade_num'),
+        'trade_total': len(all_trades),
+        'win_ratio': perf.get('win_ratio'),
+        'trades': trades_page,
+        'page': page, 'size': size,
     })
 
 
@@ -205,3 +242,163 @@ def run_backtest():
 def task_status(task_id):
     from finhack.server.default.tasks import get_task
     return jsonify(get_task(task_id))
+
+
+# ===================== 深度因子分析（dashboard 因子研究用） =====================
+
+@api_bp.route('/factor_detail')
+def factor_detail():
+    """深度因子分析 dict（IC 时序/衰减/分位分层/多空/分布）。
+    全市场 ~15s；默认抽样前 500 代码加速到 ~3-5s，可传 code_list=a,b,c 指定。"""
+    from finhack.api.functional import analyze_detail
+    name = request.args.get('name')
+    if not name:
+        return jsonify({'error': 'name required'}), 400
+    market = request.args.get('market', 'cn_stock')
+    freq = request.args.get('freq', '1d')
+    start = request.args.get('start', '20200101')
+    end = request.args.get('end', '20210101')
+    cl = request.args.get('code_list')
+    if cl:
+        code_list = cl.split(',')
+    else:
+        code_list = None
+        try:
+            from finhack.library.data import get_data_interface
+            sl = get_data_interface().get_stock_list(market=market)
+            if sl is not None and not sl.empty:
+                code_list = sl['code'].tolist()[:500]
+        except Exception:
+            pass
+    return jsonify(analyze_detail(name, market=market, freq=freq,
+                                  start_date=start, end_date=end, code_list=code_list))
+
+
+# ===================== 因子挖掘 =====================
+
+@api_bp.route('/mining')
+def mining():
+    """因子挖掘结果（MySQL factors_mining，与 factors_analysis 同 schema）"""
+    from finhack.library.db import DB
+    try:
+        df = DB.select_to_df(
+            "SELECT factor_name, IC, IR, Sharpe, score, source, start_date, end_date, formula "
+            "FROM factors_mining ORDER BY score DESC LIMIT 200", 'finhack')
+        if df is None or df.empty:
+            return jsonify([])
+        return jsonify(df.fillna('').to_dict('records'))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@api_bp.route('/run/mine', methods=['POST'])
+def run_mine():
+    from finhack.api.functional import mine
+    from finhack.server.default.tasks import create_task
+    data = request.json or {}
+    task_id = create_task(mine, **data)
+    return jsonify({'task_id': task_id})
+
+
+# ===================== 策略管理（下拉 + 在线编辑器） =====================
+
+def _strategies_dir(market):
+    from runtime.constant import BASE_DIR
+    return os.path.join(BASE_DIR, 'strategies', market)
+
+
+@api_bp.route('/strategies')
+def strategies():
+    """列出某市场的策略文件（glob strategies/{market}/*.py）"""
+    import glob as _g
+    market = request.args.get('market', 'cn_stock')
+    d = _strategies_dir(market)
+    out = []
+    if os.path.isdir(d):
+        for f in sorted(_g.glob(os.path.join(d, '*.py'))):
+            base = os.path.basename(f)
+            if base == '__init__.py':
+                continue
+            out.append({'name': base[:-3], 'file': base})
+    return jsonify({'market': market, 'strategies': out})
+
+
+@api_bp.route('/strategy_file')
+def strategy_file_get():
+    """读策略 .py 源码（编辑器载入）"""
+    import re
+    market = request.args.get('market', 'cn_stock')
+    name = request.args.get('name', '')
+    if not re.match(r'^\w+$', name):
+        return jsonify({'error': 'invalid name'}), 400
+    path = os.path.realpath(os.path.join(_strategies_dir(market), name + '.py'))
+    base = os.path.realpath(_strategies_dir(market))
+    if not path.startswith(base + os.sep):
+        return jsonify({'error': 'path escape'}), 400
+    if not os.path.isfile(path):
+        return jsonify({'error': 'not found'}), 404
+    with open(path, 'r', encoding='utf-8') as f:
+        return jsonify({'name': name, 'market': market, 'content': f.read()})
+
+
+@api_bp.route('/strategy_file', methods=['POST'])
+def strategy_file_save():
+    """保存策略 .py（校验 name/market/路径不逃逸 strategies/）"""
+    import re
+    from finhack.library import market_context as m
+    data = request.json or {}
+    market = data.get('market', 'cn_stock')
+    name = data.get('name', '')
+    content = data.get('content', '')
+    if market not in m.list_markets():
+        return jsonify({'error': 'invalid market'}), 400
+    if not re.match(r'^\w+$', name):
+        return jsonify({'error': 'invalid name (\\w+ only)'}), 400
+    d = _strategies_dir(market)
+    os.makedirs(d, exist_ok=True)
+    path = os.path.realpath(os.path.join(d, name + '.py'))
+    base = os.path.realpath(d)
+    if not path.startswith(base + os.sep):
+        return jsonify({'error': 'path escape'}), 400
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(content)
+    return jsonify({'ok': True, 'path': path})
+
+
+# ===================== 数据覆盖统计 =====================
+
+@api_bp.route('/data_coverage')
+def data_coverage():
+    """每市场数据覆盖：代码数 / 各频率因子数 / 日期范围（从 year 目录推断）"""
+    import glob as _g
+    from finhack.library import market_context as m
+    from finhack.factor.default.factorManager import factorManager
+    from finhack.library.data import get_data_interface
+    from runtime.constant import KLINE_DIR
+    di = get_data_interface()
+    out = []
+    for mk in m.list_markets():
+        cfg = m.get_market_config(mk)
+        freqs = cfg.get('freq_support', ['1d'])
+        row = {'market': mk, 'freq_support': freqs, 'currency': cfg.get('currency'),
+               'benchmark': cfg.get('benchmark'), 'is_derivatives': cfg.get('is_derivatives', False)}
+        try:
+            sl = di.get_stock_list(market=mk, use_cache=False)
+            row['codes'] = int(len(sl)) if sl is not None else 0
+        except Exception:
+            row['codes'] = 0
+        for frq in freqs:
+            try:
+                row['factors_' + frq] = len(factorManager.list_factors(market=mk, freq=frq))
+            except Exception:
+                row['factors_' + frq] = 0
+        # 日期范围：从 codebased year 目录推断
+        years = []
+        for frq in freqs:
+            ydir = os.path.join(KLINE_DIR, 'codebased', mk, frq)
+            if os.path.isdir(ydir):
+                years += [int(os.path.basename(p)) for p in _g.glob(os.path.join(ydir, '*'))
+                          if os.path.isdir(p) and os.path.basename(p).isdigit()]
+        row['date_range'] = [min(years), max(years)] if years else None
+        out.append(row)
+    return jsonify(out)

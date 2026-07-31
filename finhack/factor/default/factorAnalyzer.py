@@ -296,6 +296,183 @@ class factorAnalyzer():
             return 0
         return sum((v['net_value'] / total_nv) * v['sharpe_ratio'] for v in quantile_perf.values())
 
+    # ===================== 深度因子分析（dashboard 用，WorldQuant 风） =====================
+    @staticmethod
+    def factor_detail(factor_name, market='cn_stock', freq='1d', start_date='20200101', end_date='20210101',
+                      code_list=None, n_quantiles=10, days=(1, 2, 3, 5, 8, 13, 21)):
+        """返回深度因子分析 dict（IC 时序/衰减/分位分层/多空/分布）。
+        additive：不依赖 analys/Sharpe/ICIR 的返回，直接复用其数学，老函数零改动。"""
+        try:
+            df = factorManager.loadFactors(
+                matrix_list=['close', 'open', factor_name], code_list=code_list,
+                market=market, freq=freq, start_date=start_date, end_date=end_date)
+            if df is None or df.empty:
+                return {'error': f'{factor_name} 数据为空'}
+            lvl0 = df.index.names[0]
+            t_col, c_col = ('time', 'code') if lvl0 == 'time' else ('trade_date', 'ts_code')
+            df = df.reset_index()
+            df[t_col] = pd.to_datetime(df[t_col])
+            if freq in ('1m', '5m', '15m', '30m', '1h'):           # 分钟级 resample 到日
+                df['_date'] = df[t_col].dt.normalize()
+                df = df.groupby([c_col, '_date']).last().reset_index()
+                df[t_col] = df['_date']
+                df = df.drop(columns=['_date'])
+            if start_date:
+                df = df[df[t_col] >= pd.to_datetime(start_date)]
+            if end_date:
+                df = df[df[t_col] < pd.to_datetime(end_date)]
+            if code_list:
+                df = df[df[c_col].isin(code_list)]
+            df = df.set_index([t_col, c_col])
+            df = df.replace([np.inf, -np.inf], np.nan).dropna(subset=[factor_name, 'close', 'open'])
+            if df.empty:
+                return {'error': f'{factor_name} 清洗后为空'}
+
+            days_t = tuple(days) if days else (1, 2, 3, 5, 8, 13, 21)
+            main_day = days_t[len(days_t) // 2]                    # 中位 horizon 做 IC 时序/分层
+            df['return'] = df.groupby(c_col)['close'].shift(-main_day) / df.groupby(c_col)['open'].shift(-1)
+            dfr = df.dropna(subset=['return']).copy()
+            if dfr.empty:
+                return {'error': 'forward return 全 NaN'}
+
+            # ---- IC 时序（每日横截面 Pearson IC）----
+            ic_series = factorAnalyzer._ic_series(dfr, factor_name, t_col=t_col)
+            ICs = [x['ic'] for x in ic_series]
+            IC = float(np.mean(ICs)) if ICs else 0.0
+            IC_std = float(np.std(ICs, ddof=1)) if len(ICs) > 1 else 0.0
+            IR = float(IC / IC_std) if IC_std else 0.0
+
+            # ---- 分位分层净值 ----
+            qcurves = factorAnalyzer._quantile_curves(dfr, factor_name, t_col=t_col, n=n_quantiles)
+            qsharpes = [q['sharpe'] for q in qcurves]
+            max_sharpe = float(max(qsharpes)) if qsharpes else 0.0
+            score = abs(IC) * 10 + (abs(IR) if not pd.isna(IR) else 0) + abs(max_sharpe)
+
+            # ---- IC 衰减（各 horizon 的日均 IC）----
+            ic_decay = factorAnalyzer._ic_decay(df, factor_name, t_col=t_col, c_col=c_col, days=days_t)
+
+            # ---- 多空（top - bottom 分位）----
+            long_short = None
+            if len(qcurves) >= 2:
+                top = max(qcurves, key=lambda q: q['q'])
+                bot = min(qcurves, key=lambda q: q['q'])
+                if top['daily'] and bot['daily']:
+                    ls = [a - b for a, b in zip(top['daily'], bot['daily'])]
+                    nv = float(np.prod([1 + x for x in ls]) - 1) if ls else 0.0
+                    long_short = {'daily': ls, 'nv': nv}
+
+            # ---- 分布直方图 ----
+            vals = dfr[factor_name].dropna()
+            distribution = []
+            if len(vals) > 1:
+                try:
+                    hist, edges = np.histogram(vals, bins=30)
+                    distribution = [{'bin': f'{edges[i]:.3g}~{edges[i+1]:.3g}', 'count': int(hist[i])}
+                                    for i in range(len(hist))]
+                except Exception:
+                    pass
+
+            desc = dfr[factor_name].describe()
+            total_rows = len(df)
+            coverage = float(dfr[factor_name].notna().sum() / total_rows) if total_rows else 0.0
+
+            def _f(v):
+                try:
+                    return float(v) if pd.notna(v) else 0.0
+                except Exception:
+                    return 0.0
+
+            return {
+                'name': factor_name, 'market': market, 'freq': freq,
+                'start_date': start_date, 'end_date': end_date, 'main_day': int(main_day),
+                'summary': {
+                    'IC': IC, 'IR': IR, 'Sharpe': max_sharpe, 'score': float(score),
+                    'coverage': coverage,
+                    'mean': _f(desc.get('mean', 0)), 'std': _f(desc.get('std', 0)),
+                    'min': _f(desc.get('min', 0)), 'max': _f(desc.get('max', 0)),
+                    'skew': _f(dfr[factor_name].skew()) if hasattr(dfr[factor_name], 'skew') else 0.0,
+                    'count': int(desc.get('count', 0)),
+                },
+                'ic_series': ic_series,           # [{date, ic}]
+                'ic_decay': ic_decay,             # [{days, ic}]
+                'quantile_returns': qcurves,      # [{q, nv, sharpe, daily:[decimal]}]
+                'long_short': long_short,         # {daily:[decimal], nv}
+                'distribution': distribution,     # [{bin, count}]
+            }
+        except Exception as e:
+            Log.logger.warning(f"factor_detail {factor_name} error: {e}\n{traceback.format_exc()}")
+            return {'error': str(e)}
+
+    @staticmethod
+    def _ic_series(df, factor_name, t_col='time'):
+        """每日横截面 Pearson IC → [{date, ic}]。"""
+        out = []
+        d = df.reset_index()
+        d[t_col] = pd.to_datetime(d[t_col])
+        for date, group in d.groupby(t_col):
+            sub = group.dropna(subset=[factor_name, 'return'])
+            if len(sub) < 5:
+                continue
+            c = sub[factor_name].corr(sub['return'])
+            if pd.isna(c) or np.isinf(c):
+                continue
+            out.append({'date': pd.Timestamp(date).strftime('%Y-%m-%d'), 'ic': float(c)})
+        return out
+
+    @staticmethod
+    def _ic_decay(df, factor_name, t_col='time', c_col='code', days=(1, 2, 3, 5, 8, 13, 21)):
+        """各 forward horizon 的日均横截面 IC → [{days, ic}]。"""
+        out = []
+        base = df.copy()
+        for day in days:
+            base['ret_d'] = base.groupby(c_col)['close'].shift(-day) / base.groupby(c_col)['open'].shift(-1)
+            tmp = base.dropna(subset=['ret_d']).reset_index()
+            if tmp.empty:
+                out.append({'days': int(day), 'ic': 0.0})
+                continue
+            ics = []
+            for _, g in tmp.groupby(t_col):
+                s = g.dropna(subset=[factor_name, 'ret_d'])
+                if len(s) < 5:
+                    continue
+                c = s[factor_name].corr(s['ret_d'])
+                if not pd.isna(c) and not np.isinf(c):
+                    ics.append(c)
+            out.append({'days': int(day), 'ic': float(np.mean(ics)) if ics else 0.0})
+        return out
+
+    @staticmethod
+    def _quantile_curves(df, factor_name, t_col='time', n=10):
+        """逐分位日收益序列 + 累积净值（复用 Sharpe 的 qcut 逻辑）→ [{q, nv, sharpe, daily}]。
+        daily=日收益率(decimal)，nv=cumprod(1+daily)-1。"""
+        d = df.copy()
+        d['alpha_std'] = d.groupby(t_col)[factor_name].transform(
+            lambda x: (x - x.mean()) / x.std() if x.std() != 0 else 0)
+
+        def _qcut(g, n):
+            try:
+                _, bins = pd.qcut(g, q=n, retbins=True, duplicates='drop')
+                return pd.cut(g, bins=bins, labels=range(1, len(bins)), include_lowest=True)
+            except Exception:
+                return pd.Series([None] * len(g), index=g.index)
+
+        d['q'] = d.groupby(t_col)['alpha_std'].transform(lambda x: _qcut(x, n))
+        d = d.dropna(subset=['q', 'return'])
+        out = []
+        for q in sorted(d['q'].unique()):
+            daily = d[d['q'] == q].groupby(t_col)['return'].mean().sort_index().tolist()
+            if not daily:
+                continue
+            rets = [float(x) - 1 for x in daily]                  # ratio → decimal
+            sd = float(np.std(rets, ddof=1)) if len(rets) > 1 else 0.0
+            out.append({
+                'q': int(q),
+                'nv': float(np.prod([1 + r for r in rets]) - 1),
+                'sharpe': float(np.mean(rets) / sd) if sd else 0.0,
+                'daily': rets,
+            })
+        return out
+
     # ===================== alphalens 全景（行业按市场分发） =====================
     @staticmethod
     def alphalens(factor_name='alpha', df=pd.DataFrame(), market='cn_stock', freq='1d',
