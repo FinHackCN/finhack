@@ -4,6 +4,8 @@
 挂载到 default_server 的 app（/api/*）。"""
 import os
 import sys
+import json
+import time
 import pickle
 import glob
 
@@ -424,4 +426,46 @@ def data_detail_refresh():
     from finhack.server.default import data_stats as ds
     ok = ds.refresh_data_stats_async()
     return jsonify({'ok': True, 'started': ok})
+
+
+# ===================== 数据健康检查（对标 finhack check 报告） =====================
+
+@api_bp.route('/check_report')
+def check_report():
+    """读取 finhack check 生成的 check_report.json（健康分/异常/检查点/完整性）。
+    返回 {report, age, stale}；过期(>6h)标记 stale。"""
+    from runtime.constant import REPORTS_DIR
+    p = os.path.join(REPORTS_DIR, 'check_report.json')
+    if not os.path.exists(p):
+        return jsonify({'report': None, 'age': None, 'stale': True})
+    age = time.time() - os.path.getmtime(p)
+    try:
+        with open(p, 'r', encoding='utf-8') as f:
+            rep = json.load(f)
+    except Exception as e:
+        return jsonify({'report': None, 'error': str(e), 'stale': True})
+    return jsonify({'report': rep, 'age': age, 'stale': age > 6 * 3600})
+
+
+@api_bp.route('/check_report/refresh', methods=['POST'])
+def check_report_refresh():
+    """异步运行 finhack check（~2min），刷新 check_report.json。返回 task_id。"""
+    from finhack.server.default.tasks import create_task
+
+    def _run_check():
+        import io as _io
+        from finhack.check.default.default_check import DefaultCheck
+
+        class _A:
+            target = 'all'
+        c = DefaultCheck(_A())
+        _old = sys.stdout
+        sys.stdout = _io.StringIO()
+        try:
+            c.run()
+        finally:
+            sys.stdout = _old
+
+    tid = create_task(_run_check)
+    return jsonify({'task_id': tid})
 
