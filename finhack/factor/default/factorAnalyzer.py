@@ -185,7 +185,7 @@ class factorAnalyzer():
             IC = np.sum(IC_list) / len(IC_list)
             IR = np.sum(IR_list) / len(IR_list)
             max_sharpe = np.max(Sharpe_list) if Sharpe_list else 0
-            score = abs(IC) * 10 + abs(IR) + abs(max_sharpe)
+            score = abs(IC) * 10 + (abs(IR) if not pd.isna(IR) else 0) + abs(max_sharpe)
 
             msg = f"factor_name:{factor_name},IC={IC},IR={IR},Sharpe={max_sharpe},score={score}"
             Log.logger.info((formula + "\n" + msg) if formula else msg)
