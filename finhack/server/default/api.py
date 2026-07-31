@@ -455,9 +455,13 @@ def check_report_refresh():
     def _run_check():
         import io as _io
         from finhack.check.default.default_check import DefaultCheck
+        from runtime.constant import BASE_DIR
 
         class _A:
             target = 'all'
+        # check 的 DB 查询用相对路径 data/db/tushare.sqlite，必须以 BASE_DIR 为 CWD 才能解析
+        _cwd = os.getcwd()
+        os.chdir(BASE_DIR)
         c = DefaultCheck(_A())
         _old = sys.stdout
         sys.stdout = _io.StringIO()
@@ -465,6 +469,7 @@ def check_report_refresh():
             c.run()
         finally:
             sys.stdout = _old
+            os.chdir(_cwd)
 
     tid = create_task(_run_check)
     return jsonify({'task_id': tid})

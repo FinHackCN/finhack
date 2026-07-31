@@ -2130,6 +2130,12 @@ class DefaultCheck:
             html_file = os.path.join(report_dir, 'check_report.html')
 
             # JSON
+            # 把 market_stats（每市场的 DB/缓存/因子/健康矩阵）注入 report，供 dashboard 渲染对比表
+            try:
+                self.report['market_stats'] = {m: dict(stats) for m, stats in self.market_stats.items()}
+            except Exception:
+                pass
+
             with open(json_file, 'w', encoding='utf-8') as f:
                 json.dump(self.report, f, ensure_ascii=False, indent=2, default=str)
 
