@@ -402,3 +402,26 @@ def data_coverage():
         row['date_range'] = [min(years), max(years)] if years else None
         out.append(row)
     return jsonify(out)
+
+
+# ===================== 数据存储详情（磁盘占用/同步时间，对标 check） =====================
+
+@api_bp.route('/data_detail')
+def data_detail():
+    """数据存储详情：总占用/各子目录/磁盘空闲、每市场 kline+因子大小、代码数、
+    因子数、日期范围、最新同步时间。计算 ~10-20s，走缓存；首次/过期自动后台刷新。"""
+    from finhack.server.default import data_stats as ds
+    res = ds.get_data_stats()
+    # 无缓存或过期 → 后台触发刷新
+    if res['stats'] is None or res['stale']:
+        ds.refresh_data_stats_async()
+    return jsonify(res)
+
+
+@api_bp.route('/data_detail/refresh', methods=['POST'])
+def data_detail_refresh():
+    """手动触发数据存储统计刷新。"""
+    from finhack.server.default import data_stats as ds
+    ok = ds.refresh_data_stats_async()
+    return jsonify({'ok': True, 'started': ok})
+
