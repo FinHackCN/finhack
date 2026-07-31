@@ -70,9 +70,40 @@ def _newest_market(root):
     return best
 
 
+def _file_type_stats(path):
+    """全树按文件扩展名聚合（文件数 + 大小）。find 流式输出 → Python 逐行聚合，
+    常量内存（不把百万行读进内存）。全 DATA_DIR 约 12s。"""
+    agg = {}
+    if not path or not os.path.isdir(path):
+        return []
+    try:
+        proc = subprocess.Popen(['find', path, '-type', 'f', '-printf', '%s %f\\n'],
+                                stdout=subprocess.PIPE, text=True)
+        for line in proc.stdout:
+            sp = line.find(' ')
+            if sp < 0:
+                continue
+            try:
+                sz = int(line[:sp])
+            except ValueError:
+                continue
+            fn = line[sp + 1:].rstrip('\n')
+            dot = fn.rfind('.')
+            ext = fn[dot + 1:].lower() if dot > 0 else '(无扩展名)'
+            d = agg.setdefault(ext, [0, 0])
+            d[0] += 1
+            d[1] += sz
+        proc.wait()
+    except Exception:
+        pass
+    out = [{'ext': e, 'count': c, 'size': s} for e, (c, s) in agg.items()]
+    out.sort(key=lambda x: -x['size'])
+    return out
+
+
 def compute_data_stats():
-    """全量统计。du --max-depth=1 一次拿子目录大小，find 一次遍历按市场分组取最新 mtime，
-    6 个 subprocess 并行 → ~10-15s（瓶颈是最慢的那棵树）。返回 dict。"""
+    """全量统计。du --max-depth=1 拿子目录大小，find 扫最新年目录取同步时间，
+    find 流式聚合文件类型；并行 → ~25-30s（瓶颈是最慢的树）。返回 dict。"""
     from concurrent.futures import ThreadPoolExecutor
     from runtime.constant import DATA_DIR, KLINE_DIR
     from finhack.library import market_context as mctx
@@ -100,12 +131,14 @@ def compute_data_stats():
         f_cb = ex.submit(_du_depth1, cb_root)
         f_tb = ex.submit(_du_depth1, tb_root)
         f_fac = ex.submit(_du_depth1, fac_root)
+        f_ftype = ex.submit(_file_type_stats, DATA_DIR)
         sync_futs = {mk: ex.submit(_newest_market, os.path.join(cb_root, mk)) for mk in all_markets}
         fsync_futs = {mk: ex.submit(_newest_market, os.path.join(fac_root, mk)) for mk in all_markets}
         data_depth = f_data.result()
         cb_depth = f_cb.result()
         tb_depth = f_tb.result()
         fac_depth = f_fac.result()
+        file_types = f_ftype.result()
         sync_map = {mk: sync_futs[mk].result() for mk in all_markets}
         fsync_map = {mk: fsync_futs[mk].result() for mk in all_markets}
 
@@ -160,6 +193,7 @@ def compute_data_stats():
         'elapsed': round(time.time() - t0, 1),
         'total': total,
         'by_subdir': by_subdir,
+        'file_types': file_types,
         'disk': {'total': disk.total, 'used': disk.used, 'free': disk.free},
         'markets': markets_out,
     }
