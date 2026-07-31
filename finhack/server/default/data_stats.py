@@ -101,6 +101,60 @@ def _file_type_stats(path):
     return out
 
 
+def _du_freq_sizes(root):
+    """du -b --max-depth=2 → {(market, freq): size}。一次遍历拿全部 market×freq 大小。"""
+    if not root or not os.path.isdir(root):
+        return {}
+    try:
+        out = subprocess.run(['du', '-b', '--max-depth=2', root], capture_output=True, text=True, timeout=600).stdout
+        res = {}
+        for line in out.splitlines():
+            parts = line.split(None, 1)
+            if len(parts) != 2:
+                continue
+            sz, p = parts
+            rel = os.path.relpath(p.strip(), root)
+            if rel == '.' or rel.startswith('..'):
+                continue
+            seg = rel.split(os.sep)
+            if len(seg) == 2:          # market/freq
+                res[(seg[0], seg[1])] = int(sz)
+        return res
+    except Exception:
+        return {}
+
+
+def _freq_info(fdir, size):
+    """某 market/freq 目录的细项：{size, year_range, latest_sync, codes}。
+    codes = 最新 year 目录下的条目数（codebased=代码csv数；factors=代码目录数；timebased=月数）。"""
+    info = {'size': size, 'year_range': None, 'latest_sync': None, 'codes': 0}
+    if not fdir or not os.path.isdir(fdir) or size == 0:
+        return info
+    years = sorted(int(y) for y in os.listdir(fdir) if y.isdigit() and os.path.isdir(os.path.join(fdir, y)))
+    if years:
+        info['year_range'] = [years[0], years[-1]]
+        lyd = os.path.join(fdir, str(years[-1]))
+        info['latest_sync'] = _newest_dir(lyd)
+        try:
+            info['codes'] = len([d for d in os.listdir(lyd)])
+        except Exception:
+            info['codes'] = 0
+    return info
+
+
+def _newest_dir(d):
+    """目录下最新文件的 mtime（find -printf %T@ 取 max）。仅扫给定目录（已限定到最新年）。"""
+    if not d or not os.path.isdir(d):
+        return None
+    try:
+        out = subprocess.run(['find', d, '-type', 'f', '-printf', '%T@\\n'],
+                             capture_output=True, text=True, timeout=120).stdout
+        ts = [float(x) for x in out.split() if x]
+        return max(ts) if ts else None
+    except Exception:
+        return None
+
+
 def compute_data_stats():
     """全量统计。du --max-depth=1 拿子目录大小，find 扫最新年目录取同步时间，
     find 流式聚合文件类型；并行 → ~25-30s（瓶颈是最慢的树）。返回 dict。"""
@@ -128,25 +182,56 @@ def compute_data_stats():
 
     with ThreadPoolExecutor(max_workers=12) as ex:
         f_data = ex.submit(_du_depth1, DATA_DIR)
-        f_cb = ex.submit(_du_depth1, cb_root)
-        f_tb = ex.submit(_du_depth1, tb_root)
-        f_fac = ex.submit(_du_depth1, fac_root)
+        f_cb = ex.submit(_du_freq_sizes, cb_root)
+        f_tb = ex.submit(_du_freq_sizes, tb_root)
+        f_fac = ex.submit(_du_freq_sizes, fac_root)
         f_ftype = ex.submit(_file_type_stats, DATA_DIR)
-        sync_futs = {mk: ex.submit(_newest_market, os.path.join(cb_root, mk)) for mk in all_markets}
-        fsync_futs = {mk: ex.submit(_newest_market, os.path.join(fac_root, mk)) for mk in all_markets}
         data_depth = f_data.result()
-        cb_depth = f_cb.result()
-        tb_depth = f_tb.result()
-        fac_depth = f_fac.result()
+        cb_freq = f_cb.result()       # {(market,freq): size}
+        tb_freq = f_tb.result()
+        fac_freq = f_fac.result()
         file_types = f_ftype.result()
-        sync_map = {mk: sync_futs[mk].result() for mk in all_markets}
-        fsync_map = {mk: fsync_futs[mk].result() for mk in all_markets}
 
     disk = shutil.disk_usage(DATA_DIR)
     data_self_key = os.path.basename(DATA_DIR.rstrip('/'))
     total = data_depth.get(data_self_key, sum(data_depth.values()))
-
     by_subdir = {s: data_depth.get(s, 0) for s in subdirs}
+
+    # 因子计数（market,freq）→ 因子数
+    fac_count_map = {}
+    for (mk, frq) in set(list(cb_freq) + list(tb_freq) + list(fac_freq)):
+        if fac_freq.get((mk, frq), 0) > 0:
+            try:
+                fac_count_map[(mk, frq)] = len(factorManager.list_factors(market=mk, freq=frq))
+            except Exception:
+                fac_count_map[(mk, frq)] = 0
+
+    # 细项明细：market × freq × type（kline_cb/kline_tb/factors）
+    detail = []
+    market_summary = {}  # mk -> 累计 kline/factors/latest
+    keys = sorted(set(list(cb_freq) + list(tb_freq) + list(fac_freq)))
+    with ThreadPoolExecutor(max_workers=12) as ex:
+        fut_map = {}
+        for (mk, frq) in keys:
+            for typ, fmap, root in [('kline_cb', cb_freq, cb_root), ('kline_tb', tb_freq, tb_root), ('factors', fac_freq, fac_root)]:
+                sz = fmap.get((mk, frq), 0)
+                fdir = os.path.join(root, mk, frq)
+                fut_map[(mk, frq, typ)] = (ex.submit(_freq_info, fdir, sz), sz, typ)
+        for (mk, frq, typ), (fut, sz, typ2) in fut_map.items():
+            info = fut.result()
+            row = {'market': mk, 'freq': frq, 'type': typ, **info}
+            if typ == 'factors':
+                row['factor_count'] = fac_count_map.get((mk, frq), 0)
+            detail.append(row)
+            ms = market_summary.setdefault(mk, {'kline': 0, 'factors': 0, 'latest': None})
+            if typ == 'factors':
+                ms['factors'] += sz
+            else:
+                ms['kline'] += sz
+            if info['latest_sync']:
+                if ms['latest'] is None or info['latest_sync'] > ms['latest']:
+                    ms['latest'] = info['latest_sync']
+    detail.sort(key=lambda r: (r['market'], r['freq'], r['type']))
 
     markets_out = []
     for mk in all_markets:
@@ -155,36 +240,18 @@ def compute_data_stats():
             cfg = mctx.get_market_config(mk) or {}
         except Exception:
             cfg = {}
-        kcb = cb_depth.get(mk, 0)
-        ktb = tb_depth.get(mk, 0)
-        fsz = fac_depth.get(mk, 0)
         codes = 0
         try:
             sl = di.get_stock_list(market=mk, use_cache=False)
             codes = int(len(sl)) if sl is not None else 0
         except Exception:
             codes = 0
-        freqs = cfg.get('freq_support', ['1d'])
-        fac_counts = {}
-        for frq in freqs:
-            try:
-                fac_counts[frq] = len(factorManager.list_factors(market=mk, freq=frq))
-            except Exception:
-                fac_counts[frq] = 0
-        years = []
-        for frq in freqs:
-            yd = os.path.join(cb_root, mk, frq)
-            if os.path.isdir(yd):
-                years += [int(b) for b in os.listdir(yd) if b.isdigit() and os.path.isdir(os.path.join(yd, b))]
+        ms = market_summary.get(mk, {'kline': 0, 'factors': 0, 'latest': None})
         markets_out.append({
             'market': mk,
-            'kline_size': kcb + ktb, 'kline_cb': kcb, 'kline_tb': ktb,
-            'factors_size': fsz, 'codes': codes,
-            'factors': fac_counts,
-            'date_range': [min(years), max(years)] if years else None,
-            'latest_sync': sync_map.get(mk),
-            'latest_factors_sync': fsync_map.get(mk),
-            'freq_support': freqs, 'benchmark': cfg.get('benchmark'),
+            'kline_size': ms['kline'], 'factors_size': ms['factors'], 'codes': codes,
+            'latest_sync': ms['latest'],
+            'freq_support': cfg.get('freq_support', ['1d']), 'benchmark': cfg.get('benchmark'),
             'currency': cfg.get('currency'), 'is_derivatives': cfg.get('is_derivatives', False),
         })
 
@@ -196,6 +263,7 @@ def compute_data_stats():
         'file_types': file_types,
         'disk': {'total': disk.total, 'used': disk.used, 'free': disk.free},
         'markets': markets_out,
+        'detail': detail,
     }
 
 
