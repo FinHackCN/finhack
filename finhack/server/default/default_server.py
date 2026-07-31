@@ -134,7 +134,9 @@ class DefaultServer:
             return render_template('index.html', data=bt_list)
 
         # 不再需要检查 __name__ == '__main__'，因为这个方法将被直接调用
+        # host 默认 0.0.0.0（外部可访问），可通过 host= 参数覆盖；port 默认 5000
         app.run(debug=False,
+                host=getattr(self.args, 'host', '0.0.0.0') or '0.0.0.0',
                 port=int(getattr(self.args, 'port', 5000) or 5000)
             )
 
