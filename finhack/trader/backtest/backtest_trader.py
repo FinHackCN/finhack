@@ -1149,7 +1149,42 @@ class PriceRelatedSlippage:
             strategy=self.strategy,
             scheduled_tasks=self.context['scheduled_tasks']
         )
-    
+        # 持久化回测结果（供 dashboard 查看）
+        try:
+            self._save_backtest_result()
+        except Exception as e:
+            Log.logger.error(f"保存回测结果失败: {e}")
+
+    def _save_backtest_result(self):
+        """将回测结果 pickle 到 data/backtest/{instance_id}.pkl"""
+        import pickle
+        from runtime.constant import DATA_DIR
+        from datetime import datetime as _dt
+        settings = self.context.get('settings', {})
+        market = settings.get('market', 'unknown')
+        strategy = settings.get('strategy', 'unknown')
+        instance_id = f"{_dt.now().strftime('%Y%m%d_%H%M%S')}_{market}_{strategy}"
+        result = {
+            'instance_id': instance_id,
+            'market': market,
+            'strategy': strategy,
+            'freq': settings.get('freq', '1d'),
+            'start_date': settings.get('start_date', ''),
+            'end_date': settings.get('end_date', ''),
+            'cash': settings.get('cash', 1000000),
+            'performance': self.context.get('performance', {}) or {},
+            'trades': self.context.get('logs', {}).get('all_trades', []),
+            'daily_history': self.context.get('logs', {}).get('daily_history', []),
+            'create_time': _dt.now().isoformat(),
+        }
+        backtest_dir = os.path.join(DATA_DIR, 'backtest')
+        os.makedirs(backtest_dir, exist_ok=True)
+        path = os.path.join(backtest_dir, f'{instance_id}.pkl')
+        with open(path, 'wb') as f:
+            pickle.dump(result, f)
+        Log.logger.info(f"回测结果已保存: {path}")
+        self.context['backtest_id'] = instance_id
+
     def get_cash_sync(self, context=None):
         """获取当前可用现金"""
         try:

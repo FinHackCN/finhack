@@ -19,6 +19,19 @@ class DefaultServer:
 
         root_directory = REPORTS_DIR
 
+        # 挂载 REST API（finhack dashboard 用：/api/markets /api/factors /api/run/* 等）
+        try:
+            from finhack.server.default.api import api_bp
+            app.register_blueprint(api_bp)
+            Log.logger.info("API blueprint mounted at /api")
+        except Exception as e:
+            Log.logger.warning(f"API blueprint 挂载失败（dashboard 将不可用）: {e}")
+
+        @app.route('/dashboard')
+        def dashboard():
+            """finhack 量化全流程 Dashboard（Vue3 + ECharts SPA）"""
+            return send_from_directory(root_directory, 'dashboard.html')
+
         # @app.route('/<path:path>')
         # def static_proxy(path):
         #     # send_static_file 会猜测正确的 MIME 类型
