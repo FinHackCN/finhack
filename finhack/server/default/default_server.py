@@ -12,7 +12,11 @@ from finhack.trader.default.default_trader import DefaultTrader
 from flask import Flask, send_from_directory,render_template,request
 import re
 class DefaultServer:
-    def run(self,args):
+    def __init__(self, args):
+        # BaseLoader 实例化时传 args（与 DefaultTrader 一致），存为 self.args 供 run() 用
+        self.args = args
+
+    def run(self, args=None):
         app = Flask(__name__,
                     template_folder=REPORTS_DIR,
                     static_folder=REPORTS_DIR+'static/')
@@ -131,7 +135,7 @@ class DefaultServer:
 
         # 不再需要检查 __name__ == '__main__'，因为这个方法将被直接调用
         app.run(debug=False,
-                port=int(self.args.port)
+                port=int(getattr(self.args, 'port', 5000) or 5000)
             )
 
 
