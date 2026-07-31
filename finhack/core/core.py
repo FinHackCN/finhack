@@ -379,6 +379,12 @@ finhack trainer run --vendor=lightgbm --market=cn_stock --freq=1d \\
   --start_date=20200101 --valid_date=20210101 --end_date=20220101
 
 ================================
+Web 服务模块 (server)
+================================
+finhack server run port=5055                               # 启动 Flask server + dashboard
+# 浏览器打开 http://localhost:5055/dashboard → 因子管理/分析/ML训练/回测/数据管理
+
+================================
 常用流程
 ================================
 # 数据采集
