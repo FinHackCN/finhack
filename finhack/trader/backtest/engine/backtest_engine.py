@@ -4606,6 +4606,12 @@ class BacktestEngine:
                 'information_ratio': float(information_ratio),
             })
 
+            # 持久化基准日收益序列（供 dashboard 画基准/超额净值曲线；此前算了即弃）
+            try:
+                self.context['performance']['bench_returns'] = [float(x) for x in aligned_benchmark_returns]
+            except Exception:
+                pass
+
             Log.logger.info(f"基准收益率 - 总收益: {benchmark_total_return:.2%}, 年化收益: {benchmark_annual_return:.2%}")
             Log.logger.info(f"超额收益 - 超额收益: {excess_return:.2%}, 跟踪误差: {tracking_error:.2%}, 信息比率: {information_ratio:.2f}")
 
