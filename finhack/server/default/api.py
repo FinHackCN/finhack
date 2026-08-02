@@ -199,7 +199,86 @@ def backtest_detail(instance_id):
         'win_ratio': perf.get('win_ratio'),
         'trades': trades_page,
         'page': page, 'size': size,
+        'rich_indicators': _rich(perf, daily_history, all_trades),
     })
+
+
+def _rich(perf, daily_history, trades):
+    """服务端现算富绩效指标（empyrical+numpy），失败返回 {}。"""
+    try:
+        from finhack.server.default.metrics import compute_rich_indicators
+        ret = perf.get('returns', [])
+        bench = perf.get('bench_returns', [])
+        if not len(ret):
+            return {}
+        return compute_rich_indicators(
+            ret, bench if len(bench) else None,
+            daily_history=daily_history, trades=trades)
+    except Exception as e:
+        return {'error': str(e)}
+
+
+@api_bp.route('/backtest/<instance_id>/quantstats')
+def backtest_quantstats(instance_id):
+    """生成 quantstats HTML 报告（月度收益/回撤/分布等），缓存到 pickle 同目录 .qs.html。"""
+    from runtime.constant import DATA_DIR
+    bt_dir = os.path.join(DATA_DIR, 'backtest')
+    files = glob.glob(os.path.join(bt_dir, f'*{instance_id}*.pkl'))
+    if not files:
+        return jsonify({'error': 'not found'}), 404
+    pkl = files[0]
+    cache = pkl[:-4] + '.qs.html'
+    if os.path.exists(cache):
+        try:
+            import flask
+            return flask.Response(open(cache, encoding='utf-8').read(), mimetype='text/html')
+        except Exception:
+            pass
+    import pandas as pd
+    with open(pkl, 'rb') as f:
+        r = pickle.load(f)
+    ret = r.get('performance', {}).get('returns', [])
+    if not ret:
+        return jsonify({'error': '无收益序列'}), 400
+    try:
+        import quantstats as qs
+        idx = pd.date_range(end=pd.Timestamp.today().normalize(), periods=len(ret), freq='D')
+        qs.reports.html(pd.Series(ret, index=idx), benchmark=None, title='finhack 回测报告', output=cache)
+        import flask
+        return flask.Response(open(cache, encoding='utf-8').read(), mimetype='text/html')
+    except Exception as e:
+        # quantstats 与 numpy2/pandas2 可能不兼容 → 降级到自渲染指标 HTML
+        html = _fallback_report(r, str(e))
+        try:
+            with open(cache, 'w', encoding='utf-8') as f:
+                f.write(html)
+        except Exception:
+            pass
+        import flask
+        return flask.Response(html, mimetype='text/html')
+
+
+def _fallback_report(r, err):
+    """quantstats 不可用时的降级 HTML（指标表 + 日收益曲线）。"""
+    perf = r.get('performance', {})
+    ret = perf.get('returns', [])
+    from finhack.server.default.metrics import compute_rich_indicators
+    rich = compute_rich_indicators(ret, perf.get('bench_returns'), r.get('daily_history'), trades=r.get('trades'))
+    import numpy as np
+    eq = list(np.cumprod([1 + x for x in ret])) if ret else []
+    rows = ''
+    for grp, d in rich.items():
+        for k, v in d.items():
+            val = f'{v*100:.2f}%' if isinstance(v, float) and abs(v) < 50 else str(v)
+            rows += f'<tr><td>{grp}</td><td>{k}</td><td style="text-align:right">{val}</td></tr>'
+    pts = ','.join(f'{i},{1/(eq[0] if eq else 1)*v:.4f}' for i, v in enumerate(eq))
+    return f'''<html><head><meta charset="utf-8"><style>body{{font-family:system-ui;background:#fff;color:#222;padding:20px}}
+.note{{color:#888;font-size:12px;margin-bottom:8px}}table{{border-collapse:collapse;width:100%;font-size:13px}}
+td,th{{border:1px solid #eee;padding:6px 10px;text-align:left}}th{{background:#f5f5f5}}</style></head>
+<body><div class="note">quantstats 报告生成失败（{err[:80]}），以下为降级指标视图。</div>
+<svg width="100%" height="220" viewBox="0 0 {max(len(eq),1)} 1" preserveAspectRatio="none" style="background:#fafafa">
+<polyline fill="none" stroke="#2563eb" stroke-width="1" points="{pts}"/></svg>
+<table><thead><tr><th>分组</th><th>指标</th><th>值</th></tr></thead><tbody>{rows}</tbody></table></body></html>'''
 
 
 # ===================== 异步执行（长任务） =====================
@@ -302,6 +381,16 @@ def run_mine():
     return jsonify({'task_id': task_id})
 
 
+@api_bp.route('/run/pipeline', methods=['POST'])
+def run_pipeline():
+    """一键全流程：steps=factor,analyze,train,trader（finhack.api.functional.run_pipeline）。"""
+    from finhack.api.functional import run_pipeline
+    from finhack.server.default.tasks import create_task
+    data = request.json or {}
+    task_id = create_task(run_pipeline, **data)
+    return jsonify({'task_id': task_id})
+
+
 # ===================== 策略管理（下拉 + 在线编辑器） =====================
 
 def _strategies_dir(market):
@@ -362,9 +451,104 @@ def strategy_file_save():
     base = os.path.realpath(d)
     if not path.startswith(base + os.sep):
         return jsonify({'error': 'path escape'}), 400
+    # 覆盖前快照现有文件到 .versions/（仅当目标已存在）
+    snap = None
+    if os.path.isfile(path):
+        snap = _snapshot_strategy(d, name, path)
     with open(path, 'w', encoding='utf-8') as f:
         f.write(content)
-    return jsonify({'ok': True, 'path': path})
+    return jsonify({'ok': True, 'path': path, 'snapshot': snap})
+
+
+def _versions_dir(market_dir):
+    vd = os.path.join(market_dir, '.versions')
+    os.makedirs(vd, exist_ok=True)
+    return vd
+
+
+def _snapshot_strategy(market_dir, name, current_path):
+    """把 current_path 内容快照到 .versions/{name}.{ts}.py，返回 ts。"""
+    import time as _t
+    ts = _t.strftime('%Y%m%d_%H%M%S')
+    vd = _versions_dir(market_dir)
+    snap = os.path.join(vd, f'{name}.{ts}.py')
+    try:
+        with open(current_path, 'r', encoding='utf-8') as f:
+            old = f.read()
+        with open(snap, 'w', encoding='utf-8') as f:
+            f.write(old)
+        return ts
+    except Exception as e:
+        return None
+
+
+@api_bp.route('/strategy_versions')
+def strategy_versions():
+    """列某策略的历史版本（ts/大小/mtime，倒序）。"""
+    import glob as _g
+    import re
+    market = request.args.get('market', 'cn_stock')
+    name = request.args.get('name', '')
+    if not re.match(r'^\w+$', name):
+        return jsonify({'error': 'invalid name'}), 400
+    vd = _versions_dir(_strategies_dir(market))
+    out = []
+    for f in _g.glob(os.path.join(vd, f'{name}.*.py')):
+        b = os.path.basename(f)
+        m = re.match(rf'^{re.escape(name)}\.(\d{{8}}_\d{{6}})\.py$', b)
+        if not m:
+            continue
+        out.append({'ts': m.group(1), 'file': b, 'size': os.path.getsize(f),
+                    'mtime': os.path.getmtime(f)})
+    out.sort(key=lambda x: x['ts'], reverse=True)
+    return jsonify({'market': market, 'name': name, 'versions': out[:50]})
+
+
+@api_bp.route('/strategy_version')
+def strategy_version_get():
+    """读某历史版本内容。"""
+    import re
+    market = request.args.get('market', 'cn_stock')
+    name = request.args.get('name', '')
+    ts = request.args.get('ts', '')
+    if not re.match(r'^\w+$', name) or not re.match(r'^\d{8}_\d{6}$', ts):
+        return jsonify({'error': 'invalid name/ts'}), 400
+    vd = _versions_dir(_strategies_dir(market))
+    path = os.path.realpath(os.path.join(vd, f'{name}.{ts}.py'))
+    base = os.path.realpath(vd)
+    if not path.startswith(base + os.sep) or not os.path.isfile(path):
+        return jsonify({'error': 'not found'}), 404
+    with open(path, 'r', encoding='utf-8') as f:
+        return jsonify({'name': name, 'ts': ts, 'content': f.read()})
+
+
+@api_bp.route('/strategy_restore', methods=['POST'])
+def strategy_restore():
+    """恢复某历史版本：先快照当前（可逆），再把该版本覆盖回 live 文件。"""
+    import re
+    from finhack.library import market_context as m
+    data = request.json or {}
+    market = data.get('market', 'cn_stock')
+    name = data.get('name', '')
+    ts = data.get('ts', '')
+    if market not in m.list_markets() or not re.match(r'^\w+$', name) or not re.match(r'^\d{8}_\d{6}$', ts):
+        return jsonify({'error': 'invalid market/name/ts'}), 400
+    d = _strategies_dir(market)
+    live = os.path.realpath(os.path.join(d, name + '.py'))
+    base = os.path.realpath(d)
+    if not live.startswith(base + os.sep):
+        return jsonify({'error': 'path escape'}), 400
+    vd = _versions_dir(d)
+    ver = os.path.realpath(os.path.join(vd, f'{name}.{ts}.py'))
+    vbase = os.path.realpath(vd)
+    if not ver.startswith(vbase + os.sep) or not os.path.isfile(ver):
+        return jsonify({'error': 'version not found'}), 404
+    snap = _snapshot_strategy(d, name, live) if os.path.isfile(live) else None
+    with open(ver, 'r', encoding='utf-8') as f:
+        content = f.read()
+    with open(live, 'w', encoding='utf-8') as f:
+        f.write(content)
+    return jsonify({'ok': True, 'restored_ts': ts, 'snapshot_before': snap})
 
 
 # ===================== 数据覆盖统计 =====================
