@@ -142,14 +142,11 @@ class factorAnalyzer():
             t_col, c_col = ('time', 'code') if lvl0 == 'time' else ('trade_date', 'ts_code')
 
             df = df.reset_index()
-            df[t_col] = pd.to_datetime(df[t_col])
-            # 1m/分钟级：resample 到日（每 code 每日最后值），避免 groupby(time) 数十万点超时；
-            # 语义=1m 因子(每日最后值) vs 日收益，同时降噪
-            if freq in ('1m', '5m', '15m', '30m', '1h'):
-                df['_date'] = df[t_col].dt.normalize()
-                df = df.groupby([c_col, '_date']).last().reset_index()
-                df[t_col] = df['_date']
-                df = df.drop(columns=['_date'])
+            df[t_col] = pd.to_datetime(df[t_col]).dt.normalize()
+            # 时间戳归一到日期：TA-Lib 指标存盘用 00:00、OHLCV 用 09:30，拼接后同 code 同日会
+            # 落在两行（指标行 close 空 / OHLCV 行因子空）→ dropna 全空；按 code×日 first() 合并。
+            # 同时把 1m/分钟级降采样到日（每 code 每日首个非空）。
+            df = df.groupby([c_col, t_col]).first().reset_index()
             if start_date != '':
                 df = df[df[t_col] >= pd.to_datetime(start_date)]
             if end_date != '':
@@ -311,12 +308,10 @@ class factorAnalyzer():
             lvl0 = df.index.names[0]
             t_col, c_col = ('time', 'code') if lvl0 == 'time' else ('trade_date', 'ts_code')
             df = df.reset_index()
-            df[t_col] = pd.to_datetime(df[t_col])
-            if freq in ('1m', '5m', '15m', '30m', '1h'):           # 分钟级 resample 到日
-                df['_date'] = df[t_col].dt.normalize()
-                df = df.groupby([c_col, '_date']).last().reset_index()
-                df[t_col] = df['_date']
-                df = df.drop(columns=['_date'])
+            df[t_col] = pd.to_datetime(df[t_col]).dt.normalize()
+            # 时间戳归一到日期：TA-Lib 指标存盘 00:00、OHLCV 09:30，拼接后同 code 同日两行
+            # （因子行 close 空 / OHLCV 行因子空）→ dropna 全空；按 code×日 first() 合并。
+            df = df.groupby([c_col, t_col]).first().reset_index()
             if start_date:
                 df = df[df[t_col] >= pd.to_datetime(start_date)]
             if end_date:
