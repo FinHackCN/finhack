@@ -321,8 +321,12 @@ def order_buy(security,amount):
     log(f"-------------------{is_new}-------------",'trace')
     log(f"当前现金："+str(context.portfolio.cash),'trace')
     log(f"当前持仓："+str(context.portfolio.positions_value),'trace')
-    log(f"当前市值："+str(context.portfolio.total_value),'trace')    
-    return True    
+    log(f"当前市值："+str(context.portfolio.total_value),'trace')
+    try:
+        _lt=getattr(context.logs,'all_trades',None) or context['logs'].setdefault('all_trades',[])
+        _lt.append({'symbol':security,'side':'buy','volume':o.amount,'price':o.last_sale_price,'amount':o.value,'trade_time':context.current_dt.strftime('%Y-%m-%d %H:%M:%S')})
+    except Exception: pass
+    return True
 
 def order_sell(security,amount):
     o=Order(code=security,amount=amount,is_buy=False,context=context)
@@ -374,9 +378,13 @@ def order_sell(security,amount):
     log('---------------------------------','trace')
     log(f"当前现金："+str(context.portfolio.cash),'trace')
     log(f"当前持仓："+str(context.portfolio.positions_value),'trace')
-    log(f"当前市值："+str(context.portfolio.total_value),'trace')    
+    log(f"当前市值："+str(context.portfolio.total_value),'trace')
+    try:
+        _lt=getattr(context.logs,'all_trades',None) or context['logs'].setdefault('all_trades',[])
+        _lt.append({'symbol':security,'side':'sell','volume':o.amount,'price':pos.last_sale_price,'amount':o.value,'trade_time':context.current_dt.strftime('%Y-%m-%d %H:%M:%S')})
+    except Exception: pass
 
-    return True    
+    return True
     
     # print(security)
     # print(value)

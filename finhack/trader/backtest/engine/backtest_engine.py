@@ -4306,6 +4306,18 @@ class BacktestEngine:
             }
             self.context['performance']['win_ratio'] = win_ratio
             self.context['performance']['trade_num'] = len(self.trade_center.trades)
+            # 捕获交易到引擎实例属性（context['logs'] 可能被清理清空；to_dict 可能抛异常→手动兜底）
+            self._captured_trades = []
+            try:
+                self._captured_trades = [t.to_dict() for t in self.trade_center.trades.values()]
+            except Exception:
+                try:
+                    self._captured_trades = [{'symbol': str(getattr(t,'symbol','')), 'side': str(getattr(t,'side','')),
+                        'volume': float(getattr(t,'volume',0)), 'price': float(getattr(t,'price',0)),
+                        'amount': float(getattr(t,'amount',0)), 'trade_time': str(getattr(t,'trade_time',''))}
+                        for t in self.trade_center.trades.values()]
+                except Exception:
+                    pass
             
             Log.logger.info(f"回测绩效 - 总收益: {total_return:.2%}, 年化收益: {annual_return:.2%}, "
                           f"夏普比率: {sharpe_ratio:.2f}, 最大回撤: {max_drawdown:.2%}, "

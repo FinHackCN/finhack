@@ -61,6 +61,40 @@ from .models.trade import Trade
 from .models.instrument import Instrument
 
 
+def _collect_trades(trader, context, engine):
+    """收集交易记录。优先 trader._trades_list（order_buy_sync/order_sell_sync 里记录的），
+    回退 all_trades / engine._captured_trades / trade_center.trades。"""
+    # 优先：trader._trades_list（最可靠，在 order_buy/sell_sync 里记录）
+    tl = getattr(trader, '_trades_list', None)
+    if tl:
+        return tl
+    trades = context.get('logs', {}).get('all_trades', [])
+    if trades:
+        return trades
+    # 回退：engine 实例属性 + trade_center
+    ct = getattr(engine, '_captured_trades', None)
+    if ct:
+        return ct
+    for src in [context.get('trade_center'), getattr(engine, 'trade_center', None), getattr(engine, 'trades', None)]:
+        if src is None: continue
+        if hasattr(src, 'trades') and isinstance(src.trades, dict) and src.trades:
+            return [t.to_dict() if hasattr(t, 'to_dict') else dict(t) for t in src.trades.values()]
+        if isinstance(src, list) and src:
+            return [t.to_dict() if hasattr(t, 'to_dict') else dict(t) for t in src]
+    return []
+    trades = context.get('logs', {}).get('all_trades', [])
+    if trades:
+        return trades
+    # 回退：trade_center / engine.trades
+    for src in [context.get('trade_center'), getattr(engine, 'trade_center', None), getattr(engine, 'trades', None)]:
+        if src is None: continue
+        if hasattr(src, 'trades') and isinstance(src.trades, dict) and src.trades:
+            return [t.to_dict() if hasattr(t, 'to_dict') else dict(t) for t in src.trades.values()]
+        if isinstance(src, list) and src:
+            return [t.to_dict() if hasattr(t, 'to_dict') else dict(t) for t in src]
+    return []
+
+
 class BacktestTrader:
     """回测交易器主入口类"""
 
@@ -842,19 +876,14 @@ class PriceRelatedSlippage:
         return True
 
     def order_buy_sync(self, context, symbol, volume, price=None):
-        """便利买入方法
-
-        Args:
-            context: 回测上下文（兼容策略调用方式）
-            symbol: 股票代码
-            volume: 数量
-            price: 价格（可选）
-        """
         if not self._validate_order_volume(symbol, volume):
             return None
         from finhack.trader.backtest.models.enums import Side, OrderType
         order_type = OrderType.LIMIT if price else OrderType.MARKET
-        return self.place_order_sync('backtest', symbol, Side.BUY, order_type, volume, price)
+        result = self.place_order_sync('backtest', symbol, Side.BUY, order_type, volume, price)
+        if result:
+            self._record_trade('buy', symbol, volume, price or self._get_last_price(symbol), context)
+        return result
     
     def order_sell_sync(self, context, symbol, volume, price=None):
         """便利卖出方法
@@ -895,9 +924,38 @@ class PriceRelatedSlippage:
                     short_order = self.place_order_sync('backtest', symbol, Side.SHORT_OPEN, order_type, volume - long_available, price)
                     return short_order if short_order else sell_order
 
-        return self.place_order_sync('backtest', symbol, Side.SELL, order_type, volume, price)
+        result = self.place_order_sync('backtest', symbol, Side.SELL, order_type, volume, price)
+        if result:
+            self._record_trade('sell', symbol, volume, price or self._get_last_price(symbol), context)
+        return result
 
-    def order_short_sync(self, context, symbol, volume, price=None):
+    def _record_trade(self, side, symbol, volume, price, context):
+        """记录交易详情到 self._trades_list（dashboard 交易表 + 持久化用）"""
+        if not hasattr(self, '_trades_list'):
+            self._trades_list = []
+        try:
+            dt = context.get('current_dt', '') if isinstance(context, dict) else getattr(context, 'current_dt', '')
+            ts = dt.strftime('%Y-%m-%d %H:%M:%S') if hasattr(dt, 'strftime') else str(dt)
+        except Exception:
+            ts = ''
+        self._trades_list.append({
+            'symbol': symbol, 'side': side, 'volume': volume,
+            'price': float(price) if price else 0,
+            'amount': float(volume * price) if price else 0,
+            'trade_time': ts
+        })
+
+    def _get_last_price(self, symbol):
+        """获取最新价格（用于市价单记录）"""
+        try:
+            tc = self.context.get('trade_center') if isinstance(self.context, dict) else None
+            if tc:
+                pos = tc.positions.get(symbol)
+                if pos and hasattr(pos, 'last_price'):
+                    return pos.last_price
+        except Exception:
+            pass
+        return 0
         """开空仓方法（做空）
 
         用于期货、加密货币等支持做空的市场
@@ -1157,6 +1215,7 @@ class PriceRelatedSlippage:
 
     def _save_backtest_result(self):
         """将回测结果 pickle 到 data/backtest/{instance_id}.pkl"""
+        """将回测结果 pickle 到 data/backtest/{instance_id}.pkl"""
         import pickle
         from runtime.constant import DATA_DIR
         from datetime import datetime as _dt
@@ -1173,7 +1232,7 @@ class PriceRelatedSlippage:
             'end_date': settings.get('end_date', ''),
             'cash': settings.get('initial_capital', settings.get('cash', 1000000)),
             'performance': self.context.get('performance', {}) or {},
-            'trades': self.context.get('logs', {}).get('all_trades', []),
+            'trades': _collect_trades(self, self.context, getattr(self, 'engine', None)),
             'daily_history': self.context.get('logs', {}).get('daily_history', []),
             'create_time': _dt.now().isoformat(),
         }
