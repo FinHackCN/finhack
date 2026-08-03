@@ -14,6 +14,7 @@ _lock = threading.Lock()
 _LOG_CAP = 400  # 环形 buffer 上限
 
 _DAY_TOTAL_RE = re.compile(r'共\s*(\d+)\s*个交易日')
+_EQUITY_RE = re.compile(r'日期:\s*(\S+),\s*总资产:\s*([\d.]+)')
 
 
 def _make_sink(task_id):
@@ -35,6 +36,10 @@ def _make_sink(task_id):
                         t['total'] = int(m.group(1))
                 if '[性能] =====' in msg:
                     t['done'] = t.get('done', 0) + 1
+                # 解析每日总资产 → 实时净值曲线
+                em = _EQUITY_RE.search(msg)
+                if em:
+                    t['equity'].append((em.group(1), float(em.group(2))))
         except Exception:
             pass
     return _sink
@@ -52,7 +57,8 @@ def create_task(func, *args, **kwargs):
     task_id = str(uuid.uuid4())[:8]
     with _lock:
         _task_store[task_id] = {'status': 'pending', 'result': None, 'error': None,
-                                'log': [], 'total': None, 'done': 0, 'created_at': time.time()}
+                                'log': [], 'total': None, 'done': 0, 'equity': [],
+                                'created_at': time.time()}
 
     def _run():
         from loguru import logger as _llog
@@ -111,6 +117,7 @@ def get_task(task_id):
             'result': t.get('result'),
             'error': t.get('error'),
             'progress': _progress_of(t),
+            'equity': t.get('equity', [])[-500:],  # 最近 500 点（避免过大）
             'log': log[-40:],  # 末 40 行
             'created_at': t.get('created_at'),
         }
