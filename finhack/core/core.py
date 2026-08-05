@@ -329,6 +329,15 @@ finhack check --target=cache                            # 只检查缓存
 finhack check --target=factors                          # 只检查因子
 
 ================================
+定时任务管理 (cron) —— 扫描/状态/手动运行/增删
+================================
+finhack cron list                                       # 扫描 root crontab + /etc/cron.d, 显示项目相关任务(含运行状态)
+finhack cron list all=true                              # 显示全部(含非项目)
+finhack cron run id=N                                   # 手动运行第 N 个任务
+finhack cron add schedule='0 2 * * *' cmd='cd /mnt/... && ./x.sh' to=cron.d  # 新增(to=cron.d 或 root)
+finhack cron rm id=N                                    # 删除第 N 个任务
+
+================================
 K线模块 (kline)
 ================================
 finhack kline cache                                     # K线数据缓存（默认所有市场、所有频率）
