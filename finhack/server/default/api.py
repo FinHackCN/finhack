@@ -15,8 +15,9 @@ api_bp = Blueprint('api', __name__, url_prefix='/api')
 
 # 确保 finhack path
 _PKG = '/mnt/ssd2/finhack-dev/finhack'
+_PROJ = '/mnt/ssd2/finhack-dev/demo_project'
 _CACHE = '/mnt/ssd2/finhack-dev/demo_project/data/cache'
-for _p in [_PKG, _CACHE]:
+for _p in [_PKG, _PROJ, _CACHE]:
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
@@ -658,3 +659,68 @@ def check_report_refresh():
     tid = create_task(_run_check)
     return jsonify({'task_id': tid})
 
+
+
+# ===================== 定时任务管理(cron) =====================
+
+@api_bp.route('/cron/list')
+def cron_list():
+    """扫描 root crontab + /etc/cron.d, 返回任务列表(含来源/调度/项目相关/运行状态)"""
+    from loader.cron_loader import scan_tasks, is_task_running
+    all_flag = request.args.get('all', 'false').lower() in ('true', '1', 'yes')
+    tasks = scan_tasks()
+    for t in tasks:
+        t['running'] = is_task_running(t['command'])
+    if not all_flag:
+        tasks = [t for t in tasks if t['project']]
+    return jsonify({'tasks': tasks, 'count': len(tasks)})
+
+
+@api_bp.route('/cron/run', methods=['POST'])
+def cron_run():
+    """手动运行一个任务(后台)。body: {"id": N}"""
+    from loader.cron_loader import run_task, scan_tasks
+    data = request.get_json(silent=True) or {}
+    idn = data.get('id')
+    if idn is None:
+        return jsonify({'error': '缺少 id'}), 400
+    tasks = scan_tasks()
+    t = next((x for x in tasks if x['id'] == int(idn)), None)
+    if not t:
+        return jsonify({'error': f'无 id={idn}'}), 404
+    pid = run_task(int(idn), background=True)
+    return jsonify({'ok': True, 'pid': pid, 'command': t['command'][:80]})
+
+
+@api_bp.route('/cron/add', methods=['POST'])
+def cron_add():
+    """新增任务。body: {"schedule": "0 2 * * *", "cmd": "...", "to": "cron.d"}"""
+    from loader.cron_loader import add_task
+    data = request.get_json(silent=True) or {}
+    sched = data.get('schedule', '').strip()
+    cmd = data.get('cmd', '').strip()
+    to = data.get('to', 'cron.d')
+    if not sched or not cmd:
+        return jsonify({'error': '缺少 schedule 或 cmd'}), 400
+    try:
+        line = add_task(sched, cmd, to)
+        return jsonify({'ok': True, 'line': f"{sched} {cmd}", 'to': to})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@api_bp.route('/cron/rm', methods=['POST'])
+def cron_rm():
+    """删除任务。body: {"id": N}"""
+    from loader.cron_loader import rm_task
+    data = request.get_json(silent=True) or {}
+    idn = data.get('id')
+    if idn is None:
+        return jsonify({'error': '缺少 id'}), 400
+    try:
+        raw = rm_task(int(idn))
+        if raw is None:
+            return jsonify({'error': f'无 id={idn} 或不支持删'}), 404
+        return jsonify({'ok': True, 'removed': raw})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
