@@ -375,24 +375,27 @@ _BLACK = ['indneutralize', 'cap', 'filter', 'self', 'banchmarkindex']
 
 
 def _trial_calc(formula, name, market, freq):
-    """小样本试算校验：返回 (ok, err)。calc 静默吞异常（debug 级日志），靠返回空 Series 判失败。
-    用该市场实际数据年份范围（min-max，覆盖所有基础字段所在年份）+ 全市场 code 试算。
-    不能用 get_stock_list 抽样——它返回的旧合约在区间内可能无数据导致误判。"""
-    import datetime as _dt
-    import glob as _g
-    from runtime.constant import DATA_DIR
+    """试算校验：构造小样本人造 df 测 eval（秒级，绕开 data_interface 加载与大数据拉取，
+    避免对大数据市场 cn_stock/全历史 cn_future 的 loadFactors 卡住 HTTP）。calc 静默吞异常，
+    靠返回空 Series 判失败。人造 df 覆盖 alpha 常用字段（close/open/high/low/volume/amount/returns/vwap）。"""
+    import pandas as pd, numpy as np
     from finhack.factor.default.alphaEngine import alphaEngine
-    yrs = [int(os.path.basename(p)) for p in _g.glob(os.path.join(DATA_DIR, 'factors', 'matrix', market, freq, '*'))
-           if os.path.isdir(p) and os.path.basename(p).isdigit()]
-    if yrs:
-        sd, ed = f'{min(yrs)}0101', f'{max(yrs)}1231'
-    else:
-        end_dt = _dt.datetime.now()
-        start_dt = end_dt - _dt.timedelta(days=400)
-        sd, ed = start_dt.strftime('%Y%m%d'), end_dt.strftime('%Y%m%d')
+    dates = pd.date_range('2020-01-01', periods=120, freq='D')
+    codes = ['C001', 'C002', 'C003']
+    idx = pd.MultiIndex.from_product([dates, codes], names=['time', 'code'])
+    rng = np.random.RandomState(42)
+    base = rng.rand(len(idx)) * 100 + 50
+    df = pd.DataFrame({
+        'close': base, 'open': base + rng.randn(len(idx)),
+        'high': base + np.abs(rng.randn(len(idx))) + 1,
+        'low': base - np.abs(rng.randn(len(idx))) - 1,
+        'volume': rng.rand(len(idx)) * 1e6 + 1e5,
+        'amount': rng.rand(len(idx)) * 1e8 + 1e7,
+        'returns': rng.randn(len(idx)) * 0.02,
+        'vwap': base + rng.randn(len(idx)) * 0.5,
+    }, index=idx)
     try:
-        res = alphaEngine.calc(formula=formula, name=name, save=False, market=market, freq=freq,
-                               code_list=[], start_date=sd, end_date=ed)
+        res = alphaEngine.calc(formula=formula, name=name, save=False, market=market, freq=freq, df=df)
     except Exception as e:
         return False, f'试算异常: {e}'
     if res is None or (hasattr(res, 'empty') and res.empty):
@@ -466,18 +469,24 @@ def factor_formula_get():
                                     'kind': 'alpha', 'alphalist': alphalist_name})
             except OSError:
                 pass
-        # indicator 类：name = {module}_{N}，源码在 INDICATORS_DIR/{market}/x{freq}/{module}.py
-        module_name = parts[0]
-        for sub in (os.path.join(INDICATORS_DIR, market, 'x' + freq),
-                    os.path.join(INDICATORS_DIR, market, freq), INDICATORS_DIR):
-            src = os.path.join(sub, module_name + '.py')
-            if os.path.isfile(src):
-                try:
-                    with open(src, 'r', encoding='utf-8') as f:
-                        return jsonify({'name': name, 'formula': f.read(), 'file': src,
-                                        'editable': False, 'kind': 'indicator'})
-                except OSError:
-                    pass
+        # indicator 类：indicator 按文件组织（一个 .py 含多个指标，如 basics.py），
+        # 用 getIndicatorInfo 定位 module，只读展示源码（在线编辑整文件风险高，建议在 IDE 改）
+        try:
+            from finhack.factor.default.indicatorEngine import indicatorEngine
+            info = indicatorEngine.getIndicatorInfo(name, market, freq)
+            if info and info[0]:
+                module_name = info[0]
+                for sub in (os.path.join(INDICATORS_DIR, market, 'x' + freq),
+                            os.path.join(INDICATORS_DIR, market, freq), INDICATORS_DIR):
+                    src = os.path.join(sub, module_name + '.py')
+                    if os.path.isfile(src):
+                        with open(src, 'r', encoding='utf-8') as f:
+                            return jsonify({'name': name, 'formula': f.read(), 'file': src,
+                                            'editable': False, 'kind': 'indicator',
+                                            'module': module_name,
+                                            'note': f'indicator 按文件组织，源码在 {module_name}.py（含多个指标）；在线编辑整文件风险高，建议 IDE 改'})
+        except Exception:
+            pass
     return jsonify({'name': name, 'formula': '', 'editable': False,
                     'kind': 'basic', 'note': '基础字段或未知定义，无可编辑公式'})
 
@@ -594,6 +603,141 @@ def run_recompute_factor():
 
     tid = create_task(_run)
     return jsonify({'task_id': tid})
+
+
+@api_bp.route('/factor/create', methods=['POST'])
+def factor_create():
+    """新建 alpha 因子：黑名单检查→试算校验→追加到 alphalist 末尾→异步重算入库。
+    追加到末尾安全（不影响已有 行号↔因子名 映射）。新因子名 = {alphalist}_{新行号:03d}。
+    body: {alphalist, formula, market, freq, start_date, end_date}"""
+    import re, time as _t
+    from runtime.constant import CONFIG_DIR
+    data = request.get_json(silent=True) or {}
+    market = data.get('market', 'cn_stock')
+    freq = data.get('freq', '1d')
+    alphalist = data.get('alphalist', '')
+    formula = (data.get('formula') or '').strip()
+    start_date = data.get('start_date', '')
+    end_date = data.get('end_date', '')
+    if not re.match(r'^\w+$', alphalist):
+        return jsonify({'error': 'alphalist 名仅允许字母数字下划线'}), 400
+    if not formula:
+        return jsonify({'error': '公式不能为空'}), 400
+    if not start_date or not end_date:
+        return jsonify({'error': '需指定 start_date / end_date'}), 400
+    # 黑名单
+    hit = [w for w in _BLACK if w in formula]
+    if hit:
+        return jsonify({'error': f'公式含引擎不支持的字段: {",".join(hit)}'}), 400
+    # 试算校验（用临时 name，不落盘）
+    ok, err = _trial_calc(formula, 'tmp_new_factor', market, freq)
+    if not ok:
+        return jsonify({'error': err}), 400
+    # 定位 alphalist 文件（不存在则新建在 {market}/x{freq}/ 下）
+    path = _find_alphalist_file(market, freq, alphalist)
+    if not path:
+        base = os.path.join(CONFIG_DIR, 'factorlist', 'alphalist', market, 'x' + freq)
+        os.makedirs(base, exist_ok=True)
+        path = os.path.join(base, alphalist)
+    # 读现文件 → 新行号
+    lines = []
+    if os.path.isfile(path):
+        with open(path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+    new_idx = len(lines) + 1
+    name = f"{alphalist}_{str(new_idx).zfill(3)}"
+    # 快照（仅当文件已存在）
+    ts = None
+    if lines:
+        vd = os.path.join(os.path.dirname(path), '.versions')
+        os.makedirs(vd, exist_ok=True)
+        ts = _t.strftime('%Y%m%d_%H%M%S')
+        try:
+            with open(os.path.join(vd, f'{alphalist}.{ts}.bak'), 'w', encoding='utf-8') as f:
+                f.write(''.join(lines))
+        except OSError:
+            ts = None
+    # 原子追加
+    new_line = formula if formula.endswith('\n') else formula + '\n'
+    lines.append(new_line)
+    tmp = path + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        f.write(''.join(lines))
+    os.replace(tmp, path)
+    # 异步重算入库
+    from finhack.server.default.tasks import create_task
+
+    def _run():
+        from finhack.factor.default.alphaEngine import alphaEngine
+        res = alphaEngine.calc(formula=formula, name=name, save=True, market=market, freq=freq,
+                               start_date=start_date, end_date=end_date)
+        if res is None or (hasattr(res, 'empty') and res.empty):
+            raise ValueError('重算失败：公式计算返回空')
+        return {'name': name}
+
+    tid = create_task(_run)
+    return jsonify({'ok': True, 'name': name, 'line': new_idx, 'task_id': tid})
+
+
+@api_bp.route('/factor_indicator/save', methods=['POST'])
+def factor_indicator_save():
+    """编辑 indicator 源码 .py：compile 语法校验→快照→原子写回→清 lru_cache。
+    computeIndicator 用 importlib 每次重载模块（无模块缓存），清掉 getIndicatorInfo/
+    getIndicatorList 的 lru_cache 后，下次计算即用新代码。body: {name, code, market, freq}"""
+    import re, time as _t
+    from runtime.constant import INDICATORS_DIR
+    data = request.get_json(silent=True) or {}
+    market = data.get('market', 'cn_stock')
+    freq = data.get('freq', '1d')
+    name = data.get('name', '')
+    code = data.get('code', '')
+    if not re.match(r'^\w+$', name):
+        return jsonify({'error': 'invalid name'}), 400
+    parts = name.rsplit('_', 1)
+    if len(parts) != 2:
+        return jsonify({'error': '无效 indicator 名'}), 400
+    module_name = parts[0]
+    # 定位 .py
+    src = None
+    for sub in (os.path.join(INDICATORS_DIR, market, 'x' + freq),
+                os.path.join(INDICATORS_DIR, market, freq), INDICATORS_DIR):
+        p = os.path.join(sub, module_name + '.py')
+        if os.path.isfile(p):
+            src = p
+            break
+    if not src:
+        return jsonify({'error': f'未找到 indicator 源码: {module_name}'}), 404
+    if not code.strip():
+        return jsonify({'error': '源码不能为空'}), 400
+    # 语法校验
+    try:
+        compile(code, src, 'exec')
+    except SyntaxError as e:
+        return jsonify({'error': f'源码语法错误: {e.msg} (line {e.lineno})'}), 400
+    # 快照
+    vd = os.path.join(os.path.dirname(src), '.versions')
+    os.makedirs(vd, exist_ok=True)
+    ts = _t.strftime('%Y%m%d_%H%M%S')
+    try:
+        with open(src, 'r', encoding='utf-8') as f:
+            old = f.read()
+        with open(os.path.join(vd, f'{module_name}.{ts}.py.bak'), 'w', encoding='utf-8') as f:
+            f.write(old)
+    except OSError:
+        ts = None
+    # 原子写回
+    tmp = src + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        f.write(code)
+    os.replace(tmp, src)
+    # 清 lru_cache（getIndicatorInfo/getIndicatorList 缓存了旧解析）
+    try:
+        from finhack.factor.default.indicatorEngine import indicatorEngine
+        indicatorEngine.getIndicatorInfo.cache_clear()
+        indicatorEngine.getIndicatorList.cache_clear()
+    except Exception:
+        pass
+    return jsonify({'ok': True, 'snapshot': ts, 'file': src})
 
 
 # ===================== 因子挖掘 =====================
