@@ -356,6 +356,246 @@ def factor_detail():
                                   start_date=start, end_date=end, code_list=code_list))
 
 
+# ===================== 因子库管理（dashboard 因子管理用） =====================
+
+def _find_alphalist_file(market, freq, alphalist_name):
+    """按序定位 alphalist 文件：{market}/x{freq}/ → {market}/{freq}/ → 顶层。返回路径或 None。
+    对应 alphaEngine.get_alpha_list 的扫描顺序（实测文件都在 x{freq}/ 下）。"""
+    from runtime.constant import CONFIG_DIR
+    base = os.path.join(CONFIG_DIR, 'factorlist', 'alphalist')
+    for sub in (os.path.join(market, 'x' + freq), os.path.join(market, freq), ''):
+        p = os.path.join(base, sub, alphalist_name) if sub else os.path.join(base, alphalist_name)
+        if os.path.isfile(p):
+            return p
+    return None
+
+
+# alphaEngine.calc 跳过的引擎不支持字段（alphaEngine.py:1151）
+_BLACK = ['indneutralize', 'cap', 'filter', 'self', 'banchmarkindex']
+
+
+def _trial_calc(formula, name, market, freq):
+    """小样本试算校验：返回 (ok, err)。calc 静默吞异常（debug 级日志），靠返回空 Series 判失败。
+    用该市场实际数据年份范围（min-max，覆盖所有基础字段所在年份）+ 全市场 code 试算。
+    不能用 get_stock_list 抽样——它返回的旧合约在区间内可能无数据导致误判。"""
+    import datetime as _dt
+    import glob as _g
+    from runtime.constant import DATA_DIR
+    from finhack.factor.default.alphaEngine import alphaEngine
+    yrs = [int(os.path.basename(p)) for p in _g.glob(os.path.join(DATA_DIR, 'factors', 'matrix', market, freq, '*'))
+           if os.path.isdir(p) and os.path.basename(p).isdigit()]
+    if yrs:
+        sd, ed = f'{min(yrs)}0101', f'{max(yrs)}1231'
+    else:
+        end_dt = _dt.datetime.now()
+        start_dt = end_dt - _dt.timedelta(days=400)
+        sd, ed = start_dt.strftime('%Y%m%d'), end_dt.strftime('%Y%m%d')
+    try:
+        res = alphaEngine.calc(formula=formula, name=name, save=False, market=market, freq=freq,
+                               code_list=[], start_date=sd, end_date=ed)
+    except Exception as e:
+        return False, f'试算异常: {e}'
+    if res is None or (hasattr(res, 'empty') and res.empty):
+        return False, '公式试算失败：语法错误或字段缺失（calc 静默吞异常，具体原因见服务端 debug 日志）'
+    return True, ''
+
+
+@api_bp.route('/factor_inspect')
+def factor_inspect():
+    """列出已入库因子 + 轻量元信息（year 范围/代码数/大小），matrix+vector 合并。纯 inode 不加载 pkl。"""
+    from finhack.factor.default.factorManager import factorManager
+    market = request.args.get('market', 'cn_stock')
+    freq = request.args.get('freq', '1d')
+    out = []
+    for ftype in ('matrix', 'vector'):
+        try:
+            out.extend(factorManager.inspectFactorsLight(market=market, freq=freq, factor_type=ftype))
+        except Exception:
+            pass
+    return jsonify(out)
+
+
+@api_bp.route('/factor/delete', methods=['POST'])
+def factor_delete():
+    """删除因子（支持批量）：删 pkl（matrix+vector，含分片）+ 清 factors_analysis 记录。
+    body: {names:[...], market, freq}"""
+    import re
+    from finhack.factor.default.factorManager import factorManager
+    from finhack.library.db import DB
+    data = request.get_json(silent=True) or {}
+    market = data.get('market', 'cn_stock')
+    freq = data.get('freq', '1d')
+    names = data.get('names', [])
+    if not isinstance(names, list) or not names:
+        return jsonify({'error': '缺少 names'}), 400
+    names = [n for n in names if isinstance(n, str) and re.match(r'^\w+$', n)]
+    if not names:
+        return jsonify({'error': '无有效因子名'}), 400
+    removed = sum(factorManager.deleteFactorFiles(n, market=market, freq=freq) for n in names)
+    try:
+        in_list = ",".join(f"'{n}'" for n in names)
+        DB.delete(f"DELETE FROM factors_analysis WHERE factor_name IN ({in_list})", 'finhack')
+    except Exception:
+        pass
+    return jsonify({'ok': True, 'removed': removed, 'db_cleaned': len(names)})
+
+
+@api_bp.route('/factor_formula')
+def factor_formula_get():
+    """读因子公式/定义。alpha 类可编辑（返回 file/line/editable=True）；
+    indicator 类只读源码（editable=False）；基础字段无公式。"""
+    import re
+    from runtime.constant import INDICATORS_DIR
+    name = request.args.get('name', '')
+    market = request.args.get('market', 'cn_stock')
+    freq = request.args.get('freq', '1d')
+    if not re.match(r'^\w+$', name):
+        return jsonify({'error': 'invalid name'}), 400
+    parts = name.rsplit('_', 1)
+    # alpha 类：name = {alphalist}_{NNN}，公式为 alphalist 文件第 N 行
+    if len(parts) == 2 and parts[1].isdigit():
+        alphalist_name, idx = parts[0], int(parts[1])
+        path = _find_alphalist_file(market, freq, alphalist_name)
+        if path:
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    lines = f.readlines()
+                if 1 <= idx <= len(lines):
+                    return jsonify({'name': name, 'formula': lines[idx-1].strip(),
+                                    'file': path, 'line': idx, 'editable': True,
+                                    'kind': 'alpha', 'alphalist': alphalist_name})
+            except OSError:
+                pass
+        # indicator 类：name = {module}_{N}，源码在 INDICATORS_DIR/{market}/x{freq}/{module}.py
+        module_name = parts[0]
+        for sub in (os.path.join(INDICATORS_DIR, market, 'x' + freq),
+                    os.path.join(INDICATORS_DIR, market, freq), INDICATORS_DIR):
+            src = os.path.join(sub, module_name + '.py')
+            if os.path.isfile(src):
+                try:
+                    with open(src, 'r', encoding='utf-8') as f:
+                        return jsonify({'name': name, 'formula': f.read(), 'file': src,
+                                        'editable': False, 'kind': 'indicator'})
+                except OSError:
+                    pass
+    return jsonify({'name': name, 'formula': '', 'editable': False,
+                    'kind': 'basic', 'note': '基础字段或未知定义，无可编辑公式'})
+
+
+@api_bp.route('/factor_formula/save', methods=['POST'])
+def factor_formula_save():
+    """编辑保存 alpha 因子公式（仅 alpha 类）：黑名单检查→试算校验→快照→原子写回单行。
+    只改行内容不增删行（保住 行号↔因子名 映射稳定）。"""
+    import re, time as _t
+    data = request.get_json(silent=True) or {}
+    market = data.get('market', 'cn_stock')
+    freq = data.get('freq', '1d')
+    name = data.get('name', '')
+    new_formula = (data.get('formula') or '').strip()
+    if not re.match(r'^\w+$', name):
+        return jsonify({'error': 'invalid name'}), 400
+    parts = name.rsplit('_', 1)
+    if len(parts) != 2 or not parts[1].isdigit():
+        return jsonify({'error': '该因子非 alpha 类，不可编辑'}), 400
+    alphalist_name, idx = parts[0], int(parts[1])
+    path = _find_alphalist_file(market, freq, alphalist_name)
+    if not path:
+        return jsonify({'error': f'未找到 alphalist 文件: {alphalist_name}'}), 404
+    if not new_formula:
+        return jsonify({'error': '公式不能为空'}), 400
+    # ① 黑名单（引擎不支持的公式字段）
+    hit = [w for w in _BLACK if w in new_formula]
+    if hit:
+        return jsonify({'error': f'公式含引擎不支持的字段: {",".join(hit)}（依赖行业/市值/基准等外部数据）'}), 400
+    # ② 试算校验
+    ok, err = _trial_calc(new_formula, name, market, freq)
+    if not ok:
+        return jsonify({'error': err}), 400
+    # ③ 读现文件 + 行号校验
+    with open(path, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+    if idx < 1 or idx > len(lines):
+        return jsonify({'error': f'行号越界: {idx}（文件共 {len(lines)} 行）'}), 400
+    # ④ 快照到 .versions/（可回滚）
+    vd = os.path.join(os.path.dirname(path), '.versions')
+    os.makedirs(vd, exist_ok=True)
+    ts = _t.strftime('%Y%m%d_%H%M%S')
+    try:
+        with open(os.path.join(vd, f'{alphalist_name}.{ts}.bak'), 'w', encoding='utf-8') as f:
+            f.write(''.join(lines))
+    except OSError:
+        ts = None
+    # ⑤ 原子写回：临时文件 + os.replace
+    new_line = new_formula if new_formula.endswith('\n') else new_formula + '\n'
+    lines[idx-1] = new_line
+    tmp = path + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        f.write(''.join(lines))
+    os.replace(tmp, path)
+    return jsonify({'ok': True, 'snapshot': ts, 'file': path, 'line': idx})
+
+
+@api_bp.route('/factor_coverage')
+def factor_coverage():
+    """单因子覆盖度（年份×代码稀疏矩阵，热力图用）。"""
+    import re
+    from finhack.factor.default.factorManager import factorManager
+    name = request.args.get('name', '')
+    if not re.match(r'^\w+$', name):
+        return jsonify({'error': 'invalid name'}), 400
+    market = request.args.get('market', 'cn_stock')
+    freq = request.args.get('freq', '1d')
+    return jsonify(factorManager.coverageFactor(name, market=market, freq=freq, factor_type='matrix'))
+
+
+@api_bp.route('/run/recompute_factor', methods=['POST'])
+def run_recompute_factor():
+    """单因子重算落盘：反查最新公式→calc(save=True)→清旧 factors_analysis 记录。
+    calc 不开进程池，daemon 线程安全；进度恒 0%（tasks 正则是回测专用）。"""
+    import re
+    from finhack.server.default.tasks import create_task
+    data = request.get_json(silent=True) or {}
+    market = data.get('market', 'cn_stock')
+    freq = data.get('freq', '1d')
+    name = data.get('name', '')
+    start_date = data.get('start_date', '')
+    end_date = data.get('end_date', '')
+    if not re.match(r'^\w+$', name):
+        return jsonify({'error': 'invalid name'}), 400
+    if not start_date or not end_date:
+        return jsonify({'error': '需指定 start_date / end_date'}), 400
+
+    def _run():
+        from finhack.factor.default.alphaEngine import alphaEngine
+        from finhack.library.db import DB
+        # 反查最新公式（save 后文件已是新值）
+        parts = name.rsplit('_', 1)
+        formula = ''
+        if len(parts) == 2 and parts[1].isdigit():
+            p = _find_alphalist_file(market, freq, parts[0])
+            if p:
+                with open(p, 'r', encoding='utf-8') as f:
+                    lines = f.readlines()
+                i = int(parts[1])
+                if 1 <= i <= len(lines):
+                    formula = lines[i-1].strip()
+        if not formula:
+            raise ValueError('未找到因子公式，无法重算（非 alpha 类？）')
+        res = alphaEngine.calc(formula=formula, name=name, save=True, market=market, freq=freq,
+                               start_date=start_date, end_date=end_date)
+        if res is None or (hasattr(res, 'empty') and res.empty):
+            raise ValueError('重算失败：公式计算返回空（语法错误或字段缺失）')
+        # 公式变→hash 变→旧 factors_analysis 残留，按 factor_name 清掉让重新分析
+        try:
+            DB.delete(f"DELETE FROM factors_analysis WHERE factor_name = '{name}'", 'finhack')
+        except Exception:
+            pass
+        return {'name': name, 'shape': list(res.shape) if hasattr(res, 'shape') else None}
+
+    tid = create_task(_run)
+    return jsonify({'task_id': tid})
+
+
 # ===================== 因子挖掘 =====================
 
 @api_bp.route('/mining')
