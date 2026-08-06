@@ -62,36 +62,27 @@ from .models.instrument import Instrument
 
 
 def _collect_trades(trader, context, engine):
-    """收集交易记录。优先 trader._trades_list（order_buy_sync/order_sell_sync 里记录的），
-    回退 all_trades / engine._captured_trades / trade_center.trades。"""
-    # 优先：trader._trades_list（最可靠，在 order_buy/sell_sync 里记录）
+    """收集真实成交记录。优先 engine.trades（撮合成交 list，含真实成交价/手续费），
+    回退 trader._trades_list（order_buy/sell_sync 的下单意图，price 可能 0）。"""
+    # 优先：engine.trades（撮合真实成交 list，_execute_trade_sync 里 append，价格准确）
+    et = getattr(engine, 'trades', None)
+    if et:
+        return [t.to_dict() if hasattr(t, 'to_dict') else dict(t) for t in et]
+    # 回退1：trade_center.trades（dict 或 list）
+    for src in [getattr(engine, 'trade_center', None), context.get('trade_center')]:
+        if src is None:
+            continue
+        if hasattr(src, 'trades') and src.trades:
+            vals = src.trades.values() if isinstance(src.trades, dict) else src.trades
+            return [t.to_dict() if hasattr(t, 'to_dict') else dict(t) for t in vals]
+    # 回退2：trader._trades_list（下单意图，price 可能 0）
     tl = getattr(trader, '_trades_list', None)
     if tl:
         return tl
+    # 回退3：context logs / engine 捕获
     trades = context.get('logs', {}).get('all_trades', [])
     if trades:
         return trades
-    # 回退：engine 实例属性 + trade_center
-    ct = getattr(engine, '_captured_trades', None)
-    if ct:
-        return ct
-    for src in [context.get('trade_center'), getattr(engine, 'trade_center', None), getattr(engine, 'trades', None)]:
-        if src is None: continue
-        if hasattr(src, 'trades') and isinstance(src.trades, dict) and src.trades:
-            return [t.to_dict() if hasattr(t, 'to_dict') else dict(t) for t in src.trades.values()]
-        if isinstance(src, list) and src:
-            return [t.to_dict() if hasattr(t, 'to_dict') else dict(t) for t in src]
-    return []
-    trades = context.get('logs', {}).get('all_trades', [])
-    if trades:
-        return trades
-    # 回退：trade_center / engine.trades
-    for src in [context.get('trade_center'), getattr(engine, 'trade_center', None), getattr(engine, 'trades', None)]:
-        if src is None: continue
-        if hasattr(src, 'trades') and isinstance(src.trades, dict) and src.trades:
-            return [t.to_dict() if hasattr(t, 'to_dict') else dict(t) for t in src.trades.values()]
-        if isinstance(src, list) and src:
-            return [t.to_dict() if hasattr(t, 'to_dict') else dict(t) for t in src]
     return []
 
 
@@ -492,7 +483,7 @@ class PriceRelatedSlippage:
             
             print(f"[Trader] 检查 {name}: is_type={is_type}, ends_with_strategy={ends_with_strategy}, is_not_base={is_not_base}", flush=True)
             
-            if is_type and ends_with_strategy and is_not_base:
+            if is_type and ends_with_strategy and is_not_base and not getattr(obj, '__not_strategy__', False):
                 try:
                     # 尝试实例化策略类，传入配置
                     config = self.context.get('params', {})
@@ -956,6 +947,8 @@ class PriceRelatedSlippage:
         except Exception:
             pass
         return 0
+
+    def order_short_sync(self, context, symbol, volume, price=None):
         """开空仓方法（做空）
 
         用于期货、加密货币等支持做空的市场
@@ -1212,6 +1205,12 @@ class PriceRelatedSlippage:
             self._save_backtest_result()
         except Exception as e:
             Log.logger.error(f"保存回测结果失败: {e}")
+        # 调用策略收尾钩子（引擎此前不调用，补上让策略的 on_strategy_end 生效）
+        if hasattr(self.strategy, 'on_strategy_end'):
+            try:
+                self.strategy.on_strategy_end(self.context)
+            except Exception as e:
+                Log.logger.warning(f"on_strategy_end 执行失败: {e}")
 
     def _save_backtest_result(self):
         """将回测结果 pickle 到 data/backtest/{instance_id}.pkl"""
