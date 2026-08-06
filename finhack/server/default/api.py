@@ -11,6 +11,26 @@ import glob
 
 from flask import Blueprint, jsonify, request, send_from_directory
 
+def _native(obj):
+    """递归转 numpy 类型为 python 原生（JSON 可序列化）。
+    回测 pkl 的 indicators 含 numpy float32/int，jsonify 默认不支持。"""
+    import numpy as np
+    if isinstance(obj, dict):
+        return {k: _native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_native(v) for v in obj]
+    if isinstance(obj, np.floating):
+        return float(obj)
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, np.ndarray):
+        return [_native(x) for x in obj.tolist()]
+    return obj
+
+def nj(obj):
+    """jsonify 但先把 numpy 类型转原生。"""
+    return jsonify(_native(obj))
+
 api_bp = Blueprint('api', __name__, url_prefix='/api')
 
 # 确保 finhack path
@@ -39,7 +59,7 @@ def markets():
             'benchmark': cfg.get('benchmark'),
             'is_derivatives': cfg.get('is_derivatives', False),
         })
-    return jsonify(result)
+    return nj(result)
 
 
 @api_bp.route('/factors')
@@ -128,12 +148,12 @@ def backtests():
                 'total_return': perf.get('total_return'),
                 'sharpe': perf.get('sharpe_ratio'),
                 'max_drawdown': perf.get('max_drawdown'),
-                'trade_num': r.get('performance', {}).get('trade_num'),
+                'trade_num': len(r.get('trades', [])),
                 'create_time': r.get('create_time'),
             })
         except Exception:
             pass
-    return jsonify(result)
+    return nj(result)
 
 
 @api_bp.route('/backtest/<instance_id>')
@@ -179,7 +199,7 @@ def backtest_detail(instance_id):
     size = min(500, max(1, int(request.args.get('size', 50))))
     trades_page = all_trades[(page - 1) * size: page * size]
 
-    return jsonify({
+    return nj({
         'instance_id': r.get('instance_id'),
         'market': r.get('market'),
         'strategy': r.get('strategy'),
@@ -195,7 +215,7 @@ def backtest_detail(instance_id):
         'daily_history': daily_history,
         'indicators': perf.get('indicators', {}),
         'benchmark': perf.get('benchmark', {}),
-        'trade_num': perf.get('trade_num'),
+        'trade_num': len(all_trades),
         'trade_total': len(all_trades),
         'win_ratio': perf.get('win_ratio'),
         'trades': trades_page,

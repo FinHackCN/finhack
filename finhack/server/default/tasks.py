@@ -11,7 +11,7 @@ import traceback
 
 _task_store = {}  # {task_id: {status, result, error, log:[], created_at}}
 _lock = threading.Lock()
-_LOG_CAP = 400  # 环形 buffer 上限
+_LOG_CAP = 3000  # 环形 buffer 上限
 
 _DAY_TOTAL_RE = re.compile(r'共\s*(\d+)\s*个交易日')
 _EQUITY_RE = re.compile(r'日期:\s*(\S+),\s*总资产:\s*([\d.]+)')
@@ -118,7 +118,7 @@ def get_task(task_id):
             'error': t.get('error'),
             'progress': _progress_of(t),
             'equity': t.get('equity', [])[-500:],  # 最近 500 点（避免过大）
-            'log': log[-40:],  # 末 40 行
+            'log': log[-800:],  # 末 800 行（调试撮合问题临时调大）
             'created_at': t.get('created_at'),
         }
 
