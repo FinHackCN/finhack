@@ -519,3 +519,93 @@ class factorManager:
                     if f.endswith('.pkl') and not f.endswith('index.pkl'):
                         factors.add(f[:-4])
         return sorted(factors)
+
+    # ============ 因子库管理（dashboard 因子管理用，纯 inode 操作不加载 pkl） ============
+
+    @staticmethod
+    def inspectFactorsLight(market='cn_stock', freq='1d', factor_type='matrix'):
+        """轻量批量 inspect：glob+stat 扫 pkl，不加载内容（防 1m 全市场 OOM）。
+        每因子聚合 year 范围 / code 数 / 磁盘大小 / 文件数。
+        返回 [{name, type, year_min, year_max, code_count, size_mb, file_count}]。"""
+        base = os.path.join(DATA_DIR, 'factors', factor_type, market, freq)
+        info = {}  # name -> {years:set, codes:set, size:int, files:int}
+        if not os.path.isdir(base):
+            return []
+        for root, dirs, files in os.walk(base):
+            for fn in files:
+                if not fn.endswith('.pkl') or fn.endswith('index.pkl'):
+                    continue
+                fpath = os.path.join(root, fn)
+                rel = os.path.relpath(fpath, base)
+                parts = rel.split(os.sep)
+                if len(parts) < 3:  # 期望 year/code/name.pkl
+                    continue
+                year, code = parts[0], parts[1]
+                name = fn[:-4]
+                try:
+                    sz = os.path.getsize(fpath)
+                except OSError:
+                    sz = 0
+                d = info.setdefault(name, {'years': set(), 'codes': set(), 'size': 0, 'files': 0})
+                d['years'].add(year)
+                d['codes'].add(code)
+                d['size'] += sz
+                d['files'] += 1
+        out = []
+        for name, d in info.items():
+            years = sorted(y for y in d['years'] if y.isdigit())
+            out.append({
+                'name': name, 'type': factor_type,
+                'year_min': int(years[0]) if years else None,
+                'year_max': int(years[-1]) if years else None,
+                'code_count': len(d['codes']),
+                'size_mb': round(d['size'] / 1048576, 2),
+                'file_count': d['files'],
+            })
+        out.sort(key=lambda x: x['name'])
+        return out
+
+    @staticmethod
+    def coverageFactor(name, market='cn_stock', freq='1d', factor_type='matrix', max_codes=80):
+        """单因子覆盖度（年份×代码稀疏矩阵），用于热力图。
+        匹配 {name}.pkl 与 {name}_N.pkl 分片。codes 过多时截断前 max_codes 个。
+        返回 {years, codes, present:[[year_idx,code_idx],...], code_total, cell_total}。"""
+        base = os.path.join(DATA_DIR, 'factors', factor_type, market, freq)
+        pat = re.compile(rf'^{re.escape(name)}(_\d+)?\.pkl$')
+        yc = set()
+        if os.path.isdir(base):
+            for root, dirs, files in os.walk(base):
+                for fn in files:
+                    if pat.match(fn):
+                        rel = os.path.relpath(os.path.join(root, fn), base)
+                        parts = rel.split(os.sep)
+                        if len(parts) >= 3:
+                            yc.add((parts[0], parts[1]))
+        years = sorted({y for y, _ in yc})
+        all_codes = sorted({c for _, c in yc})
+        codes = all_codes[:max_codes]
+        yi = {y: i for i, y in enumerate(years)}
+        ci = {c: i for i, c in enumerate(codes)}
+        present = [[yi[y], ci[c]] for y, c in yc if c in ci]
+        return {'years': years, 'codes': codes, 'present': present,
+                'code_total': len(all_codes), 'cell_total': len(yc)}
+
+    @staticmethod
+    def deleteFactorFiles(name, market='cn_stock', freq='1d'):
+        """删除某因子所有 pkl（matrix+vector，含 _N 分片）。正则精确匹配防误删
+        （删 alpha191_001 不会连带删 alpha191_002）。返回删除文件数。"""
+        pat = re.compile(rf'^{re.escape(name)}(_\d+)?\.pkl$')
+        removed = 0
+        for ftype in ('matrix', 'vector'):
+            base = os.path.join(DATA_DIR, 'factors', ftype, market, freq)
+            if not os.path.isdir(base):
+                continue
+            for root, dirs, files in os.walk(base):
+                for fn in files:
+                    if pat.match(fn):
+                        try:
+                            os.remove(os.path.join(root, fn))
+                            removed += 1
+                        except OSError:
+                            pass
+        return removed
