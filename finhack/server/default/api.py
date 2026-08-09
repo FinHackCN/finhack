@@ -95,15 +95,24 @@ def factor_data():
 
 @api_bp.route('/analysis')
 def analysis():
-    """分析结果（MySQL factors_analysis）"""
+    """分析结果（MySQL factors_analysis，按 market/freq 过滤，不传则全部）"""
     from finhack.library.db import DB
+    import re
     try:
+        market = request.args.get('market')
+        freq = request.args.get('freq')
+        where = []
+        if market and re.match(r'^\w+$', market):
+            where.append(f"`market`='{market}'")
+        if freq and re.match(r'^\w+$', freq):
+            where.append(f"`freq`='{freq}'")
+        where_clause = ('WHERE ' + ' AND '.join(where)) if where else ''
         df = DB.select_to_df(
-            "SELECT factor_name, IC, IR, Sharpe, score, start_date, end_date, source "
-            "FROM factors_analysis ORDER BY score DESC LIMIT 200", 'finhack')
+            f"SELECT factor_name, IC, IR, Sharpe, score, start_date, end_date, source, market, freq "
+            f"FROM factors_analysis {where_clause} ORDER BY score DESC LIMIT 200", 'finhack')
         if df is None or df.empty:
             return jsonify([])
-        return jsonify(df.fillna('').to_dict('records'))
+        return nj(df.fillna('').to_dict('records'))
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
