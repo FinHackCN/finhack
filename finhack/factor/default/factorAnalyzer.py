@@ -122,7 +122,7 @@ class factorAnalyzer():
                formula="", replace=False, table='factors_analysis', ignore_error=False,
                code_list=[], market='cn_stock', freq='1d'):
         try:
-            hashstr = f"{factor_name}-{days}-{source}-{start_date}:{end_date}#{formula}"
+            hashstr = f"{factor_name}-{days}-{source}-{market}-{freq}-{start_date}:{end_date}#{formula}"
             md5 = hashlib.md5(hashstr.encode('utf-8')).hexdigest()
 
             has = _db_select(f"select * from {table} where hash='{md5}'", 'finhack') if table else pd.DataFrame()
@@ -192,16 +192,17 @@ class factorAnalyzer():
 
             row = {'factor_name': factor_name, 'days': str(days), 'source': source,
                    'start_date': start_date, 'end_date': end_date, 'formula': formula,
-                   'IC': str(IC), 'IR': str(IR), 'Sharpe': str(max_sharpe), 'score': str(score), 'hash': md5}
+                   'IC': str(IC), 'IR': str(IR), 'Sharpe': str(max_sharpe), 'score': str(score), 'hash': md5,
+                   'market': market, 'freq': freq}
             if table:
                 if (has is not None) and (not has.empty) and replace:
                     _db_exec(f"DELETE FROM `finhack`.`{table}` WHERE `hash`='{md5}'", 'finhack')
                 insert_sql = (
                     f"INSERT INTO `finhack`.`{table}`(`factor_name`,`days`,`source`,`start_date`,"
-                    f"`end_date`,`formula`,`IC`,`IR`,`Sharpe`,`score`,`hash`) VALUES ("
+                    f"`end_date`,`formula`,`IC`,`IR`,`Sharpe`,`score`,`hash`,`market`,`freq`) VALUES ("
                     f"'{row['factor_name']}','{row['days']}','{row['source']}','{row['start_date']}',"
                     f"'{row['end_date']}','{row['formula']}',{row['IC']},{row['IR']},{row['Sharpe']},"
-                    f"{row['score']},'{row['hash']}')")
+                    f"{row['score']},'{row['hash']}','{row['market']}','{row['freq']}')")
                 ok = _db_exec(insert_sql, 'finhack')
                 if not ok:
                     pd.DataFrame([row]).to_parquet(
