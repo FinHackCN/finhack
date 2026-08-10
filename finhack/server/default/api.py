@@ -849,20 +849,30 @@ def factor_create():
     formula = (data.get('formula') or '').strip()
     start_date = data.get('start_date', '')
     end_date = data.get('end_date', '')
+
+    def _bad(err):
+        # 400 默认只进 access log（无 body），排查困难；此处把拒绝原因连同入参打到 stderr，
+        # 经 server 重定向进 /tmp/finhack_5555.log，便于诊断因子创建/试算失败。
+        _f = formula if len(formula) <= 120 else formula[:120] + '...'
+        print(f'[factor/create REJECT] market={market} freq={freq} alphalist={alphalist!r} '
+              f'start={start_date} end={end_date} formula={_f!r} -> {err}',
+              file=sys.stderr, flush=True)
+        return jsonify({'error': err}), 400
+
     if not re.match(r'^\w+$', alphalist):
-        return jsonify({'error': 'alphalist 名仅允许字母数字下划线'}), 400
+        return _bad('alphalist 名仅允许字母数字下划线')
     if not formula:
-        return jsonify({'error': '公式不能为空'}), 400
+        return _bad('公式不能为空')
     if not start_date or not end_date:
-        return jsonify({'error': '需指定 start_date / end_date'}), 400
+        return _bad('需指定 start_date / end_date')
     # 黑名单
     hit = [w for w in _BLACK if w in formula]
     if hit:
-        return jsonify({'error': f'公式含引擎不支持的字段: {",".join(hit)}'}), 400
+        return _bad(f'公式含引擎不支持的字段: {",".join(hit)}')
     # 试算校验（用临时 name，不落盘）
     ok, err = _trial_calc(formula, 'tmp_new_factor', market, freq)
     if not ok:
-        return jsonify({'error': err}), 400
+        return _bad(err)
     # 定位 alphalist 文件（不存在则新建在 {market}/x{freq}/ 下）
     path = _find_alphalist_file(market, freq, alphalist)
     if not path:
