@@ -325,7 +325,7 @@ class factorAnalyzer():
     # ===================== 深度因子分析（dashboard 用，WorldQuant 风） =====================
     @staticmethod
     def factor_detail(factor_name, market='cn_stock', freq='1d', start_date='20200101', end_date='20210101',
-                      code_list=None, n_quantiles=10, days=(1, 2, 3, 5, 8, 13, 21)):
+                      code_list=None, n_quantiles=10, days=(1, 2, 3, 5, 8, 13, 21), os_ratio=0.20):
         """返回深度因子分析 dict（IC 时序/衰减/分位分层/多空/分布）。
         additive：不依赖 analys/Sharpe/ICIR 的返回，直接复用其数学，老函数零改动。"""
         try:
@@ -461,6 +461,22 @@ class factorAnalyzer():
                 except Exception:
                     return 0.0
 
+            # ---- OS（样本外）子窗口指标（末尾 os_ratio 比例的交易日）----
+            os_block = None
+            os_boundary_date = None
+            try:
+                _all_dates = sorted({x['date'] for x in ic_series})
+                if _all_dates and 0 < os_ratio < 1 and len(_all_dates) >= 30:
+                    _k = int(len(_all_dates) * (1 - os_ratio))
+                    _os_start = _all_dates[max(_k, 1)]            # 边界日期（含）
+                    os_block = factorAnalyzer._os_block(
+                        ic_series, long_short, dfr, factor_name,
+                        t_col=t_col, c_col=c_col, os_start=_os_start)
+                    if os_block is not None:
+                        os_boundary_date = _os_start
+            except Exception:
+                pass
+
             return {
                 'name': factor_name, 'market': market, 'freq': freq,
                 'start_date': start_date, 'end_date': end_date, 'main_day': int(main_day),
@@ -488,6 +504,10 @@ class factorAnalyzer():
                 'checks': checks,
                 'raw_metrics': raw_metrics,
                 'default_cutoffs': {k: dict(v) for k, v in DEFAULT_CUTOFFS.items()},
+                # ---- OS（样本外） ----
+                'os': os_block,                          # 可能 None（样本不足）
+                'os_boundary_date': os_boundary_date,    # 前端主图 markLine 用
+                'os_ratio': os_ratio,
             }
         except Exception as e:
             Log.logger.warning(f"factor_detail {factor_name} error: {e}\n{traceback.format_exc()}")
@@ -640,6 +660,67 @@ class factorAnalyzer():
                 'win_rate': win_rate, 'count': len(ics),
             })
         return sorted(out, key=lambda x: x['year'])
+
+    @staticmethod
+    def _os_block(ic_series, long_short, dfr, factor_name, t_col='time', c_col='code', os_start=None):
+        """OS（样本外）子窗口指标：在 >= os_start 的交易日上重算 IC/多空/换手/年度。
+        纯切片 + 一次 _turnover 重算（rank pivot，几十毫秒），不重跑 factor_detail 主管线。
+        IC 样本不足（<30）→ 返回 None，调用方据此禁用 OS 视图。"""
+        if not ic_series or not os_start:
+            return None
+        ic_os = [x for x in ic_series if x['date'] >= os_start]
+        ICs_os = [x['ic'] for x in ic_os]
+        if len(ICs_os) < 30:
+            return None
+        IC_os = float(np.mean(ICs_os))
+        IC_std_os = float(np.std(ICs_os, ddof=1)) if len(ICs_os) > 1 else 0.0
+        IR_os = float(IC_os / IC_std_os) if IC_std_os else 0.0
+        win_rate_os = float(sum(1 for x in ICs_os if x > 0) / len(ICs_os))
+        ic_autocorr_os = factorAnalyzer._ic_autocorr(ICs_os)
+
+        # ---- OS 多空（切 long_short.daily/dates）----
+        ls_os_dict = None
+        ls_return_os = sharpe_os = drawdown_os = 0.0
+        ls_daily_os = []
+        if long_short and long_short.get('dates') and long_short.get('daily'):
+            zipped = [(d, r) for d, r in zip(long_short['dates'], long_short['daily']) if d >= os_start]
+            if zipped:
+                ls_dates_os = [d for d, _ in zipped]
+                ls_daily_os = [r for _, r in zipped]
+                ls_os_dict = {'daily': ls_daily_os, 'dates': ls_dates_os}
+                ls_return_os = float(np.prod([1 + x for x in ls_daily_os]) - 1)
+                sd = float(np.std(ls_daily_os, ddof=1)) if len(ls_daily_os) > 1 else 0.0
+                sharpe_os = float(np.mean(ls_daily_os) / sd) if sd else 0.0
+                eq = np.cumprod([1 + x for x in ls_daily_os])
+                peak = np.maximum.accumulate(eq)
+                drawdown_os = float((eq / peak - 1).min())
+
+        # ---- OS 换手（切 dfr 重算 rank 自相关）----
+        turnover_os = 0.0
+        try:
+            os_ts = pd.Timestamp(os_start)
+            dfr_os = dfr[dfr.index.get_level_values(t_col) >= os_ts]
+            if len(dfr_os) and dfr_os.index.get_level_values(t_col).nunique() >= 2:
+                turnover_os = factorAnalyzer._turnover(dfr_os, factor_name, t_col=t_col, c_col=c_col)
+        except Exception:
+            pass
+
+        # ---- OS fitness（用 OS 多空 Sharpe + OS 年化 + OS 换手）----
+        fitness_os = 0.0
+        if ls_os_dict and sharpe_os and ls_daily_os:
+            ls_ann_os = (1 + ls_return_os) ** (252.0 / max(len(ls_daily_os), 1)) - 1
+            fitness_os = sharpe_os * math.sqrt(max(abs(ls_ann_os), 0.0) / max(turnover_os, 0.01))
+        fitness_os = float(min(fitness_os, 100.0))
+
+        yearly_os = factorAnalyzer._yearly(ic_os, ls_os_dict)
+        return {
+            'start_date': os_start,
+            'IC': IC_os, 'IR': IR_os, 'Sharpe': sharpe_os,
+            'ls_return': ls_return_os, 'drawdown': drawdown_os,
+            'turnover': turnover_os, 'fitness': fitness_os,
+            'win_rate': win_rate_os, 'ic_autocorr': ic_autocorr_os,
+            'yearly': yearly_os, 'count': len(ICs_os),
+        }
 
     @staticmethod
     def _monotonicity(qcurves):

@@ -381,8 +381,14 @@ def factor_detail():
                 code_list = sl['code'].tolist()[:500]
         except Exception:
             pass
+    try:
+        os_ratio = float(request.args.get('os_ratio', 0.20))
+    except (TypeError, ValueError):
+        os_ratio = 0.20
+    os_ratio = max(0.0, min(1.0, os_ratio))               # clamp [0,1]
     return jsonify(analyze_detail(name, market=market, freq=freq,
-                                  start_date=start, end_date=end, code_list=code_list))
+                                  start_date=start, end_date=end, code_list=code_list,
+                                  os_ratio=os_ratio))
 
 
 # ===================== 因子相关性（类 WorldQuant self-correlation） =====================
