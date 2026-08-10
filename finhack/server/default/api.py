@@ -369,6 +369,10 @@ def factor_detail():
     freq = request.args.get('freq', '1d')
     start = request.args.get('start', '20200101')
     end = request.args.get('end', '20210101')
+    if freq == '1m':
+        # 分析引擎为日频口径：1m 数据会被 groupby(code,date).first() 降采样到日（每日仅取首 bar），
+        # forward return 按"天"算，结果等同 1d，不是真正的分钟级分析。为避免误导，1m 直接拒绝。
+        return jsonify({'error': '1m 频率暂不支持深度分析：分析引擎为日频口径，1m 会被降采样到日（结果等同 1d）。请切到 1d 频率。'}), 400
     cl = request.args.get('code_list')
     if cl:
         code_list = cl.split(',')
@@ -495,6 +499,9 @@ def factor_corr():
     freq = request.args.get('freq', '1d')
     if not _re.match(r'^\w+$', market) or not _re.match(r'^\w+$', freq):
         return jsonify({'error': 'invalid market/freq'}), 400
+    if freq == '1m':
+        # 同 /factor_detail：分析引擎为日频口径，1m 降采样后等同 1d，拒绝以免误导。
+        return jsonify({'error': '1m 频率暂不支持因子相关性分析（引擎为日频口径）。请切到 1d 频率。'}), 400
     start = request.args.get('start', '20200101')
     end = request.args.get('end', '20210101')
     try:
