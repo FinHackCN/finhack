@@ -385,6 +385,120 @@ def factor_detail():
                                   start_date=start, end_date=end, code_list=code_list))
 
 
+# ===================== 因子相关性（类 WorldQuant self-correlation） =====================
+# 因子间 IC 相关矩阵 + top-5 相关表。/factor_corr 懒加载（前端点按钮才触发），
+# 首次 ~30-60s（N+1 因子加载），10min TTL 缓存。top_n 硬上限 12。
+import threading as _threading
+_FACTOR_CORR_CACHE = {}
+_FACTOR_CORR_LOCK = _threading.Lock()
+_FACTOR_CORR_TTL = 600
+
+
+def _compute_factor_corr(name, market, freq, start, end, top_n):
+    """加载 target + top-N peer 的 IC 序列 → Pearson 相关矩阵 + top-5 相关表。"""
+    import re as _re
+    import pandas as _pd
+    from finhack.library.db import DB
+    from finhack.factor.default.factorAnalyzer import factorAnalyzer
+    from finhack.library.data import get_data_interface
+
+    # 1. peer 列表（同 market/freq，按 score 降序，排除自身）
+    peers = []
+    try:
+        dfp = DB.select_to_df(
+            f"SELECT factor_name, IC, IR, Sharpe, score FROM factors_analysis "
+            f"WHERE market='{market}' AND freq='{freq}' AND factor_name != '{name}' "
+            f"ORDER BY score DESC LIMIT {int(top_n)}", 'finhack')
+        if dfp is not None and not dfp.empty:
+            peers = dfp.to_dict('records')
+    except Exception:
+        pass
+    peer_meta = {p['factor_name']: p for p in peers}
+    factors = [name] + [p['factor_name'] for p in peers if _re.match(r'^\w+$', p.get('factor_name') or '')]
+
+    if len(factors) < 2:
+        return {'target': name, 'names': [name], 'matrix': [[1.0]],
+                'top_related': [], 'n_peers': 0, 'n_loaded': 1}
+
+    # 2. 抽样 300 码（比 factor_detail 的 500 更省）
+    code_list = None
+    try:
+        sl = get_data_interface().get_stock_list(market=market)
+        if sl is not None and not sl.empty:
+            code_list = sl['code'].tolist()[:300]
+    except Exception:
+        pass
+
+    # 3. 每因子 IC 序列 → date 对齐 DataFrame
+    ic_map = {}
+    for fn in factors:
+        series = factorAnalyzer.ic_series_for(fn, market=market, freq=freq,
+                                              start_date=start, end_date=end,
+                                              code_list=code_list, main_day=8)
+        if series:
+            ic_map[fn] = {x['date']: x['ic'] for x in series}
+
+    if len(ic_map) < 2:
+        return {'target': name, 'names': [name], 'matrix': [[1.0]],
+                'top_related': [], 'n_peers': len(peers), 'n_loaded': len(ic_map)}
+
+    names = [n for n in factors if n in ic_map]
+    df_ic = _pd.DataFrame({n: ic_map[n] for n in names})
+    corr = df_ic.corr(method='pearson').fillna(0)
+    matrix = [[round(float(v), 4) for v in row] for row in corr.values.tolist()]
+
+    # 4. top_related：target 列按 |corr| 降序取前 5
+    target_col = corr.iloc[:, 0].drop(names[0]).sort_values(key=lambda s: s.abs(), ascending=False).head(5)
+    top_related = [{'name': fn, 'corr': round(float(v), 4),
+                    'Sharpe': float(peer_meta.get(fn, {}).get('Sharpe') or 0),
+                    'IC': float(peer_meta.get(fn, {}).get('IC') or 0)}
+                   for fn, v in target_col.items()]
+
+    return {'target': name, 'names': names, 'matrix': matrix,
+            'top_related': top_related, 'n_peers': len(peers), 'n_loaded': len(ic_map)}
+
+
+def _cached_factor_corr(name, market, freq, start, end, top_n, force=False):
+    """10min TTL 缓存（双检查锁），无指纹（直接按参数 key）。"""
+    key = (name, market, freq, start, end, top_n)
+    now = time.time()
+    if not force:
+        e = _FACTOR_CORR_CACHE.get(key)
+        if e and now - e['ts'] < _FACTOR_CORR_TTL:
+            return e['result']
+    with _FACTOR_CORR_LOCK:
+        if not force:
+            e = _FACTOR_CORR_CACHE.get(key)
+            if e and now - e['ts'] < _FACTOR_CORR_TTL:
+                return e['result']
+        result = _compute_factor_corr(name, market, freq, start, end, top_n)
+        _FACTOR_CORR_CACHE[key] = {'result': result, 'ts': time.time()}
+        return result
+
+
+@api_bp.route('/factor_corr')
+def factor_corr():
+    """因子间 IC 相关性矩阵 + top-5 相关表（类 WorldQuant self-correlation）。
+    GET /factor_corr?name=&market=&freq=&start=&end=&top_n=10&refresh=1。
+    懒加载，首次 ~30-60s，10min TTL 缓存。top_n 硬上限 12。"""
+    import re as _re
+    name = request.args.get('name')
+    if not name or not _re.match(r'^\w+$', name):
+        return jsonify({'error': 'invalid name'}), 400
+    market = request.args.get('market', 'cn_stock')
+    freq = request.args.get('freq', '1d')
+    if not _re.match(r'^\w+$', market) or not _re.match(r'^\w+$', freq):
+        return jsonify({'error': 'invalid market/freq'}), 400
+    start = request.args.get('start', '20200101')
+    end = request.args.get('end', '20210101')
+    try:
+        top_n = min(max(int(request.args.get('top_n', 10)), 1), 12)
+    except ValueError:
+        top_n = 10
+    force = request.args.get('refresh', '').lower() in ('1', 'true', 'yes')
+    return nj(_cached_factor_corr(name, market, freq, start, end, top_n, force))
+
+
 # ===================== 因子库管理（dashboard 因子管理用） =====================
 
 def _find_alphalist_file(market, freq, alphalist_name):

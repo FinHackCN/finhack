@@ -31,6 +31,34 @@ from runtime.constant import *
 import finhack.library.log as Log
 
 
+# ===================== Testing 检查项默认 cutoff（factor_detail 用，前端可覆盖） =====================
+# val=PASS 门槛，warn=WARNING 门槛；op 比较方向。返回 factor_detail 时原样透传给前端齿轮面板。
+DEFAULT_CUTOFFS = {
+    'ic_abs':        {'op': '>=', 'val': 0.02, 'warn': 0.02},   # |IC| 因子-收益相关性强度
+    'ir':            {'op': '>=', 'val': 0.50, 'warn': 0.30},   # IC 稳定性
+    'sharpe':        {'op': '>=', 'val': 1.00, 'warn': 0.50},   # 分位分层夏普
+    'coverage':      {'op': '>=', 'val': 0.80, 'warn': 0.50},   # 非空因子值占比
+    'turnover_low':  {'op': '>=', 'val': 0.10, 'warn': 0.10},   # rank 自相关下限（信号别太翻转）
+    'turnover_high': {'op': '<=', 'val': 0.70, 'warn': 0.85},   # rank 自相关上限（别太粘滞）
+    'win_rate':      {'op': '>=', 'val': 0.52, 'warn': 0.50},   # IC 同向占比
+    'monotonicity':  {'op': '>=', 'val': 0.70, 'warn': 0.40},   # 分位净值单调
+    'ic_autocorr':   {'op': '>=', 'val': 0.00, 'warn': -0.10},  # lag-1 IC 自相关（方向稳）
+}
+
+
+def _eval_one(value, cutoff_meta):
+    """单值 vs 单边 cutoff（>= 或 <=）→ 'pass'/'warning'/'fail'。"""
+    op = cutoff_meta.get('op', '>=')
+    val, warn = cutoff_meta['val'], cutoff_meta['warn']
+    def _ge(x, t):
+        return x >= t if op == '>=' else x <= t
+    if _ge(value, val):
+        return 'pass'
+    if _ge(value, warn):
+        return 'warning'
+    return 'fail'
+
+
 # ===================== MySQL 兼容（不可达自动降级） =====================
 
 def _db_select(sql, conn='finhack'):
@@ -323,6 +351,8 @@ class factorAnalyzer():
             df = df.replace([np.inf, -np.inf], np.nan).dropna(subset=[factor_name, 'close', 'open'])
             if df.empty:
                 return {'error': f'{factor_name} 清洗后为空'}
+            if df[factor_name].nunique() <= 1:
+                return {'error': f'{factor_name} 为常量因子（无方差，无法分析）'}
 
             days_t = tuple(days) if days else (1, 2, 3, 5, 8, 13, 21)
             main_day = days_t[len(days_t) // 2]                    # 中位 horizon 做 IC 时序/分层
@@ -355,7 +385,8 @@ class factorAnalyzer():
                 if top['daily'] and bot['daily']:
                     ls = [a - b for a, b in zip(top['daily'], bot['daily'])]
                     nv = float(np.prod([1 + x for x in ls]) - 1) if ls else 0.0
-                    long_short = {'daily': ls, 'nv': nv}
+                    ls_dates = (top.get('dates') or [])[:len(ls)]
+                    long_short = {'daily': ls, 'nv': nv, 'dates': ls_dates}
 
             # ---- 分布直方图 ----
             vals = dfr[factor_name].dropna()
@@ -371,6 +402,58 @@ class factorAnalyzer():
             desc = dfr[factor_name].describe()
             total_rows = len(df)
             coverage = float(dfr[factor_name].notna().sum() / total_rows) if total_rows else 0.0
+
+            # ---- WorldQuant 式扩展指标 ----
+            turnover = factorAnalyzer._turnover(dfr, factor_name, t_col=t_col, c_col=c_col)
+            ic_autocorr = factorAnalyzer._ic_autocorr(ICs)
+            ic_autocorr_lags = factorAnalyzer._ic_autocorr_lags(ICs)
+            win_rate = float(sum(1 for x in ICs if x > 0) / len(ICs)) if ICs else 0.0
+            monotonicity = factorAnalyzer._monotonicity(qcurves)
+            yearly = factorAnalyzer._yearly(ic_series, long_short)
+            ls_daily = (long_short or {}).get('daily') or []
+            if long_short and ls_daily:
+                ls_ann = (1 + long_short['nv']) ** (252.0 / max(len(ls_daily), 1)) - 1
+                fitness = max_sharpe * math.sqrt(max(abs(ls_ann), 0.0) / max(turnover, 0.01))
+            else:
+                ls_ann = None
+                fitness = 0.0
+            fitness = float(min(fitness, 100.0))
+
+            # ---- Testing 检查（默认 cutoff，前端可覆盖重算）----
+            raw_metrics = {
+                'IC': IC, 'IR': IR, 'Sharpe': max_sharpe, 'coverage': coverage,
+                'turnover': turnover, 'win_rate': win_rate,
+                'monotonicity': monotonicity, 'ic_autocorr': ic_autocorr,
+            }
+            _tlo, _thi = DEFAULT_CUTOFFS['turnover_low'], DEFAULT_CUTOFFS['turnover_high']
+            _t_status = ('pass' if _tlo['val'] <= turnover <= _thi['val']
+                         else ('warning' if _tlo['warn'] <= turnover <= _thi['warn'] else 'fail'))
+            checks = [
+                {'key': 'ic_abs', 'name': 'IC 绝对值', 'value': round(abs(IC), 5),
+                 'cutoff': DEFAULT_CUTOFFS['ic_abs']['val'], 'direction': '≥', 'desc': '因子-收益相关性强度',
+                 'status': _eval_one(abs(IC), DEFAULT_CUTOFFS['ic_abs'])},
+                {'key': 'ir', 'name': 'IR', 'value': round(IR, 4),
+                 'cutoff': DEFAULT_CUTOFFS['ir']['val'], 'direction': '≥', 'desc': 'IC 稳定性',
+                 'status': _eval_one(IR, DEFAULT_CUTOFFS['ir'])},
+                {'key': 'sharpe', 'name': 'Sharpe', 'value': round(max_sharpe, 4),
+                 'cutoff': DEFAULT_CUTOFFS['sharpe']['val'], 'direction': '≥', 'desc': '分位分层夏普',
+                 'status': _eval_one(max_sharpe, DEFAULT_CUTOFFS['sharpe'])},
+                {'key': 'coverage', 'name': '覆盖度', 'value': round(coverage, 4),
+                 'cutoff': DEFAULT_CUTOFFS['coverage']['val'], 'direction': '≥', 'desc': '非空因子值占比',
+                 'status': _eval_one(coverage, DEFAULT_CUTOFFS['coverage'])},
+                {'key': 'turnover', 'name': '换手率(rank 自相关)', 'value': round(turnover, 4),
+                 'cutoff': f"[{_tlo['val']}, {_thi['val']}]", 'direction': '∈',
+                 'desc': '信号稳定性（过低=噪声/过高=粘滞）', 'status': _t_status},
+                {'key': 'win_rate', 'name': 'IC 方向一致性', 'value': round(win_rate, 4),
+                 'cutoff': DEFAULT_CUTOFFS['win_rate']['val'], 'direction': '≥', 'desc': 'IC 同向占比',
+                 'status': _eval_one(win_rate, DEFAULT_CUTOFFS['win_rate'])},
+                {'key': 'monotonicity', 'name': '单调性', 'value': round(monotonicity, 4),
+                 'cutoff': DEFAULT_CUTOFFS['monotonicity']['val'], 'direction': '≥', 'desc': '分位净值单调',
+                 'status': _eval_one(monotonicity, DEFAULT_CUTOFFS['monotonicity'])},
+                {'key': 'ic_autocorr', 'name': 'IC 自相关', 'value': round(ic_autocorr, 4),
+                 'cutoff': DEFAULT_CUTOFFS['ic_autocorr']['val'], 'direction': '≥', 'desc': 'IC 时序稳定性（lag-1）',
+                 'status': _eval_one(ic_autocorr, DEFAULT_CUTOFFS['ic_autocorr'])},
+            ]
 
             def _f(v):
                 try:
@@ -391,9 +474,20 @@ class factorAnalyzer():
                 },
                 'ic_series': ic_series,           # [{date, ic}]
                 'ic_decay': ic_decay,             # [{days, ic}]
-                'quantile_returns': qcurves,      # [{q, nv, sharpe, daily:[decimal]}]
-                'long_short': long_short,         # {daily:[decimal], nv}
+                'quantile_returns': qcurves,      # [{q, nv, sharpe, daily, dates}]
+                'long_short': long_short,         # {daily, nv, dates}
                 'distribution': distribution,     # [{bin, count}]
+                # ---- WorldQuant 式扩展 ----
+                'turnover': turnover,
+                'ic_autocorr': ic_autocorr,
+                'ic_autocorr_lags': ic_autocorr_lags,
+                'win_rate': win_rate,
+                'monotonicity': monotonicity,
+                'fitness': fitness,
+                'yearly': yearly,
+                'checks': checks,
+                'raw_metrics': raw_metrics,
+                'default_cutoffs': {k: dict(v) for k, v in DEFAULT_CUTOFFS.items()},
             }
         except Exception as e:
             Log.logger.warning(f"factor_detail {factor_name} error: {e}\n{traceback.format_exc()}")
@@ -456,18 +550,155 @@ class factorAnalyzer():
         d = d.dropna(subset=['q', 'return'])
         out = []
         for q in sorted(d['q'].unique()):
-            daily = d[d['q'] == q].groupby(t_col)['return'].mean().sort_index().tolist()
-            if not daily:
+            g = d[d['q'] == q].groupby(t_col)['return'].mean().sort_index()
+            if g.empty:
                 continue
-            rets = [float(x) - 1 for x in daily]                  # ratio → decimal
+            rets = [float(x) - 1 for x in g.tolist()]            # ratio → decimal
+            dates = [pd.Timestamp(x).strftime('%Y-%m-%d') for x in g.index]
             sd = float(np.std(rets, ddof=1)) if len(rets) > 1 else 0.0
             out.append({
                 'q': int(q),
                 'nv': float(np.prod([1 + r for r in rets]) - 1),
                 'sharpe': float(np.mean(rets) / sd) if sd else 0.0,
                 'daily': rets,
+                'dates': dates,
             })
         return out
+
+    # ===================== WorldQuant 式扩展指标（turnover/自相关/年度/单调/检查） =====================
+
+    @staticmethod
+    def _turnover(df, factor_name, t_col='time', c_col='code'):
+        """换手率代理 = 日均 lag-1 rank 自相关（cross-section）。
+        值越高=信号越稳（少换仓）；越低=日翻转（噪声/滑点吃掉）。
+        常量因子/单日 → 0.0。"""
+        try:
+            d = df.reset_index() if not isinstance(df.index, pd.MultiIndex) else df.reset_index()
+            d[t_col] = pd.to_datetime(d[t_col])
+            d = d.dropna(subset=[factor_name])
+            if d[t_col].nunique() < 2:
+                return 0.0
+            d['_rank'] = d.groupby(t_col)[factor_name].rank(method='average')
+            piv = d.pivot_table(index=t_col, columns=c_col, values='_rank')
+            prev = piv.shift(1)
+            corr = piv.corrwith(prev, axis=1).dropna()
+            return float(corr.mean()) if len(corr) else 0.0
+        except Exception:
+            return 0.0
+
+    @staticmethod
+    def _ic_autocorr(ic_values, lag=1):
+        """IC 序列 lag-N 自相关。样本不足返 0.0。"""
+        if len(ic_values) < lag + 2:
+            return 0.0
+        try:
+            return float(pd.Series(ic_values).autocorr(lag=lag))
+        except Exception:
+            return 0.0
+
+    @staticmethod
+    def _ic_autocorr_lags(ic_values, max_lag=10):
+        """IC 各 lag(1..max_lag) 自相关 → [{lag, ac}]，供前端 mini bar。"""
+        out = []
+        for k in range(1, max_lag + 1):
+            out.append({'lag': k, 'ac': factorAnalyzer._ic_autocorr(ic_values, lag=k)})
+        return out
+
+    @staticmethod
+    def _yearly(ic_series, long_short):
+        """按日历年聚合 → [{year, IC, IR, Sharpe, ls_return, drawdown, win_rate, count}]。
+        ic_series: [{date:'YYYY-MM-DD', ic}]；long_short: {daily:[decimal], dates:[...]} 或 None。"""
+        if not ic_series:
+            return []
+        ic_df = pd.DataFrame(ic_series)
+        ic_df['year'] = ic_df['date'].str[:4]
+        ls_map = None
+        if long_short and long_short.get('dates') and long_short.get('daily'):
+            ls_df = pd.DataFrame({'date': long_short['dates'], 'r': long_short['daily']})
+            ls_df['year'] = ls_df['date'].str[:4]
+            ls_map = {y: g['r'].tolist() for y, g in ls_df.groupby('year')}
+        out = []
+        for year, g in ic_df.groupby('year'):
+            ics = [float(x) for x in g['ic'].tolist() if pd.notna(x)]
+            IC_mean = float(np.mean(ics)) if ics else 0.0
+            IC_std = float(np.std(ics, ddof=1)) if len(ics) > 1 else 0.0
+            IR = float(IC_mean / IC_std) if IC_std else 0.0
+            win_rate = float(sum(1 for x in ics if x > 0) / len(ics)) if ics else 0.0
+            ls_y = (ls_map or {}).get(year, [])
+            ls_return = float(np.prod([1 + x for x in ls_y]) - 1) if ls_y else 0.0
+            if ls_y:
+                eq = np.cumprod([1 + x for x in ls_y])
+                peak = np.maximum.accumulate(eq)
+                drawdown = float((eq / peak - 1).min())
+            else:
+                drawdown = 0.0
+            sd = float(np.std(ls_y, ddof=1)) if len(ls_y) > 1 else 0.0
+            sharpe_y = float(np.mean(ls_y) / sd) if sd and ls_y else 0.0
+            out.append({
+                'year': str(year), 'IC': IC_mean, 'IR': IR, 'Sharpe': sharpe_y,
+                'ls_return': ls_return, 'drawdown': drawdown,
+                'win_rate': win_rate, 'count': len(ics),
+            })
+        return sorted(out, key=lambda x: x['year'])
+
+    @staticmethod
+    def _monotonicity(qcurves):
+        """分位净值单调性 = Spearman(q, nv)。接近 1=干净单调分层；接近 0=无序。"""
+        if len(qcurves) < 2:
+            return 0.0
+        qs = [q['q'] for q in qcurves]
+        nvs = [q['nv'] for q in qcurves]
+        try:
+            from scipy.stats import spearmanr
+            r, _ = spearmanr(qs, nvs)
+            return float(r) if not pd.isna(r) else 0.0
+        except Exception:
+            def _rank(xs):
+                order = sorted(range(len(xs)), key=lambda i: xs[i])
+                rk = [0] * len(xs)
+                for i, idx in enumerate(order):
+                    rk[idx] = i + 1
+                return rk
+            rq, rv = _rank(qs), _rank(nvs)
+            mq, mv = np.mean(rq), np.mean(rv)
+            num = sum((rq[i] - mq) * (rv[i] - mv) for i in range(len(rq)))
+            den = (math.sqrt(sum((x - mq) ** 2 for x in rq)) * math.sqrt(sum((x - mv) ** 2 for x in rv)))
+            return float(num / den) if den else 0.0
+
+    @staticmethod
+    def ic_series_for(factor_name, market='cn_stock', freq='1d', start_date='20200101',
+                      end_date='20210101', code_list=None, main_day=8):
+        """薄封装：加载 close/open/factor → 复用 factor_detail 的清洗 → 返回 IC 时序 [{date, ic}]。
+        /factor_corr 用它对每个因子单独算 IC 序列，避免重跑整个 factor_detail。"""
+        try:
+            df = factorManager.loadFactors(
+                matrix_list=['close', 'open', factor_name], code_list=code_list,
+                market=market, freq=freq, start_date=start_date, end_date=end_date)
+            if df is None or df.empty:
+                return []
+            lvl0 = df.index.names[0]
+            t_col, c_col = ('time', 'code') if lvl0 == 'time' else ('trade_date', 'ts_code')
+            df = df.reset_index()
+            df[t_col] = pd.to_datetime(df[t_col]).dt.normalize()
+            df = df.groupby([c_col, t_col]).first().reset_index()
+            if start_date:
+                df = df[df[t_col] >= pd.to_datetime(start_date)]
+            if end_date:
+                df = df[df[t_col] < pd.to_datetime(end_date)]
+            if code_list:
+                df = df[df[c_col].isin(code_list)]
+            df = df.set_index([t_col, c_col])
+            df = df.replace([np.inf, -np.inf], np.nan).dropna(subset=[factor_name, 'close', 'open'])
+            if df.empty:
+                return []
+            df['return'] = df.groupby(c_col)['close'].shift(-main_day) / df.groupby(c_col)['open'].shift(-1)
+            dfr = df.dropna(subset=['return'])
+            if dfr.empty:
+                return []
+            return factorAnalyzer._ic_series(dfr, factor_name, t_col=t_col)
+        except Exception as e:
+            Log.logger.warning(f"ic_series_for {factor_name} error: {e}")
+            return []
 
     # ===================== alphalens 全景（行业按市场分发） =====================
     @staticmethod
