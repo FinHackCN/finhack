@@ -149,6 +149,13 @@ class factorAnalyzer():
                source='mining', start_date='20100101', end_date='20200101',
                formula="", replace=False, table='factors_analysis', ignore_error=False,
                code_list=[], market='cn_stock', freq='1d'):
+        # 分析引擎为日频口径（IC/IR/Sharpe/forward return 全按"天"算）。
+        # 1m 数据进 analys 会被 groupby(code,date).first() 降采样到日，结果等同 1d 而非分钟级，
+        # 入库会把口径错误的记录写进 factors_analysis（freq 字段标 1m，实际是日频口径）→ 误导。
+        # 故 1m 一律拒绝入库，避免"混乱"。
+        if freq == '1m':
+            Log.logger.warning(f'analys: {factor_name} freq=1m 不支持分析（引擎日频口径，1m 会降采样），跳过入库')
+            return False
         try:
             hashstr = f"{factor_name}-{days}-{source}-{market}-{freq}-{start_date}:{end_date}#{formula}"
             md5 = hashlib.md5(hashstr.encode('utf-8')).hexdigest()
