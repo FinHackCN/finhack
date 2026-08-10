@@ -432,19 +432,98 @@ def _trial_calc(formula, name, market, freq):
     return True, ''
 
 
+# ===================== 因子库 inspect 目录指纹缓存 =====================
+# 进程内缓存：key=(market,freq) -> {'result':list,'fp':tuple,'ts':ts}
+# 指纹 = matrix+vector 两棵树的 (pkl 数, 目录 mtime 之和)。指纹变(增删因子/新目录)或
+# ?refresh=1 才重扫；切 tab 的重复请求直接命中缓存。
+# 原地覆盖写(重算同名 pkl)不改目录 mtime → 由 factor/delete 主动失效 + 前端重算后强制刷新兜底。
+import threading
+_FACTOR_INSPECT_CACHE = {}
+_FACTOR_INSPECT_LOCK = threading.Lock()
+
+
+def _factor_tree_fingerprint(base):
+    """便宜的目录指纹：只 stat 各级目录 mtime，不读 pkl 内容、不逐文件 stat。
+    目录结构为 base/year/code/*.pkl（与 inspectFactorsLight 的 year=parts[0]/code=parts[1] 约定一致）：
+    depth 0=base、1=year、2=code(叶子层)——叶子层只 stat 不 scandir，跳过对 9.7M pkl 的 readdir
+    （实测 cn_stock/1d 全量 inspect 110s → 本指纹 0.2s）。
+    返回 mtime_sum(int) 或 None(base 不存在)。
+    变更检测：pkl 增删 → 其 code-dir mtime 变；新 code-dir → year-dir mtime 变；新 year → base mtime 变。
+    原地覆盖写(重算)不改目录 mtime → 由 factor/delete 失效 + 重算后 force 刷新兜底。
+    注意：依赖 year/code 两层目录骨架，若未来因子目录结构变更需同步本函数。"""
+    if not os.path.isdir(base):
+        return None
+    mtime_sum = 0
+    stack = [(base, 0)]
+    while stack:
+        d, depth = stack.pop()
+        try:
+            mtime_sum += int(os.stat(d).st_mtime * 1e6)
+        except OSError:
+            continue
+        if depth >= 2:
+            continue  # code 叶子层：mtime 已计入，不枚举内部 pkl
+        try:
+            entries = os.scandir(d)
+        except OSError:
+            continue
+        with entries:
+            for e in entries:
+                try:
+                    if e.is_dir(follow_symlinks=False):
+                        stack.append((e.path, depth + 1))
+                    else:
+                        # depth<2 却遇文件（杂散），早停避免误枚举
+                        break
+                except OSError:
+                    pass
+    return mtime_sum
+
+
+def _cached_factor_inspect(market, freq, force=False):
+    """带目录指纹缓存的因子 inspect。返回 (result_list, hit:bool)。
+    hit=True 表示命中缓存（未重扫）。force=True 或指纹变化时全量重扫。"""
+    from runtime.constant import DATA_DIR
+    key = (market, freq)
+    # 指纹覆盖 matrix+vector：任一树变化（增删因子/目录）都重扫
+    fp = tuple(_factor_tree_fingerprint(os.path.join(DATA_DIR, 'factors', t, market, freq))
+               for t in ('matrix', 'vector'))
+    if not force:
+        entry = _FACTOR_INSPECT_CACHE.get(key)
+        if entry and entry['fp'] == fp:
+            return entry['result'], True
+    # 指纹变 / 强制 → 全量重扫。加锁合并并发请求，避免重复扫（双检查防串行等待白等）
+    with _FACTOR_INSPECT_LOCK:
+        if not force:
+            entry = _FACTOR_INSPECT_CACHE.get(key)
+            if entry and entry['fp'] == fp:
+                return entry['result'], True
+        from finhack.factor.default.factorManager import factorManager
+        out = []
+        for ftype in ('matrix', 'vector'):
+            try:
+                out.extend(factorManager.inspectFactorsLight(market=market, freq=freq, factor_type=ftype))
+            except Exception:
+                pass
+        _FACTOR_INSPECT_CACHE[key] = {'result': out, 'fp': fp, 'ts': time.time()}
+        return out, False
+
+
 @api_bp.route('/factor_inspect')
 def factor_inspect():
-    """列出已入库因子 + 轻量元信息（year 范围/代码数/大小），matrix+vector 合并。纯 inode 不加载 pkl。"""
-    from finhack.factor.default.factorManager import factorManager
+    """列出已入库因子 + 轻量元信息（year 范围/代码数/大小），matrix+vector 合并。
+    目录指纹缓存：未变化命中缓存秒回，变化或 ?refresh=1 才重扫。返回 {factors, cached, scanned_at}。"""
     market = request.args.get('market', 'cn_stock')
     freq = request.args.get('freq', '1d')
-    out = []
-    for ftype in ('matrix', 'vector'):
-        try:
-            out.extend(factorManager.inspectFactorsLight(market=market, freq=freq, factor_type=ftype))
-        except Exception:
-            pass
-    return jsonify(out)
+    force = request.args.get('refresh', '').lower() in ('1', 'true', 'yes')
+    out, hit = _cached_factor_inspect(market, freq, force=force)
+    entry = _FACTOR_INSPECT_CACHE.get((market, freq)) or {}
+    return jsonify({
+        'factors': out,
+        'cached': hit,
+        'count': len(out),
+        'scanned_at': entry.get('ts'),
+    })
 
 
 @api_bp.route('/factor/delete', methods=['POST'])
@@ -464,6 +543,8 @@ def factor_delete():
     if not names:
         return jsonify({'error': '无有效因子名'}), 400
     removed = sum(factorManager.deleteFactorFiles(n, market=market, freq=freq) for n in names)
+    # 删了 pkl → 失效该 (market,freq) 的 inspect 缓存，下次请求重扫
+    _FACTOR_INSPECT_CACHE.pop((market, freq), None)
     try:
         in_list = ",".join(f"'{n}'" for n in names)
         DB.delete(f"DELETE FROM factors_analysis WHERE factor_name IN ({in_list})", 'finhack')
