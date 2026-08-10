@@ -75,14 +75,14 @@ def analyze(factor_name, market='cn_stock', freq='1d', start_date='', end_date='
 
 
 def analyze_detail(factor_name, market='cn_stock', freq='1d', start_date='', end_date='',
-                   code_list=None, n_quantiles=10, days=(1, 2, 3, 5, 8, 13, 21)):
+                   code_list=None, n_quantiles=10, days=(1, 2, 3, 5, 8, 13, 21), os_ratio=0.20):
     """深度因子分析（dashboard 用）：返回 IC 时序/IC 衰减/分位分层/多空/分布 dict。
-    与 analyze 对称，但返回丰富结构供前端画图（不写库）。"""
+    与 analyze 对称，但返回丰富结构供前端画图（不写库）。os_ratio 控制样本外(OS)子窗口占比。"""
     _ensure_path()
     from finhack.factor.default.factorAnalyzer import factorAnalyzer
     return factorAnalyzer.factor_detail(
         factor_name, market=market, freq=freq, start_date=start_date, end_date=end_date,
-        code_list=code_list, n_quantiles=n_quantiles, days=days)
+        code_list=code_list, n_quantiles=n_quantiles, days=days, os_ratio=os_ratio)
 
 
 def mine(prompt='', model='gpt-4', method='gpt', market='cn_stock', freq='1d',
