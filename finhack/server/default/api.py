@@ -123,11 +123,35 @@ def models():
     from finhack.library.db import DB
     try:
         df = DB.select_to_df(
-            "SELECT hash as model_id, features, label, shift, loss, score, start_date, end_date "
+            "SELECT hash as model_id, features, label, shift, loss, score, start_date, end_date, algorithm "
             "FROM auto_train ORDER BY score DESC LIMIT 100", 'finhack')
         if df is None or df.empty:
             return jsonify([])
         return jsonify(df.fillna('').to_dict('records'))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@api_bp.route('/model/delete', methods=['POST'])
+def model_delete():
+    """删除模型：DB auto_train 记录 + lgb 模型文件。
+    body: {model_id}"""
+    import re, os, glob
+    from finhack.library.db import DB
+    data = request.get_json(silent=True) or {}
+    model_id = data.get('model_id', '')
+    if not re.match(r'^\w+$', model_id):
+        return jsonify({'error': 'invalid model_id'}), 400
+    try:
+        DB.delete(f"DELETE FROM auto_train WHERE hash='{model_id}'", 'finhack')
+        for f in glob.glob(os.path.join(os.path.dirname(os.path.dirname(__file__)),
+                                        '**/models/lgb_model_' + model_id + '.txt'),
+                           recursive=True):
+            try:
+                os.remove(f)
+            except Exception:
+                pass
+        return jsonify({'ok': True})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
