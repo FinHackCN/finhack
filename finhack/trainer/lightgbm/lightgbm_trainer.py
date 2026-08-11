@@ -144,16 +144,20 @@ class LightgbmTrainer(Trainer):
             'boosting_type': 'gbdt', 'max_depth': 7, 'num_leaves': 64,
             'learning_rate': 0.1, 'feature_fraction': 0.9, 'bagging_fraction': 0.9,
             'bagging_freq': 5, 'verbose': -1, 'verbosity': -1,
+            'min_child_samples': 20,
             'device': getattr(args, 'device', 'cpu'),
         }
         params.update(param)
-        callbacks = [lgb.early_stopping(30, verbose=0), lgb.log_evaluation(period=0)]
+        # 从 param 提取非 lgb-params 的训练控制参数
+        num_boost_round = int(params.pop('n_estimators', 100))
+        early_stopping_rounds = int(params.pop('early_stopping', 30))
+        callbacks = [lgb.early_stopping(early_stopping_rounds, verbose=0), lgb.log_evaluation(period=0)]
         if loss == "ds":
             params['objective'] = self.custom_obj
-            gbm = lgb.train(params, data_train, num_boost_round=100, valid_sets=data_valid,
+            gbm = lgb.train(params, data_train, num_boost_round=num_boost_round, valid_sets=data_valid,
                             callbacks=callbacks, feval=self.custom_eval)
         else:
-            gbm = lgb.train(params, data_train, num_boost_round=100, valid_sets=data_valid,
+            gbm = lgb.train(params, data_train, num_boost_round=num_boost_round, valid_sets=data_valid,
                             callbacks=callbacks)
         model_file = data_path + '/models/lgb_model_' + md5 + '.txt'
         os.makedirs(os.path.dirname(model_file), exist_ok=True)
