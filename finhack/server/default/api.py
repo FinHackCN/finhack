@@ -123,8 +123,8 @@ def models():
     from finhack.library.db import DB
     try:
         df = DB.select_to_df(
-            "SELECT hash as model_id, features, label, shift, loss, score, start_date, end_date, algorithm "
-            "FROM auto_train ORDER BY score DESC LIMIT 100", 'finhack')
+            "SELECT hash as model_id, features, label, shift, loss, score, start_date, end_date, algorithm, created_at "
+            "FROM auto_train ORDER BY created_at DESC LIMIT 100", 'finhack')
         if df is None or df.empty:
             return jsonify([])
         return jsonify(df.fillna('').to_dict('records'))
