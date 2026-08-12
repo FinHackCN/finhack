@@ -127,7 +127,16 @@ def models():
             "FROM auto_train ORDER BY created_at DESC LIMIT 100", 'finhack')
         if df is None or df.empty:
             return jsonify([])
-        return jsonify(df.fillna('').to_dict('records'))
+        # created_at: pandas Timestamp → 'YYYY-MM-DD HH:MM:SS' 字符串（避免序列化成 HTTP date）
+        if 'created_at' in df.columns:
+            df['created_at'] = df['created_at'].apply(
+                lambda x: x.strftime('%Y-%m-%d %H:%M:%S') if hasattr(x, 'strftime') else str(x))
+        # score: null/NaN → 0（fillna('') 会让前端 fmt 显示 '-'）
+        import pandas as _pd
+        for c in ['score']:
+            if c in df.columns:
+                df[c] = df[c].apply(lambda x: float(x) if _pd.notna(x) and x != '' else 0.0)
+        return nj(df.fillna('').to_dict('records'))
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
