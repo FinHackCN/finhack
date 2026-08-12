@@ -147,7 +147,7 @@ class LightgbmTrainer(Trainer):
             'min_child_samples': 20,
             'device': getattr(args, 'device', 'cpu'),
         }
-        params.update(param)
+        params.update(param if isinstance(param, dict) else {})
         # 从 param 提取非 lgb-params 的训练控制参数
         num_boost_round = int(params.pop('n_estimators', 100))
         early_stopping_rounds = int(params.pop('early_stopping', 30))

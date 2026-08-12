@@ -107,11 +107,19 @@ def train(factor_list, market='cn_stock', freq='1d', start_date='', valid_date='
     """ML 训练。返回 model_id（md5）；pred 入库为因子 pred_<md5>（回测 get_factors 读）。
     model_type: 'lightgbm'（目前仅支持此；预留 xgboost/catboost 等扩展）。"""
     _ensure_path()
-    import runtime.global_var as global_var
+    import runtime.global_var as global_var, json as _json
 
     class _Args:
         device = 'cpu'
     global_var.args = _Args()
+
+    # param 可能是 JSON 字符串（前端 JSON.stringify 传来的）或 dict，统一转成 dict
+    _param = kwargs.get('param', {})
+    if isinstance(_param, str):
+        try:
+            _param = _json.loads(_param)
+        except Exception:
+            _param = {}
 
     if model_type == 'lightgbm':
         from finhack.trainer.lightgbm.lightgbm_trainer import LightgbmTrainer
@@ -122,7 +130,7 @@ def train(factor_list, market='cn_stock', freq='1d', start_date='', valid_date='
     return t.start_train(
         market=market, freq=freq, start_date=start_date, valid_date=valid_date, end_date=end_date,
         matrix_list=factor_list, vector_list=vector_list or [], label=label, shift=shift,
-        loss=loss, param=kwargs.get('param', {}), filter_name=kwargs.get('filter_name', ''),
+        loss=loss, param=_param, filter_name=kwargs.get('filter_name', ''),
         replace=kwargs.get('replace', False))
 
 
