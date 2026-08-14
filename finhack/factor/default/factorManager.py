@@ -83,10 +83,19 @@ class factorManager:
             # only_exists 时走文件存在性检查（避免 1m 全市场全量加载 OOM）
             if only_exists:
                 import glob
-                for pat in (f"{factor_name}.pkl", f"{factor_name}_0.pkl"):
-                    if glob.glob(os.path.join(DATA_DIR, 'factors', factor_type, market, freq, '*', '*', pat)):
-                        result["exists"] = True
-                        return result
+                # 按日期区间过滤年份目录：原 '*' 全局 glob 不看区间，任一年份有旧文件
+                # 就判 exists → computeAlpha 的区间补算被挡（2020-2025 补算被 2016 旧文件误跳过）
+                if start_date is not None and end_date is not None:
+                    y1, y2 = int(start_date[:4]), int(end_date[:4])
+                    year_dirs = [os.path.join(DATA_DIR, 'factors', factor_type, market, freq, str(y))
+                                 for y in range(y1, y2 + 1)]
+                else:
+                    year_dirs = [os.path.join(DATA_DIR, 'factors', factor_type, market, freq, '*')]
+                for yd in year_dirs:
+                    for pat in (f"{factor_name}.pkl", f"{factor_name}_0.pkl"):
+                        if glob.glob(os.path.join(yd, '*', pat)):
+                            result["exists"] = True
+                            return result
                 return result
 
             # 获取数据接口
