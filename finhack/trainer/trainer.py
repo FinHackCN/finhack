@@ -27,7 +27,8 @@ class Trainer:
                                         start_date=start_date, end_date=end_date)
         if df is None or df.empty:
             return pd.DataFrame()
-        df = df.reset_index().ffill().fillna(0)
+        # ffill 按 code 分组（跨股票 ffill 会用别只股票的值填充，污染特征）
+        df = df.groupby(level='code').ffill().fillna(0)
         if norm and features:
             g = df.groupby('time')[features]
             df[features] = (df[features] - g.transform('min')) / (g.transform('max') - g.transform('min'))
@@ -45,7 +46,8 @@ class Trainer:
                                         vector_list=vector_list, start_date=start_date, end_date=pred_date)
         if df is None or df.empty:
             return None, None, None, None, pd.DataFrame(), data_path
-        df = df.reset_index().sort_values('time').ffill().fillna(0)
+        # ffill 按 code 分组：某股票的 NaN 不能被另一只股票的值填充（原 reset_index+sort_values('time').ffill() 跨股票污染）
+        df = df.groupby(level='code').ffill().fillna(0).reset_index()
 
         # 过滤器（项目级 strategies/filters.py）
         if filter_name != '':
@@ -78,6 +80,17 @@ class Trainer:
         df_train = df[(df.time_str >= start_date) & (df.time_str < valid_date)]
         df_valid = df[(df.time_str >= valid_date) & (df.time_str < end_date)]
         df_pred = df[df.time_str >= end_date]
+
+        # embargo：train/valid 段末尾丢弃 shift 行——label(T)=close(T+shift)/open(T+1) 的窗口
+        # 越过段边界用到下一段价格，造成信息泄漏（train 尾部标签看得到 valid，valid 尾部看得到 pred）
+        if shift and len(df_train) > shift:
+            df_train = df_train.iloc[:-shift]
+        if shift and len(df_valid) > shift:
+            df_valid = df_valid.iloc[:-shift]
+
+        # label 清洗：NaN（尾部 shift 行）/ inf（open 被 fillna(0)）不进训练集
+        df_train = df_train.replace({'label': [np.inf, -np.inf]}, np.nan).dropna(subset=['label'])
+        df_valid = df_valid.replace({'label': [np.inf, -np.inf]}, np.nan).dropna(subset=['label'])
 
         if dropna:
             df_train = df_train.replace([np.inf, -np.inf], np.nan).dropna()

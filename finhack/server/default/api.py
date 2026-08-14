@@ -123,7 +123,8 @@ def models():
     from finhack.library.db import DB
     try:
         df = DB.select_to_df(
-            "SELECT hash as model_id, features, label, shift, loss, score, start_date, end_date, algorithm, created_at "
+            "SELECT hash as model_id, features, label, shift, loss, score, start_date, end_date, "
+            "algorithm, created_at, market, freq "
             "FROM auto_train ORDER BY created_at DESC LIMIT 100", 'finhack')
         if df is None or df.empty:
             return jsonify([])
@@ -131,11 +132,10 @@ def models():
         if 'created_at' in df.columns:
             df['created_at'] = df['created_at'].apply(
                 lambda x: x.strftime('%Y-%m-%d %H:%M:%S') if hasattr(x, 'strftime') else str(x))
-        # score: null/NaN → 0（fillna('') 会让前端 fmt 显示 '-'）
+        # score: NaN → None（区分"没算出来"与"算出来是 0"；前端 null 显示 '-'）
         import pandas as _pd
-        for c in ['score']:
-            if c in df.columns:
-                df[c] = df[c].apply(lambda x: float(x) if _pd.notna(x) and x != '' else 0.0)
+        if 'score' in df.columns:
+            df['score'] = df['score'].apply(lambda x: float(x) if _pd.notna(x) else None)
         return nj(df.fillna('').to_dict('records'))
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -143,7 +143,7 @@ def models():
 
 @api_bp.route('/model/delete', methods=['POST'])
 def model_delete():
-    """删除模型：DB auto_train 记录 + lgb 模型文件。
+    """删除模型：DB 记录 + 模型文件 + pred pkl + pred 因子 pkl（全市场分片）。
     body: {model_id}"""
     import re, os, glob
     from finhack.library.db import DB
@@ -152,15 +152,33 @@ def model_delete():
     if not re.match(r'^\w+$', model_id):
         return jsonify({'error': 'invalid model_id'}), 400
     try:
+        # 反查模型所属 market/freq（pred 因子目录定位）
+        row = DB.select_to_df(
+            f"SELECT market, freq FROM auto_train WHERE hash='{model_id}'", 'finhack')
+        market = 'cn_stock'
+        freq = '1d'
+        if row is not None and not row.empty:
+            market = str(row.iloc[0].get('market') or 'cn_stock')
+            freq = str(row.iloc[0].get('freq') or '1d')
         DB.delete(f"DELETE FROM auto_train WHERE hash='{model_id}'", 'finhack')
-        for f in glob.glob(os.path.join(os.path.dirname(os.path.dirname(__file__)),
-                                        '**/models/lgb_model_' + model_id + '.txt'),
-                           recursive=True):
-            try:
-                os.remove(f)
-            except Exception:
-                pass
-        return jsonify({'ok': True})
+        # 实际产物路径（demo_project/data/）：模型本体 / pred pkl / pred 因子分片
+        try:
+            from runtime.constant import DATA_DIR
+        except Exception:
+            DATA_DIR = '/mnt/ssd2/finhack-dev/demo_project/data'
+        removed = 0
+        for pat in [
+            os.path.join(DATA_DIR, 'models', f'lgb_model_{model_id}.txt'),
+            os.path.join(DATA_DIR, 'preds', f'lgb_model_{model_id}_pred.pkl'),
+            os.path.join(DATA_DIR, 'factors', 'matrix', market, freq, '**', f'pred_{model_id}.pkl'),
+        ]:
+            for f in glob.glob(pat, recursive=True):
+                try:
+                    os.remove(f)
+                    removed += 1
+                except Exception:
+                    pass
+        return jsonify({'ok': True, 'removed': removed})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

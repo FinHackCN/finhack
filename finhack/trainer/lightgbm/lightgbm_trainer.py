@@ -74,43 +74,46 @@ class LightgbmTrainer(Trainer):
     def start_train(self, market='cn_stock', freq='1d', start_date='20000101', valid_date="20080101",
                     end_date='20100101', matrix_list=[], vector_list=[], label='abs', shift=10,
                     param={}, loss='ds', filter_name='', replace=False):
+        """返回 {'model_id': md5, 'cached': bool}；异常直接上抛（task 层标 error，前端可见）。"""
         print("start train:loss=%s" % loss)
+        # hash 用 json.dumps(sort_keys) 保证同参数（不同 dict 键序）同 hash
+        param_str = json.dumps(param, sort_keys=True) if isinstance(param, dict) else str(param)
+        hashstr = f"{market}-{freq}" + start_date + "-" + valid_date + "-" + end_date + "-" + \
+                  ",".join(matrix_list) + ",".join(vector_list) + "," + label + "," + str(shift) + \
+                  "," + param_str + "," + str(loss) + filter_name
+        md5 = hashlib.md5(hashstr.encode('utf-8')).hexdigest()
+
+        has = DB.select_to_df('select * from auto_train where hash="%s"' % md5, 'finhack')
+        if has is not None and not has.empty and not replace:
+            print(f"命中已有模型 {md5}（参数未变，跳过训练；需重训传 replace=True）")
+            return {'model_id': md5, 'cached': True}
+
+        data_train, data_valid, df_pred, data_path = self.getLGBTrainData(
+            market=market, freq=freq, start_date=start_date, valid_date=valid_date,
+            end_date=end_date, matrix_list=matrix_list, vector_list=vector_list,
+            label=label, shift=shift, filter_name=filter_name)
+        if data_train is None:
+            raise ValueError('训练数据为空：检查特征因子名/日期区间/市场数据是否存在')
+
+        self.train(data_train, data_valid, data_path, md5, loss, param)
+        self.pred(df_pred, data_path, md5, market, freq, save=True)
+
+        features = ','.join(matrix_list + vector_list)
+        insert_sql = ("INSERT INTO auto_train (start_date, valid_date, end_date, features, label, "
+                      "shift, param, hash, loss, algorithm, filter, market, freq) "
+                      "VALUES ('%s','%s','%s','%s','%s',%s,'%s','%s','%s','%s','%s','%s','%s')"
+                      % (start_date, valid_date, end_date, features, label, str(shift),
+                         str(param).replace("'", '"'), md5, loss, 'lgb', filter_name, market, freq))
         try:
-            hashstr = f"{market}-{freq}" + start_date + "-" + valid_date + "-" + end_date + "-" + \
-                      ",".join(matrix_list) + ",".join(vector_list) + "," + label + "," + str(shift) + \
-                      "," + str(param) + "," + str(loss) + filter_name
-            md5 = hashlib.md5(hashstr.encode('utf-8')).hexdigest()
-
-            has = DB.select_to_df('select * from auto_train where hash="%s"' % md5, 'finhack')
-            if has is not None and not has.empty and not replace:
-                return md5
-
-            data_train, data_valid, df_pred, data_path = self.getLGBTrainData(
-                market=market, freq=freq, start_date=start_date, valid_date=valid_date,
-                end_date=end_date, matrix_list=matrix_list, vector_list=vector_list,
-                label=label, shift=shift, filter_name=filter_name)
-            if data_train is None:
-                print("训练数据为空")
-                return None
-
-            self.train(data_train, data_valid, data_path, md5, loss, param)
-            self.pred(df_pred, data_path, md5, market, freq, save=True)
-
-            features = ','.join(matrix_list + vector_list)
-            insert_sql = ("INSERT INTO auto_train (start_date, valid_date, end_date, features, label, "
-                          "shift, param, hash, loss, algorithm, filter) VALUES ('%s','%s','%s','%s','%s',%s,'%s','%s','%s','%s','%s')"
-                          % (start_date, valid_date, end_date, features, label, str(shift),
-                             str(param).replace("'", '"'), md5, loss, 'lgb', filter_name))
-            try:
-                if has is None or has.empty:
-                    DB.exec(insert_sql, 'finhack')
-            except Exception as ex:
-                print("auto_train 入库降级: " + str(ex))
-            self.score(md5, market, freq)
-            return md5
+            if has is None or has.empty:
+                DB.exec(insert_sql, 'finhack')
+            else:
+                DB.exec("DELETE FROM auto_train WHERE hash='%s'" % md5, 'finhack')
+                DB.exec(insert_sql, 'finhack')
         except Exception as ex:
-            print("start_train error: " + str(ex))
-            traceback.print_exc()
+            print("auto_train 入库降级: " + str(ex))
+        self.score(md5, market, freq)
+        return {'model_id': md5, 'cached': False}
 
     def getLGBTrainData(self, market='cn_stock', freq='1d', start_date='20000101', valid_date="20080101",
                         end_date='20100101', matrix_list=[], vector_list=[], label='abs', shift=10, filter_name=''):
@@ -193,29 +196,44 @@ class LightgbmTrainer(Trainer):
         return meta
 
     def score(self, md5='test', market='cn_stock', freq='1d'):
+        """模型 score = pred 与未来 shift 日收益的秩相关（IC）。
+        日期窗口对齐 pred 因子实际区间 [end_date, end_date+3y]（原不传日期走默认 2020 导致几乎恒空）。"""
         pred_file = DATA_DIR + '/preds/lgb_model_' + md5 + '_pred.pkl'
         if not os.path.exists(pred_file):
             print(pred_file + " not found!")
             return False
         df_preded = pd.read_pickle(pred_file).set_index(['time', 'code'])
-        base = factorManager.loadFactors(matrix_list=['open', 'close'], market=market, freq=freq)
-        if base is None or base.empty:
-            return False
-        df = df_preded.join(base[['open', 'close']], how='left')
         model = DB.select_to_df('select * from auto_train where hash="' + md5 + '"', 'finhack')
         if model is None or model.empty:
             return False
         shift = int(model.iloc[0]['shift'])
+        end_date = str(model.iloc[0]['end_date'] or '')
+        # pred 起点即训练 end_date；加载窗口 [end_date, +3y] 与 pred() 生成区间一致
+        s_date = end_date if len(end_date) == 8 else '20200101'
+        e_year = int(s_date[:4]) + 3
+        e_date = str(e_year) + s_date[4:]
+        base = factorManager.loadFactors(matrix_list=['open', 'close'], market=market, freq=freq,
+                                        start_date=s_date, end_date=e_date)
+        if base is None or base.empty:
+            print("score: open/close 加载为空（区间 %s~%s）" % (s_date, e_date))
+            return False
+        df = df_preded.join(base[['open', 'close']], how='left')
         df['label'] = df.groupby('code', group_keys=False).apply(
             lambda x: x['close'].shift(-shift) / x['open'].shift(-1))
-        df = df.dropna(subset=['pred', 'label'])
+        df = df.replace({'label': [np.inf, -np.inf]}, np.nan).dropna(subset=['pred', 'label'])
         if df.empty:
             return False
-        mean_diff = (df['label'] - df['pred']).mean()
-        std = (df['label'] - df['pred']).std()
-        score = mean_diff / std if std else 0
+        # IC：每日横截面 spearman(pred, fwd_ret) 的均值 —— 语义为预测能力，天然在 [-1,1]
+        from scipy.stats import spearmanr
+        def _daily_ic(g):
+            if len(g) < 10:
+                return np.nan
+            return spearmanr(g['pred'], g['label'])[0]
+        ic = df.groupby(level='time').apply(_daily_ic).dropna()
+        score = float(ic.mean()) if len(ic) else 0.0
         try:
-            DB.exec("UPDATE auto_train SET score=%s WHERE hash='%s'" % (score, md5), 'finhack')
+            DB.exec("UPDATE auto_train SET score=%s WHERE hash='%s'" % (round(score, 6), md5), 'finhack')
+            print(f"score(IC)={score:.4f} ({len(ic)} 个交易日)")
         except Exception as ex:
             print("score 入库降级: " + str(ex))
         os.remove(pred_file)

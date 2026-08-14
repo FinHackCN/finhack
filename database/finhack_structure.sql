@@ -32,11 +32,13 @@ CREATE TABLE `auto_train` (
   `shift` int DEFAULT NULL,
   `param` text CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci,
   `hash` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci DEFAULT NULL,
-  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
   `loss` varchar(255) DEFAULT NULL,
   `algorithm` varchar(255) DEFAULT NULL,
   `filter` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci DEFAULT '',
-  `score` double(10,10) DEFAULT NULL,
+  `score` double(10,6) DEFAULT NULL,
+  `market` varchar(20) DEFAULT 'cn_stock',
+  `freq` varchar(8) DEFAULT '1d',
   PRIMARY KEY (`id`),
   UNIQUE KEY `hash` (`hash`)
 ) ENGINE=InnoDB AUTO_INCREMENT=48039 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;

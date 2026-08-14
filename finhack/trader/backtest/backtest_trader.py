@@ -127,6 +127,23 @@ class BacktestTrader:
             Log.logger.error(f"回测运行失败: {e}")
             raise
             
+    @staticmethod
+    def _parse_universe(u):
+        """universe 经 argv k=v 传参时被 str() 成 "['a','b']"；还原为数组，失败原样返回。"""
+        if isinstance(u, list) or not u:
+            return u
+        s = str(u).strip()
+        if s.startswith('['):
+            try:
+                import json
+                return json.loads(s.replace("'", '"'))
+            except Exception:
+                return u
+        # 逗号分隔字符串也接受
+        if ',' in s:
+            return [x.strip() for x in s.split(',') if x.strip()]
+        return u
+
     def init_context(self):
         """初始化回测上下文"""
         args_dict = self.args.__dict__
@@ -243,7 +260,10 @@ class BacktestTrader:
                 'start_date': start_date,
                 'end_date': end_date,
                 'benchmark': benchmark,
-                'universe': getattr(self.args, 'universe', []),
+                # universe 经 argv 传参时是字符串（前端数组被 str() 拼进 k=v），尝试还原为数组
+                'universe': self._parse_universe(getattr(self.args, 'universe', [])),
+                # model_id 显式进 settings（AI 策略优先读这里，不再依赖 global_var 全局变量——并发任务会互相覆盖）
+                'model_id': getattr(self.args, 'model_id', ''),
                 'initial_capital': initial_cash,
                 'order_volume_ratio': getattr(self.args, 'order_volume_ratio', 1.0),
                 'slip_type': getattr(self.args, 'sliptype', 'pricerelated'),
