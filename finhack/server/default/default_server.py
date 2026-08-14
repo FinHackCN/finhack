@@ -57,8 +57,16 @@ class DefaultServer:
 
         @app.route('/btlog')
         def btlog():
-            id = request.args.get('id')
-            
+            # 原 view 无 return（Flask 返回 None → TypeError 500）。返回最近一份回测日志尾部。
+            import glob as _g
+            from runtime.constant import DATA_DIR
+            logs = sorted(_g.glob(os.path.join(DATA_DIR, 'logs', 'trader', '*.log'),
+                                  key=os.path.getmtime, reverse=True))
+            if not logs:
+                return '<pre>no trader logs</pre>'
+            with open(logs[0], 'r', encoding='utf-8', errors='replace') as f:
+                tail = f.readlines()[-500:]
+            return '<pre>' + ''.join(tail) + '</pre>'
 
         @app.route('/detail')
         def detail():
@@ -107,6 +115,15 @@ class DefaultServer:
 
         @app.route('/')
         def redirect_to_index():
+            # 原 render_template('index.html')：demo_project 无 templates 目录 → TemplateNotFound 500。
+            # dashboard 是静态单页（root_directory/dashboard.html），根路径直接送它。
+            idx = os.path.join(root_directory, 'index.html')
+            if os.path.isfile(idx):
+                return send_from_directory(root_directory, 'index.html')
+            return send_from_directory(root_directory, 'dashboard.html')
+
+        @app.route('/legacy_index')
+        def legacy_index():
             strategy = request.args.get('strategy')
             # where=' where 1=1 and created_at > (NOW() - INTERVAL 1 DAY)'
             # if strategy:

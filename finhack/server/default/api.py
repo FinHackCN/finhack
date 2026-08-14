@@ -95,7 +95,9 @@ def factor_data():
 
 @api_bp.route('/analysis')
 def analysis():
-    """分析结果（MySQL factors_analysis，按 market/freq 过滤，不传则全部）"""
+    """分析结果（MySQL factors_analysis，按 market/freq 过滤，不传则全部）。
+    同因子可能多条记录（不同 source/days/区间 各有独立 hash）→ 窗口函数按
+    (factor_name, market, freq) 取 score 最高一条，榜单一行一因子。"""
     from finhack.library.db import DB
     import re
     try:
@@ -108,8 +110,12 @@ def analysis():
             where.append(f"`freq`='{freq}'")
         where_clause = ('WHERE ' + ' AND '.join(where)) if where else ''
         df = DB.select_to_df(
-            f"SELECT factor_name, IC, IR, Sharpe, score, start_date, end_date, source, market, freq "
-            f"FROM factors_analysis {where_clause} ORDER BY score DESC LIMIT 200", 'finhack')
+            f"SELECT factor_name, IC, IR, Sharpe, score, start_date, end_date, source, formula, hash, market, freq "
+            f"FROM ("
+            f"  SELECT *, ROW_NUMBER() OVER (PARTITION BY factor_name, market, freq "
+            f"  ORDER BY score DESC) rn"
+            f"  FROM factors_analysis {where_clause}"
+            f") t WHERE rn=1 ORDER BY score DESC LIMIT 200", 'finhack')
         if df is None or df.empty:
             return jsonify([])
         return nj(df.fillna('').to_dict('records'))
@@ -220,8 +226,11 @@ def backtests():
 def backtest_detail(instance_id):
     """回测详情：净值(策略+基准+超额)/回撤/daily_history/绩效/交易(分页)。
     净值优先用 daily_history.total_assets（引擎最可靠源），回退 cumprod(returns)。"""
+    import re
     from runtime.constant import DATA_DIR
     import numpy as np
+    if not re.match(r'^[\w-]+$', instance_id):
+        return jsonify({'error': 'invalid instance_id'}), 400
     bt_dir = os.path.join(DATA_DIR, 'backtest')
     files = glob.glob(os.path.join(bt_dir, f'*{instance_id}*.pkl'))
     if not files:
@@ -610,95 +619,172 @@ def _trial_calc(formula, name, market, freq):
     return True, ''
 
 
-# ===================== 因子库 inspect 目录指纹缓存 =====================
-# 进程内缓存：key=(market,freq) -> {'result':list,'fp':tuple,'ts':ts}
-# 指纹 = matrix+vector 两棵树的 (pkl 数, 目录 mtime 之和)。指纹变(增删因子/新目录)或
-# ?refresh=1 才重扫；切 tab 的重复请求直接命中缓存。
-# 原地覆盖写(重算同名 pkl)不改目录 mtime → 由 factor/delete 主动失效 + 前端重算后强制刷新兜底。
+# ===================== 因子库 inspect：year 级持久化清单 + 增量重扫 =====================
+# 背景：cn_stock/1d 全树 550 万 pkl，全量 inspect 数分钟 → server 重启后（进程内缓存空）
+# 首个请求必超时，且全局锁阻塞所有市场。
+# 方案：清单持久化到 data/cache/factor_inspect_{market}_{freq}.json，按 year 分片存；
+# 每次请求算 year 级指纹（stat year+code 目录 mtime，~0.1s/年），只重扫指纹变化的年份，
+# 其余年份直接用清单 → 日常增量（cron 每日只动当年）只扫一年；重启后读清单秒回。
+# 原地覆盖写（重算同名 pkl）改 code 目录 mtime → 指纹变，能感知（老实现感知不到）。
+# pred_*（训练产物，每模型全市场分片 10万+文件）不进清单，防污染因子管理/特征池。
 import threading
 _FACTOR_INSPECT_CACHE = {}
-_FACTOR_INSPECT_LOCK = threading.Lock()
+_FACTOR_INSPECT_BUILDING = set()
 
 
-def _factor_tree_fingerprint(base):
-    """便宜的目录指纹：只 stat 各级目录 mtime，不读 pkl 内容、不逐文件 stat。
-    目录结构为 base/year/code/*.pkl（与 inspectFactorsLight 的 year=parts[0]/code=parts[1] 约定一致）：
-    depth 0=base、1=year、2=code(叶子层)——叶子层只 stat 不 scandir，跳过对 9.7M pkl 的 readdir
-    （实测 cn_stock/1d 全量 inspect 110s → 本指纹 0.2s）。
-    返回 mtime_sum(int) 或 None(base 不存在)。
-    变更检测：pkl 增删 → 其 code-dir mtime 变；新 code-dir → year-dir mtime 变；新 year → base mtime 变。
-    原地覆盖写(重算)不改目录 mtime → 由 factor/delete 失效 + 重算后 force 刷新兜底。
-    注意：依赖 year/code 两层目录骨架，若未来因子目录结构变更需同步本函数。"""
-    if not os.path.isdir(base):
+def _inspect_json_path(market, freq):
+    from runtime.constant import DATA_DIR
+    d = os.path.join(DATA_DIR, 'cache')
+    os.makedirs(d, exist_ok=True)
+    return os.path.join(d, f'factor_inspect_{market}_{freq}.json')
+
+
+def _year_fingerprint(year_dir):
+    """year 级指纹：year 目录 + 其下各 code 目录的 mtime 之和（不 readdir pkl，~5000 stat/年）。
+    pkl 增删/覆盖写 → code 目录 mtime 变；新 code → year mtime 变。None=目录不存在。"""
+    if not os.path.isdir(year_dir):
         return None
-    mtime_sum = 0
-    stack = [(base, 0)]
-    while stack:
-        d, depth = stack.pop()
-        try:
-            mtime_sum += int(os.stat(d).st_mtime * 1e6)
-        except OSError:
+    s = 0
+    try:
+        s = int(os.stat(year_dir).st_mtime * 1e6)
+        with os.scandir(year_dir) as it:
+            for e in it:
+                if e.is_dir(follow_symlinks=False):
+                    try:
+                        s += int(e.stat().st_mtime * 1e6)
+                    except OSError:
+                        pass
+    except OSError:
+        return None
+    return s
+
+
+def _scan_year(market, freq, year):
+    """单年全扫（matrix+vector 两个树），返回 {name: {codes:set, size:int, files:int}}。"""
+    from runtime.constant import DATA_DIR
+    info = {}
+    for ftype in ('matrix', 'vector'):
+        ydir = os.path.join(DATA_DIR, 'factors', ftype, market, freq, year)
+        if not os.path.isdir(ydir):
             continue
-        if depth >= 2:
-            continue  # code 叶子层：mtime 已计入，不枚举内部 pkl
-        try:
-            entries = os.scandir(d)
-        except OSError:
-            continue
-        with entries:
-            for e in entries:
+        for root, _dirs, files in os.walk(ydir):
+            for fn in files:
+                if not fn.endswith('.pkl') or fn.endswith('index.pkl'):
+                    continue
+                rel = os.path.relpath(os.path.join(root, fn), ydir)
+                parts = rel.split(os.sep)
+                if len(parts) != 2:       # rel 相对 year 目录：code/name.pkl 两段
+                    continue
+                code, name = parts[0], parts[1][:-4]
+                if name.startswith('pred_'):
+                    continue               # 训练产物不入因子库清单
+                d = info.setdefault(name, {'codes': [], 'size': 0, 'files': 0, 'type': ftype})
+                d['codes'].append(code)
                 try:
-                    if e.is_dir(follow_symlinks=False):
-                        stack.append((e.path, depth + 1))
-                    else:
-                        # depth<2 却遇文件（杂散），早停避免误枚举
-                        break
+                    d['size'] += os.path.getsize(os.path.join(root, fn))
                 except OSError:
                     pass
-    return mtime_sum
+                d['files'] += 1
+    for name, d in info.items():
+        d['codes'] = sorted(set(d['codes']))
+    return {year: info}
+
+
+def _aggregate(per_year):
+    """按年分片清单聚合成 inspectFactorsLight 同构列表。"""
+    agg = {}
+    for year in sorted(per_year):
+        for name, d in per_year[year].items():
+            a = agg.setdefault(name, {'name': name, 'type': d['type'], 'years': [], 'codes': set(),
+                                      'size': 0, 'files': 0})
+            a['years'].append(int(year))
+            a['codes'].update(d['codes'])
+            a['size'] += d['size']
+            a['files'] += d['files']
+    out = []
+    for name, a in sorted(agg.items()):
+        out.append({'name': name, 'type': a['type'],
+                    'year_min': min(a['years']), 'year_max': max(a['years']),
+                    'code_count': len(a['codes']), 'size_mb': round(a['size'] / 1048576, 1),
+                    'file_count': a['files']})
+    return out
 
 
 def _cached_factor_inspect(market, freq, force=False):
-    """带目录指纹缓存的因子 inspect。返回 (result_list, hit:bool)。
-    hit=True 表示命中缓存（未重扫）。force=True 或指纹变化时全量重扫。"""
+    """返回 (result_list, hit:bool, building:bool)。building=True 表示后台在建全量清单。"""
     from runtime.constant import DATA_DIR
     key = (market, freq)
-    # 指纹覆盖 matrix+vector：任一树变化（增删因子/目录）都重扫
-    fp = tuple(_factor_tree_fingerprint(os.path.join(DATA_DIR, 'factors', t, market, freq))
-               for t in ('matrix', 'vector'))
-    if not force:
-        entry = _FACTOR_INSPECT_CACHE.get(key)
-        if entry and entry['fp'] == fp:
-            return entry['result'], True
-    # 指纹变 / 强制 → 全量重扫。加锁合并并发请求，避免重复扫（双检查防串行等待白等）
-    with _FACTOR_INSPECT_LOCK:
-        if not force:
-            entry = _FACTOR_INSPECT_CACHE.get(key)
-            if entry and entry['fp'] == fp:
-                return entry['result'], True
-        from finhack.factor.default.factorManager import factorManager
-        out = []
-        for ftype in ('matrix', 'vector'):
+    years = set()
+    for ftype in ('matrix', 'vector'):
+        base = os.path.join(DATA_DIR, 'factors', ftype, market, freq)
+        if os.path.isdir(base):
+            years |= {y for y in os.listdir(base) if y.isdigit() and os.path.isdir(os.path.join(base, y))}
+    fps = {y: tuple(_year_fingerprint(os.path.join(DATA_DIR, 'factors', t, market, freq, y))
+                    for t in ('matrix', 'vector')) for y in sorted(years)}
+
+    # 1) 进程内缓存：全部年份指纹一致 → 秒回
+    entry = _FACTOR_INSPECT_CACHE.get(key)
+    if not force and entry and entry['fps'] == fps:
+        return entry['result'], True, False
+
+    # 2) 持久化清单（json）：逐年比对指纹，只重扫变化年份
+    manifest = {'fps': {}, 'per_year': {}, 'ts': 0}
+    try:
+        with open(_inspect_json_path(market, freq), 'r', encoding='utf-8') as f:
+            manifest = json.load(f)
+    except Exception:
+        pass
+    per_year = {y: manifest['per_year'][y] for y in manifest.get('per_year', {})
+                if y in years and not force and manifest.get('fps', {}).get(y) == fps.get(y)}
+    dirty_years = [y for y in sorted(years) if y not in per_year]
+
+    # 变化年份过多（首次建清单 / 长时间没维护 / 后台任务持续写盘导致指纹一直变）：
+    # 全量扫太慢会超时 → 转后台。有旧清单就先返回旧数据（stale 优于空），没有才返回 building。
+    if len(dirty_years) > 3 and not force:
+        def _bg():
             try:
-                out.extend(factorManager.inspectFactorsLight(market=market, freq=freq, factor_type=ftype))
-            except Exception:
-                pass
-        _FACTOR_INSPECT_CACHE[key] = {'result': out, 'fp': fp, 'ts': time.time()}
-        return out, False
+                _cached_factor_inspect(market, freq, force=True)
+            finally:
+                _FACTOR_INSPECT_BUILDING.discard(key)
+        if key not in _FACTOR_INSPECT_BUILDING:
+            _FACTOR_INSPECT_BUILDING.add(key)
+            threading.Thread(target=_bg, daemon=True).start()
+        if manifest.get('per_year'):
+            usable = {y: manifest['per_year'][y] for y in manifest['per_year'] if y in years}
+            result = _aggregate(usable)
+            _FACTOR_INSPECT_CACHE[key] = {'result': result, 'fps': fps, 'ts': time.time()}
+            return result, False, False
+        return [], False, True
+
+    for y in dirty_years:                       # 增量：只扫变化年份
+        per_year[y] = _scan_year(market, freq, y)[y]
+    result = _aggregate(per_year)
+    _FACTOR_INSPECT_CACHE[key] = {'result': result, 'fps': fps, 'ts': time.time()}
+    # 原子写回清单
+    try:
+        tmp = _inspect_json_path(market, freq) + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump({'fps': {y: fps[y] for y in sorted(years)},
+                       'per_year': per_year, 'ts': time.time()}, f)
+        os.replace(tmp, _inspect_json_path(market, freq))
+    except Exception:
+        pass
+    return result, False, False
 
 
 @api_bp.route('/factor_inspect')
 def factor_inspect():
     """列出已入库因子 + 轻量元信息（year 范围/代码数/大小），matrix+vector 合并。
-    目录指纹缓存：未变化命中缓存秒回，变化或 ?refresh=1 才重扫。返回 {factors, cached, scanned_at}。"""
+    year 级指纹 + 持久化清单：日常秒回，增量只扫变化年份；首建转后台（building=true）。"""
     market = request.args.get('market', 'cn_stock')
     freq = request.args.get('freq', '1d')
     force = request.args.get('refresh', '').lower() in ('1', 'true', 'yes')
-    out, hit = _cached_factor_inspect(market, freq, force=force)
+    out, hit, building = _cached_factor_inspect(market, freq, force=force)
     entry = _FACTOR_INSPECT_CACHE.get((market, freq)) or {}
     return jsonify({
         'factors': out,
         'cached': hit,
+        'building': building,
         'count': len(out),
         'scanned_at': entry.get('ts'),
     })
@@ -829,6 +915,12 @@ def factor_formula_save():
     with open(tmp, 'w', encoding='utf-8') as f:
         f.write(''.join(lines))
     os.replace(tmp, path)
+    # 公式已变 → 旧 factors_analysis 记录的 IC/score 是旧公式的，清掉待重新分析
+    try:
+        from finhack.library.db import DB
+        DB.delete(f"DELETE FROM factors_analysis WHERE factor_name = '{name}'", 'finhack')
+    except Exception:
+        pass
     return jsonify({'ok': True, 'snapshot': ts, 'file': path, 'line': idx})
 
 
@@ -857,8 +949,8 @@ def run_recompute_factor():
     name = data.get('name', '')
     start_date = data.get('start_date', '')
     end_date = data.get('end_date', '')
-    if not re.match(r'^\w+$', name):
-        return jsonify({'error': 'invalid name'}), 400
+    if not re.match(r'^\w+$', name) or not re.match(r'^\w+$', market) or not re.match(r'^\w+$', freq):
+        return jsonify({'error': 'invalid name/market/freq'}), 400
     if not start_date or not end_date:
         return jsonify({'error': '需指定 start_date / end_date'}), 400
 
@@ -882,6 +974,8 @@ def run_recompute_factor():
                                start_date=start_date, end_date=end_date)
         if res is None or (hasattr(res, 'empty') and res.empty):
             raise ValueError('重算失败：公式计算返回空（语法错误或字段缺失）')
+        # 原地覆盖写不改目录 mtime → 失效 inspect 缓存，让因子管理列表 year 范围刷新
+        _FACTOR_INSPECT_CACHE.pop((market, freq), None)
         # 公式变→hash 变→旧 factors_analysis 残留，按 factor_name 清掉让重新分析
         try:
             DB.delete(f"DELETE FROM factors_analysis WHERE factor_name = '{name}'", 'finhack')
@@ -919,6 +1013,8 @@ def factor_create():
 
     if not re.match(r'^\w+$', alphalist):
         return _bad('alphalist 名仅允许字母数字下划线')
+    if not re.match(r'^\w+$', market) or not re.match(r'^\w+$', freq):
+        return _bad('invalid market/freq')
     if not formula:
         return _bad('公式不能为空')
     if not start_date or not end_date:
@@ -971,6 +1067,8 @@ def factor_create():
                                start_date=start_date, end_date=end_date)
         if res is None or (hasattr(res, 'empty') and res.empty):
             raise ValueError('重算失败：公式计算返回空')
+        # 新增 pkl 会改目录 mtime（指纹能感知），但保险起见同样失效缓存
+        _FACTOR_INSPECT_CACHE.pop((market, freq), None)
         return {'name': name}
 
     tid = create_task(_run)
@@ -1042,12 +1140,21 @@ def factor_indicator_save():
 
 @api_bp.route('/mining')
 def mining():
-    """因子挖掘结果（MySQL factors_mining，与 factors_analysis 同 schema）"""
+    """因子挖掘结果（MySQL factors_mining，与 factors_analysis 同 schema，可按 market/freq 过滤）"""
     from finhack.library.db import DB
+    import re
     try:
+        market = request.args.get('market')
+        freq = request.args.get('freq')
+        where = []
+        if market and re.match(r'^\w+$', market):
+            where.append(f"`market`='{market}'")
+        if freq and re.match(r'^\w+$', freq):
+            where.append(f"`freq`='{freq}'")
+        where_clause = ('WHERE ' + ' AND '.join(where)) if where else ''
         df = DB.select_to_df(
-            "SELECT factor_name, IC, IR, Sharpe, score, source, start_date, end_date, formula "
-            "FROM factors_mining ORDER BY score DESC LIMIT 200", 'finhack')
+            f"SELECT factor_name, IC, IR, Sharpe, score, source, start_date, end_date, formula, market, freq "
+            f"FROM factors_mining {where_clause} ORDER BY score DESC LIMIT 200", 'finhack')
         if df is None or df.empty:
             return jsonify([])
         return jsonify(df.fillna('').to_dict('records'))
@@ -1103,8 +1210,8 @@ def strategy_file_get():
     import re
     market = request.args.get('market', 'cn_stock')
     name = request.args.get('name', '')
-    if not re.match(r'^\w+$', name):
-        return jsonify({'error': 'invalid name'}), 400
+    if not re.match(r'^\w+$', name) or not re.match(r'^\w+$', market):
+        return jsonify({'error': 'invalid name/market'}), 400
     path = os.path.realpath(os.path.join(_strategies_dir(market), name + '.py'))
     base = os.path.realpath(_strategies_dir(market))
     if not path.startswith(base + os.sep):

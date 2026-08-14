@@ -12,20 +12,33 @@ import traceback
 _task_store = {}  # {task_id: {status, result, error, log:[], created_at}}
 _lock = threading.Lock()
 _LOG_CAP = 3000  # 环形 buffer 上限
+_EQUITY_CAP = 6000  # equity 点上限（防死任务被泄漏 sink 持续 append → 内存无限涨）
+_TTL_DONE = 3600  # done/error 任务保留 1h，之后惰性清理
 
 _DAY_TOTAL_RE = re.compile(r'共\s*(\d+)\s*个交易日')
 _EQUITY_RE = re.compile(r'日期:\s*(\S+),\s*总资产:\s*([\d.]+)')
 
 
+def _gc():
+    """清理已结束超时的任务条目（log/equity 大，进程内不该无限累积）。调用方持 _lock。"""
+    now = time.time()
+    dead = [tid for tid, t in _task_store.items()
+            if t.get('status') in ('done', 'error') and now - t.get('finished_at', now) > _TTL_DONE]
+    for tid in dead:
+        _task_store.pop(tid, None)
+
+
 def _make_sink(task_id):
     """loguru sink：追加 record.message 到环形 buffer，并实时维护 total/done 计数器
-    （不依赖 buffer，避免滚动后丢总数/少计 done）。"""
+    （不依赖 buffer，避免滚动后丢总数/少计 done）。
+    状态守卫：任务一旦 done/error（或条目被 GC），泄漏的 sink（引擎每次 new Log 都会
+    再 add 一份，finally 只 remove 起始那个）直接 return，防跨任务日志/equity 污染。"""
     def _sink(message):
         try:
             msg = message.record['message']
             with _lock:
                 t = _task_store.get(task_id)
-                if t is None:
+                if t is None or t.get('status') != 'running':
                     return
                 t['log'].append(msg)
                 if len(t['log']) > _LOG_CAP:
@@ -40,6 +53,8 @@ def _make_sink(task_id):
                 em = _EQUITY_RE.search(msg)
                 if em:
                     t['equity'].append((em.group(1), float(em.group(2))))
+                    if len(t['equity']) > _EQUITY_CAP:
+                        del t['equity'][:len(t['equity']) - _EQUITY_CAP]
         except Exception:
             pass
     return _sink
@@ -56,6 +71,7 @@ def create_task(func, *args, **kwargs):
     """创建异步任务。返回 task_id。"""
     task_id = str(uuid.uuid4())[:8]
     with _lock:
+        _gc()
         _task_store[task_id] = {'status': 'pending', 'result': None, 'error': None,
                                 'log': [], 'total': None, 'done': 0, 'equity': [],
                                 'created_at': time.time()}
@@ -65,39 +81,43 @@ def create_task(func, *args, **kwargs):
         import finhack.library.log as _flog
         sink_fn = _make_sink(task_id)
 
-        # patch Log/tLog 类：引擎每次 (re)init logger（会 remove all）后，追加我们的 sink
+        # patch Log/tLog 类：引擎每次 (re)init logger（会 remove all）后，追加我们的 sink。
+        # 记录本任务 add 的全部 sink id（引擎 new Log 会多次触发），finally 统一 remove，
+        # 防 sink 泄漏（泄漏 sink 也有状态守卫兜底，见 _make_sink）。
         _OrigLog, _OrigTLog = _flog.Log, _flog.tLog
+        _sinks = set()
 
         def _wrap(cls):
             def _w(*a, **kw):
                 obj = cls(*a, **kw)
                 try:
-                    _llog.add(sink_fn, level='INFO')
+                    _sinks.add(_llog.add(sink_fn, level='INFO'))
                 except Exception:
                     pass
                 return obj
             return _w
         _flog.Log = _wrap(_OrigLog)
         _flog.tLog = _wrap(_OrigTLog)
-        sid = None
         try:
-            sid = _llog.add(sink_fn, level='INFO')   # 立即挂一个（任务内可能不触发 Log.init）
+            _sinks.add(_llog.add(sink_fn, level='INFO'))   # 立即挂一个（任务内可能不触发 Log.init）
             with _lock:
                 _task_store[task_id]['status'] = 'running'
             result = func(*args, **kwargs)
             with _lock:
                 _task_store[task_id]['status'] = 'done'
                 _task_store[task_id]['result'] = _safe_result(result)
+                _task_store[task_id]['finished_at'] = time.time()
         except Exception as e:
             with _lock:
                 _task_store[task_id]['status'] = 'error'
                 _task_store[task_id]['error'] = str(e) + '\n' + traceback.format_exc()
+                _task_store[task_id]['finished_at'] = time.time()
         finally:
             _flog.Log = _OrigLog
             _flog.tLog = _OrigTLog
-            if sid is not None:
+            for _sid in _sinks:
                 try:
-                    _llog.remove(sid)
+                    _llog.remove(_sid)
                 except Exception:
                     pass
 

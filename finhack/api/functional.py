@@ -17,9 +17,13 @@ finhack 顶层函数式 API（无状态，每次传 market/freq）。
                      start_date='2023-01-01', end_date='2023-06-30')
 """
 import sys
+import threading
 
 _FINHACK_PKG = '/mnt/ssd2/finhack-dev/finhack'
 _PROJECT = '/mnt/ssd2/finhack-dev/demo_project'
+
+# backtest() 经 sys.argv 拼 CLI 参数再调 main() —— 并发调用 argv 互踩，全局锁串行化
+_BT_LOCK = threading.Lock()
 
 
 def _ensure_path():
@@ -85,19 +89,21 @@ def analyze_detail(factor_name, market='cn_stock', freq='1d', start_date='', end
         code_list=code_list, n_quantiles=n_quantiles, days=days, os_ratio=os_ratio)
 
 
-def mine(prompt='', model='gpt-4', method='gpt', market='cn_stock', freq='1d',
-         code_list=None, start_date='', end_date='', **kwargs):
-    """因子挖掘（LLM 生成公式 → 计算 → 分析）。method='gpt'/'kimi'。
+def mine(prompt='', model='', method='gpt', market='cn_stock', freq='1d',
+         code_list=None, start_date='', end_date='', max_rounds=5, **kwargs):
+    """因子挖掘（LLM 生成公式 → 计算 → 分析 → 达标落盘实名因子）。method='gpt'/'kimi'。
+    model='' 落 config [ai] 的模型（gpt-4 等硬编码名打 kimi 端点会 4xx）；
+    max_rounds 控制批数（有界循环，任务可自然结束）。
     gplearn（遗传编程）需 train/label 数据，建议用 CLI: finhack factor mining --method=gplearn。"""
     _ensure_path()
     from finhack.factor.default.factorMining import factorMining
     codes = code_list or []
     if method.lower() in ('gpt', 'chatgpt', 'openai'):
         return factorMining.gpt(prompt, model, codes, market=market, freq=freq,
-                                start_date=start_date, end_date=end_date)
+                                start_date=start_date, end_date=end_date, max_rounds=max_rounds)
     elif method.lower() == 'kimi':
         return factorMining.kimi(prompt, model, codes, market=market, freq=freq,
-                                 start_date=start_date, end_date=end_date)
+                                 start_date=start_date, end_date=end_date, max_rounds=max_rounds)
     else:
         raise NotImplementedError("gplearn 函数式入口待补（需 train/label，用 CLI finhack factor mining --method=gplearn）")
 
@@ -136,7 +142,9 @@ def train(factor_list, market='cn_stock', freq='1d', start_date='', valid_date='
 
 def backtest(strategy, market='cn_stock', freq='1d', start_date='', end_date='',
              cash=1000000, account_type=None, project_path=None, **kwargs):
-    """回测（trader/backtest 引擎）。account_type 自动从 market_context 推断。"""
+    """回测（trader/backtest 引擎）。account_type 自动从 market_context 推断。
+    经 sys.argv 拼 CLI 参数 → 全局锁串行化：并发回测任务的 argv 会互踩
+    （可能拿别人的 strategy/market 跑）。"""
     _ensure_path()
     from finhack.library import market_context
     if account_type is None:
@@ -144,18 +152,20 @@ def backtest(strategy, market='cn_stock', freq='1d', start_date='', end_date='',
         account_type = {'CASH': 'stock', 'FUTURES': 'futures', 'CRYPTO': 'crypto'}.get(at, 'stock')
     proj = project_path or _project_path()
     from finhack.core.command.finhack import main
-    old_argv = sys.argv
-    sys.argv = ['finhack', 'trader', 'run', '--vendor=backtest', f'--project_path={proj}',
-                f'market={market}', f'freq={freq}', f'start_time={start_date}', f'end_time={end_date}',
-                f'strategy={strategy}', f'cash={cash}', f'account_type={account_type}']
-    for _k, _v in kwargs.items():
-        sys.argv.append(f'{_k}={_v}')
-    try:
-        main()
-    except SystemExit:
-        pass
-    finally:
-        sys.argv = old_argv
+    import threading
+    with _BT_LOCK:
+        old_argv = sys.argv
+        sys.argv = ['finhack', 'trader', 'run', '--vendor=backtest', f'--project_path={proj}',
+                    f'market={market}', f'freq={freq}', f'start_time={start_date}', f'end_time={end_date}',
+                    f'strategy={strategy}', f'cash={cash}', f'account_type={account_type}']
+        for _k, _v in kwargs.items():
+            sys.argv.append(f'{_k}={_v}')
+        try:
+            main()
+        except SystemExit:
+            pass
+        finally:
+            sys.argv = old_argv
 
 
 def run_pipeline(steps=('factor', 'analyze', 'train', 'trader'), market='cn_stock', freq='1d',
