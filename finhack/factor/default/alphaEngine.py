@@ -65,10 +65,51 @@ def and_trans(formula):
     Log.logger.debug(ast.dump(tree))
 
     for node in ast.walk(tree):
-        ast.fix_missing_locations(RewriteNode().visit(node)) 
+        ast.fix_missing_locations(RewriteNode().visit(node))
     formula=ast.unparse(tree)
     #print("\n转义公式:"+formula+"\n")
     return formula
+
+# pandas 的 < > <= >= == != 要求两侧 Series 索引"标签+行序完全一致"(identically-labeled)，
+# 而本引擎 corr/covariance 与各 ts_* 循环算子输出是 code 分块行序、df 列与算术结果是 time 行序，
+# 标签相同行序不同时比较直接抛 "Can only compare identically-labeled Series objects"
+# (算术符/&/|会自动按标签对齐故不受影响)。比较前统一 reindex 对齐。
+def _cmp_align(x, y):
+    if isinstance(x, pd.Series) and isinstance(y, pd.Series) and not x.index.equals(y.index):
+        idx = x.index.union(y.index)
+        x, y = x.reindex(idx), y.reindex(idx)
+    return x, y
+
+def _cmp_lt(x, y):
+    x, y = _cmp_align(x, y); return x < y
+
+def _cmp_gt(x, y):
+    x, y = _cmp_align(x, y); return x > y
+
+def _cmp_le(x, y):
+    x, y = _cmp_align(x, y); return x <= y
+
+def _cmp_ge(x, y):
+    x, y = _cmp_align(x, y); return x >= y
+
+def _cmp_eq(x, y):
+    x, y = _cmp_align(x, y); return x == y
+
+def _cmp_ne(x, y):
+    x, y = _cmp_align(x, y); return x != y
+
+_CMP_FUNC = {ast.Lt: '_cmp_lt', ast.Gt: '_cmp_gt', ast.LtE: '_cmp_le',
+             ast.GtE: '_cmp_ge', ast.Eq: '_cmp_eq', ast.NotEq: '_cmp_ne'}
+
+class CompareRewrite(ast.NodeTransformer):
+    """把 a < b 等单目比较重写为 _cmp_lt(a, b)：比较前先做索引对齐再比较"""
+    def visit_Compare(self, node):
+        self.generic_visit(node)
+        if len(node.ops) == 1 and type(node.ops[0]) in _CMP_FUNC:
+            return ast.Call(func=ast.Name(id=_CMP_FUNC[type(node.ops[0])], ctx=ast.Load()),
+                            args=[node.left, node.comparators[0]], keywords=[])
+        return node
+
 def coviance(x, y, window=10):
     return covariance(x, y, window)
 def covariance(x, y, window=10):
@@ -77,9 +118,11 @@ def covariance(x, y, window=10):
         x=x[0]
     if type(y)==type(()):
         y=y[0]
- 
+
     df=pd.DataFrame({'x':x,'y':y}).sort_index()
-    return df.groupby('code', group_keys=False).apply(lambda g: g['x'].rolling(window).cov(g['y']))
+    # sort_index: groupby 迭代产出 code 分块行序，归一回 time 行序(与其余算子一致，
+    # 亦避免下游比较运算 identically-labeled 报错)
+    return df.groupby('code', group_keys=False).apply(lambda g: g['x'].rolling(window).cov(g['y'])).sort_index()
 def corr(x, y, window=10):
     return correlation(x, y, window)
 def correlation(x, y, window=10):
@@ -90,7 +133,9 @@ def correlation(x, y, window=10):
         y=y[0]
         
     df=pd.DataFrame({'x':x,'y':y}).sort_index()
-    return df.groupby('code', group_keys=False).apply(lambda g: g['x'].rolling(window).corr(g['y']))
+    # sort_index: groupby 迭代产出 code 分块行序，归一回 time 行序(与其余算子一致，
+    # 亦避免下游比较运算 identically-labeled 报错)
+    return df.groupby('code', group_keys=False).apply(lambda g: g['x'].rolling(window).corr(g['y'])).sort_index()
     
 def log(df):
     df=np.log(df)
@@ -191,6 +236,7 @@ def ts_sum(df, window=10):
 def delta(df, period=1):
     if type(df)==type(()):
         df=df[0]
+    period=int(period)   # alpha101 存在 delta(x, 1.06) 类小数窗口(表达式算出)，pandas diff 要求 int
     df=df.groupby('code').diff(period)
     if len(df.index.names)==3:
         df=df.droplevel(1)
@@ -1118,6 +1164,24 @@ class alphaEngine():
         formula = formula.replace("$ld", " delay($low,1)-$low ")
         if '?' in formula:
             formula = ternary_trans(formula)
+        # 比较运算符重写为 _cmp_*（比较前先索引对齐）：修 corr/ts 算子(code 分块行序)与
+        # df 列/算术结果(time 行序)之间比较时 "identically-labeled" 报错（如 alpha191_148）。
+        # 放三元转换之后，where(...) 条件里的比较也能被覆盖。
+        if re.search(r'[<>]=?|==|!=', formula):
+            _cols = re.findall(r'\$[a-zA-Z0-9_]+', formula)
+            _ph = {}
+            for i, c in enumerate(_cols):
+                p = f'_ph{i}_'
+                _ph[p] = c
+                formula = formula.replace(c, p)   # $xxx 非法标识符，先占位
+            try:
+                tree = CompareRewrite().visit(ast.parse(formula))
+                ast.fix_missing_locations(tree)
+                formula = ast.unparse(tree)
+            except SyntaxError:
+                pass                              # 解析失败保持原样，交给 eval 原样报错
+            for p, c in _ph.items():
+                formula = formula.replace(p, c)
         return formula
 
     @staticmethod
