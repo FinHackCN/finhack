@@ -191,6 +191,11 @@ class factorAnalyzer():
             df = df.set_index([t_col, c_col])
 
             df = df.replace([np.inf, -np.inf], np.nan)
+            # 价格非正值（采集源脏数据，如 cn_future 个别合约 open=0）→ NaN：
+            # 否则 shift(-1) 跨行取到后 forward return=inf，Sharpe 分位净值溢出 → score=nan 不入库
+            for _pc in ('open', 'close'):
+                if _pc in df.columns:
+                    df[_pc] = df[_pc].where(df[_pc] > 0)
             df = df.dropna(subset=[factor_name, 'close', 'open'])
 
             desc = df[factor_name].describe()
@@ -203,6 +208,8 @@ class factorAnalyzer():
             for day in days:
                 df['return'] = df.groupby(c_col, group_keys=False).apply(
                     lambda x: x['close'].shift(-day) / x['open'].shift(-1))
+                # return 层再清一次 inf（前视窗口跨行取脏 open 的残留）
+                df['return'] = df['return'].replace([np.inf, -np.inf], np.nan)
                 df_tmp = df.dropna(subset=['return']).copy()
                 if df_tmp.empty:
                     continue
@@ -355,6 +362,10 @@ class factorAnalyzer():
             if code_list:
                 df = df[df[c_col].isin(code_list)]
             df = df.set_index([t_col, c_col])
+            # 价格非正值（采集源脏数据 open=0）→ NaN，防 forward return=inf 溢出（同 analys）
+            for _pc in ('open', 'close'):
+                if _pc in df.columns:
+                    df[_pc] = df[_pc].where(df[_pc] > 0)
             df = df.replace([np.inf, -np.inf], np.nan).dropna(subset=[factor_name, 'close', 'open'])
             if df.empty:
                 return {'error': f'{factor_name} 清洗后为空'}
@@ -364,6 +375,7 @@ class factorAnalyzer():
             days_t = tuple(days) if days else (1, 2, 3, 5, 8, 13, 21)
             main_day = days_t[len(days_t) // 2]                    # 中位 horizon 做 IC 时序/分层
             df['return'] = df.groupby(c_col)['close'].shift(-main_day) / df.groupby(c_col)['open'].shift(-1)
+            df['return'] = df['return'].replace([np.inf, -np.inf], np.nan)
             dfr = df.dropna(subset=['return']).copy()
             if dfr.empty:
                 return {'error': 'forward return 全 NaN'}
