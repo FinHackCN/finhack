@@ -1214,8 +1214,16 @@ def strategies():
                     st = os.stat(f)
                 except OSError:
                     continue
+                # 基类标记（loader 按 __not_strategy__ 跳过，不可直接回测）
+                try:
+                    with open(f, 'r', encoding='utf-8', errors='ignore') as fh:
+                        head = fh.read(8192)
+                    is_base = '__not_strategy__' in head
+                except OSError:
+                    is_base = False
                 rows.append({'market': mk, 'name': base[:-3], 'file': base,
-                             'size': st.st_size, 'mtime': int(st.st_mtime)})
+                             'size': st.st_size, 'mtime': int(st.st_mtime),
+                             'is_base': is_base})
         return rows
 
     if market == 'all':
