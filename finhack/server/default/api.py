@@ -1198,18 +1198,33 @@ def _strategies_dir(market):
 
 @api_bp.route('/strategies')
 def strategies():
-    """列出某市场的策略文件（glob strategies/{market}/*.py）"""
+    """列出策略文件。market=all 时遍历全部市场（策略库列表页用），带 size/mtime。"""
     import glob as _g
     market = request.args.get('market', 'cn_stock')
-    d = _strategies_dir(market)
-    out = []
-    if os.path.isdir(d):
-        for f in sorted(_g.glob(os.path.join(d, '*.py'))):
-            base = os.path.basename(f)
-            if base == '__init__.py':
-                continue
-            out.append({'name': base[:-3], 'file': base})
-    return jsonify({'market': market, 'strategies': out})
+
+    def _scan_one(mk):
+        d = _strategies_dir(mk)
+        rows = []
+        if os.path.isdir(d):
+            for f in sorted(_g.glob(os.path.join(d, '*.py'))):
+                base = os.path.basename(f)
+                if base == '__init__.py':
+                    continue
+                try:
+                    st = os.stat(f)
+                except OSError:
+                    continue
+                rows.append({'market': mk, 'name': base[:-3], 'file': base,
+                             'size': st.st_size, 'mtime': int(st.st_mtime)})
+        return rows
+
+    if market == 'all':
+        from finhack.library import market_context as _m
+        out = []
+        for mk in _m.list_markets():
+            out += _scan_one(mk)
+        return jsonify({'market': 'all', 'strategies': out})
+    return jsonify({'market': market, 'strategies': _scan_one(market)})
 
 
 @api_bp.route('/strategy_file')
