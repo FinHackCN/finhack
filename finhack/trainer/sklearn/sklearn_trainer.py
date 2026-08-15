@@ -31,8 +31,10 @@ from finhack.factor.default.factorManager import factorManager
 from finhack.trainer.trainer import Trainer
 
 
-def _build_model(algorithm, param):
-    """按算法名构造 (模型, 训练参数说明)。param 中的超参键直接透传给模型构造器。"""
+def _build_model(algorithm, param, loss='mse'):
+    """按算法名构造模型。param 中的超参键直接透传给模型构造器；
+    loss 在可换损失的模型上生效（xgb objective / RF-ET criterion）。"""
+
     from sklearn.linear_model import Ridge, Lasso, LinearRegression
     from sklearn.ensemble import RandomForestRegressor, ExtraTreesRegressor
     from sklearn.neural_network import MLPRegressor
@@ -55,6 +57,12 @@ def _build_model(algorithm, param):
 
     if algorithm == 'xgboost':
         from xgboost import XGBRegressor
+        # 损失映射：mse/mae/huber/quantile（quantile_alpha 用 loss_alpha，huber 用 huber_sleeve 默认）
+        xgb_obj = {'mse': 'reg:squarederror', 'mae': 'reg:absoluteerror',
+                   'huber': 'reg:pseudohubererror', 'quantile': 'reg:quantileerror'}.get(loss, 'reg:squarederror')
+        kw = {'objective': xgb_obj}
+        if xgb_obj == 'reg:quantileerror':
+            kw['quantile_alpha'] = _pop_f('loss_alpha', 0.9)
         return XGBRegressor(
             n_estimators=_pop_int('n_estimators', 300),
             max_depth=_pop_int('max_depth', 6),
@@ -65,14 +73,16 @@ def _build_model(algorithm, param):
             min_child_weight=_pop_int('min_child_weight', 5),
             n_jobs=16, random_state=42, tree_method='hist',
             early_stopping_rounds=30,
-            **{k: v for k, v in p.items()}), 'xgb'
+            **kw, **{k: v for k, v in p.items()}), 'xgb'
+    # RF/ET 分裂准则可换：mse(squared_error) / mae(absolute_error，更慢但抗离群)
+    crit = 'absolute_error' if loss == 'mae' else 'squared_error'
     if algorithm == 'random_forest':
         return RandomForestRegressor(
             n_estimators=_pop_int('n_estimators', 300),
             max_depth=_pop_int('max_depth', 12),
             min_samples_leaf=_pop_int('min_samples_leaf', 20),
             max_features=_pop_f('max_features', 0.5),
-            n_jobs=16, random_state=42,
+            criterion=crit, n_jobs=16, random_state=42,
             **{k: v for k, v in p.items()}), 'rf'
     if algorithm == 'extra_trees':
         return ExtraTreesRegressor(
@@ -80,7 +90,7 @@ def _build_model(algorithm, param):
             max_depth=_pop_int('max_depth', 14),
             min_samples_leaf=_pop_int('min_samples_leaf', 20),
             max_features=_pop_f('max_features', 0.5),
-            n_jobs=16, random_state=42,
+            criterion=crit, n_jobs=16, random_state=42,
             **{k: v for k, v in p.items()}), 'et'
     if algorithm == 'ridge':
         return Pipeline([('sc', StandardScaler()),
@@ -134,7 +144,7 @@ class SklearnTrainer(Trainer):
         if x_train is None:
             raise ValueError('训练数据为空：检查特征因子名/日期区间/市场数据是否存在')
 
-        self.train(x_train, y_train, x_valid, y_valid, data_path, md5, algorithm, param)
+        self.train(x_train, y_train, x_valid, y_valid, data_path, md5, algorithm, param, loss)
         self.pred(df_pred, data_path, md5, market, freq, algorithm, save=True)
 
         features = ','.join(matrix_list + vector_list)
@@ -155,14 +165,14 @@ class SklearnTrainer(Trainer):
         return {'model_id': md5, 'cached': False}
 
     def train(self, x_train, y_train, x_valid, y_valid, data_path=DATA_DIR, md5='test',
-              algorithm='ridge', param={}):
+              algorithm='ridge', param={}, loss='mse'):
         for c in ('code', 'time'):
             if c in x_train.columns:
                 x_train = x_train.drop(c, axis=1)
             if x_valid is not None and c in getattr(x_valid, 'columns', []):
                 x_valid = x_valid.drop(c, axis=1)
         x_train = x_train.select_dtypes(include=[np.number]).replace([np.inf, -np.inf], np.nan).fillna(0)
-        model, tag = _build_model(algorithm, param)
+        model, tag = _build_model(algorithm, param, loss)
         t0 = __import__('time').time()
         if algorithm == 'xgboost' and x_valid is not None:
             x_valid = x_valid.select_dtypes(include=[np.number]).replace([np.inf, -np.inf], np.nan).fillna(0)

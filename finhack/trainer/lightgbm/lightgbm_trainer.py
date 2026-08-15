@@ -154,12 +154,21 @@ class LightgbmTrainer(Trainer):
         # 从 param 提取非 lgb-params 的训练控制参数
         num_boost_round = int(params.pop('n_estimators', 100))
         early_stopping_rounds = int(params.pop('early_stopping', 30))
+        loss_alpha = params.pop('loss_alpha', 0.9)   # quantile 分位数 / huber delta
         callbacks = [lgb.early_stopping(early_stopping_rounds, verbose=0), lgb.log_evaluation(period=0)]
+        # 损失函数可选：mse(默认L2)/mae(L1)/huber/quantile/ds(非对称，金融收益预测经典)
         if loss == "ds":
             params['objective'] = self.custom_obj
             gbm = lgb.train(params, data_train, num_boost_round=num_boost_round, valid_sets=data_valid,
                             callbacks=callbacks, feval=self.custom_eval)
         else:
+            obj_map = {'mae': 'l1', 'huber': 'huber', 'quantile': 'quantile'}
+            if loss in obj_map:
+                params['objective'] = obj_map[loss]
+                if loss == 'huber':
+                    params['alpha'] = loss_alpha      # huber 的 delta
+                elif loss == 'quantile':
+                    params['alpha'] = loss_alpha      # 分位数（0.5=中位数）
             gbm = lgb.train(params, data_train, num_boost_round=num_boost_round, valid_sets=data_valid,
                             callbacks=callbacks)
         model_file = data_path + '/models/lgb_model_' + md5 + '.txt'

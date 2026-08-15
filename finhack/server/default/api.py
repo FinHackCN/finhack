@@ -175,7 +175,9 @@ def model_delete():
         removed = 0
         for pat in [
             os.path.join(DATA_DIR, 'models', f'lgb_model_{model_id}.txt'),
+            os.path.join(DATA_DIR, 'models', f'ml_*_{model_id}.pkl'),          # sklearn 系多算法模型文件
             os.path.join(DATA_DIR, 'preds', f'lgb_model_{model_id}_pred.pkl'),
+            os.path.join(DATA_DIR, 'preds', f'ml_*_{model_id}_pred.pkl'),
             os.path.join(DATA_DIR, 'factors', 'matrix', market, freq, '**', f'pred_{model_id}.pkl'),
         ]:
             for f in glob.glob(pat, recursive=True):
@@ -1200,6 +1202,7 @@ def _strategies_dir(market):
 def strategies():
     """列出策略文件。market=all 时遍历全部市场（策略库列表页用），带 size/mtime。"""
     import glob as _g
+    import re
     market = request.args.get('market', 'cn_stock')
 
     def _scan_one(mk):
