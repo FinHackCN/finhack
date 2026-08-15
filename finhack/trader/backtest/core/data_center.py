@@ -1760,11 +1760,14 @@ class DataCenter:
         # 加载缺失的代码（锁外执行，避免阻塞其他查询）
         if missing_codes:
             try:
+                # 强制全字段加载：日级缓存和 _daily_price_dict(撮合的O(1)价格源)由此构建，
+                # 若按调用方的窄 fields（如取价的 ['close']）加载，价格字典无 volume
+                # → 撮合 quote.get('volume',0)=0 → "市场成交量为0"永不成交（cn_stock 1m 全灭的根因）
                 loaded = self.data_interface.get_klines(
                     codes=missing_codes, market=market, freq=freq,
                     start_date=day_start.strftime('%Y-%m-%d %H:%M:%S'),
                     end_date=day_end.strftime('%Y-%m-%d %H:%M:%S'),
-                    fields=fields, use_cache=True
+                    fields=['open', 'high', 'low', 'close', 'volume'], use_cache=True
                 )
                 if not loaded.empty:
                     with self._daily_cache_lock:
