@@ -1399,12 +1399,22 @@ def data_coverage():
                 row['factors_' + frq] = 0
         # 日期范围：从 codebased year 目录推断
         years = []
+        ydens = {}
         for frq in freqs:
             ydir = os.path.join(KLINE_DIR, 'codebased', mk, frq)
             if os.path.isdir(ydir):
-                years += [int(os.path.basename(p)) for p in _g.glob(os.path.join(ydir, '*'))
-                          if os.path.isdir(p) and os.path.basename(p).isdigit()]
+                for p in _g.glob(os.path.join(ydir, '*')):
+                    base = os.path.basename(p)
+                    if not base.isdigit():
+                        continue
+                    y = int(base)
+                    years.append(y)
+                    # 逐年代码密度（目录条目数；parquet 单文件时记 -1=未知）
+                    d = os.path.join(ydir, base)
+                    if os.path.isdir(d):
+                        ydens[f'{frq}:{y}'] = len(os.listdir(d))
         row['date_range'] = [min(years), max(years)] if years else None
+        row['year_density'] = ydens
         out.append(row)
     _DATA_COVERAGE_CACHE['ts'] = now
     _DATA_COVERAGE_CACHE['data'] = out
