@@ -2155,7 +2155,14 @@ class DataCenter:
 
         # 选择需要的字段
         if fields:
-            available_fields = [f for f in fields if f in result.columns]
+            requested = [f for f in fields if f != 'time']
+            available_fields = [f for f in requested if f in result.columns]
+            # 缓存列不全（此前 fields=['close'] 之类窄查询回写建立的缓存）：
+            # 直接返回会让调用方拿到缺 volume 的数据（撮合 volume=NaN 永不成交）。
+            # 视为 miss，走 data_interface 全字段加载并回写加宽缓存。
+            if len(available_fields) < len(requested):
+                logger.debug(f"[缓存] 列不全({available_fields} < {requested})，回退 data_interface")
+                return None
             result = result[available_fields]
 
         return result
@@ -2199,11 +2206,24 @@ class DataCenter:
                         existing = self.kline_cache[cache_key]
                         combined = pd.concat([existing, month_data])
                         combined = combined[~combined.index.duplicated(keep='last')]
+                        # 窄字段回写保护：fields=['close'] 的按需加载回写只有部分列，
+                        # 去重 keep='last' 会用它覆盖全字段旧行 → volume 等整列 NaN
+                        # → 撮合 market_volume=NaN 永不成交。用旧缓存回填新行的 NaN 列。
+                        combined = combined.combine_first(existing)
                         combined = combined.sort_index()
                         self.kline_cache[cache_key] = combined
                         logger.debug(f"[缓存回写] 合并: {cache_key}, "
                                    f"新增{len(month_data)}行, 总计{len(combined)}行")
                     else:
+                        # 新建分支的窄字段保护：fields=['close'] 之类窄查询的数据不建缓存——
+                        # 否则该月后续宽查询命中"列名并集齐全但部分行缺列"的缓存
+                        # （concat 宽月+窄月后 volume=NaN），撮合 volume=NaN 永不成交。
+                        # 窄查询每次走 data_interface（其内部有缓存，代价可接受）。
+                        base_cols = {'open', 'high', 'low', 'close', 'volume'}
+                        if not base_cols.issubset(set(month_data.columns)):
+                            logger.debug(f"[缓存回写] 跳过窄字段新建: {cache_key}, "
+                                       f"cols={list(month_data.columns)}")
+                            continue
                         self.kline_cache[cache_key] = month_data
                         logger.debug(f"[缓存回写] 新建: {cache_key}, {len(month_data)}行")
         except Exception as e:

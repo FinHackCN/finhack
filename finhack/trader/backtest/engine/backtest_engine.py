@@ -1335,7 +1335,12 @@ class TradeCenter:
                 max_fill_by_market = max(min_fill_volume, market_volume * max_fill_ratio)
             else:
                 # 市场成交量为0时跳过撮合（无成交的K线不应执行订单）
-                Log.logger.debug(f"[{time_str}] 跳过订单 {order_id}: 市场成交量为0")
+                # volume=NaN 属数据异常（如缓存被窄字段回写污染），warning 便于诊断
+                import math as _math
+                if _math.isnan(market_volume) if isinstance(market_volume, float) else False:
+                    Log.logger.warning(f"[{time_str}] 跳过订单 {order_id}: {symbol} volume=NaN (数据异常)")
+                else:
+                    Log.logger.debug(f"[{time_str}] 跳过订单 {order_id}: 市场成交量为0")
                 continue
 
             # 判断是否可以成交

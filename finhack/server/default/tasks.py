@@ -149,6 +149,10 @@ def _safe_result(result):
     import pandas as pd
     if result is None:
         return None
+    if isinstance(result, dict):
+        # dict 保留结构（train 返回 {'model_id','cached'}，前端要按 key 取；
+        # 原实现 str() 化导致 model_id/cached 全拿不到）
+        return {k: _safe_result(v) for k, v in result.items()}
     if isinstance(result, pd.DataFrame):
         return {'type': 'DataFrame', 'shape': list(result.shape), 'columns': list(result.columns)}
     if isinstance(result, tuple):
