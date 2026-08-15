@@ -111,7 +111,7 @@ def mine(prompt='', model='', method='gpt', market='cn_stock', freq='1d',
 def train(factor_list, market='cn_stock', freq='1d', start_date='', valid_date='', end_date='',
           label='abs', shift=10, loss='mse', vector_list=None, model_type='lightgbm', **kwargs):
     """ML 训练。返回 model_id（md5）；pred 入库为因子 pred_<md5>（回测 get_factors 读）。
-    model_type: 'lightgbm'（目前仅支持此；预留 xgboost/catboost 等扩展）。"""
+    model_type: lightgbm / xgboost / random_forest / extra_trees / ridge / lasso / linear / mlp。"""
     _ensure_path()
     import runtime.global_var as global_var, json as _json
 
@@ -129,15 +129,21 @@ def train(factor_list, market='cn_stock', freq='1d', start_date='', valid_date='
 
     if model_type == 'lightgbm':
         from finhack.trainer.lightgbm.lightgbm_trainer import LightgbmTrainer
-        t = LightgbmTrainer()
-    else:
-        raise ValueError(f'暂不支持模型类型 {model_type}，目前仅 lightgbm')
+        return LightgbmTrainer().start_train(
+            market=market, freq=freq, start_date=start_date, valid_date=valid_date, end_date=end_date,
+            matrix_list=factor_list, vector_list=vector_list or [], label=label, shift=shift,
+            loss=loss, param=_param, filter_name=kwargs.get('filter_name', ''),
+            replace=kwargs.get('replace', False))
 
-    return t.start_train(
+    # sklearn 系（xgboost / random_forest / extra_trees / ridge / lasso / linear / mlp）
+    from finhack.trainer.sklearn.sklearn_trainer import SklearnTrainer
+    if model_type not in ('xgboost', 'random_forest', 'extra_trees', 'ridge', 'lasso', 'linear', 'mlp'):
+        raise ValueError(f'暂不支持模型类型 {model_type}')
+    return SklearnTrainer().start_train(
         market=market, freq=freq, start_date=start_date, valid_date=valid_date, end_date=end_date,
         matrix_list=factor_list, vector_list=vector_list or [], label=label, shift=shift,
         loss=loss, param=_param, filter_name=kwargs.get('filter_name', ''),
-        replace=kwargs.get('replace', False))
+        replace=kwargs.get('replace', False), algorithm=model_type)
 
 
 def backtest(strategy, market='cn_stock', freq='1d', start_date='', end_date='',

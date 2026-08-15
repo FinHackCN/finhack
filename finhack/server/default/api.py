@@ -1214,26 +1214,37 @@ def strategies():
                     st = os.stat(f)
                 except OSError:
                     continue
-                # 基类标记（loader 按 __not_strategy__ 跳过，不可直接回测）+ 频率推断
+                # 基类标记（loader 按 __not_strategy__ 跳过，不可直接回测）+ 频率推断 + 元数据
                 try:
                     with open(f, 'r', encoding='utf-8', errors='ignore') as fh:
                         head = fh.read(8192)
                     is_base = '__not_strategy__' in head
                 except OSError:
                     is_base = False
+                # __strategy_meta__ = {"name": 中文名, "desc": 说明, "freq": "1d", "tags": [...]}
+                meta = {}
+                _m = re.search(r'__strategy_meta__\s*=\s*(\{.*?\})', head, re.S)
+                if _m:
+                    try:
+                        meta = json.loads(_m.group(1))
+                    except Exception:
+                        meta = {}
                 _low = (base + ' ' + head).lower()
-                # 文件名显式标注优先；否则按内容默认 freq / 关键词推断；两可 → '-'
                 if '1m' in base:
                     freq = '1m'
                 elif '1d' in base:
                     freq = '1d'
+                elif meta.get('freq') in ('1d', '1m'):
+                    freq = meta['freq']
                 else:
                     has_1m = ("freq='1m'" in head) or ('"1m"' in head) or ('分钟' in _low)
                     has_1d = ("freq='1d'" in head) or ('"1d"' in head) or ('日线' in _low)
                     freq = '1m' if (has_1m and not has_1d) else ('1d' if (has_1d and not has_1m) else '-')
                 rows.append({'market': mk, 'name': base[:-3], 'file': base,
                              'size': st.st_size, 'mtime': int(st.st_mtime),
-                             'is_base': is_base, 'freq': freq})
+                             'is_base': is_base, 'freq': freq,
+                             'name_cn': meta.get('name', ''), 'desc': meta.get('desc', ''),
+                             'tags': meta.get('tags', [])})
         return rows
 
     if market == 'all':
