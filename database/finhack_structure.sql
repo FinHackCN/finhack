@@ -170,6 +170,8 @@ CREATE TABLE `factors_mining` (
   `Sharpe` float(20,5) DEFAULT NULL,
   `score` float(10,5) DEFAULT NULL,
   `hash` varchar(255) DEFAULT NULL,
+  `market` varchar(20) DEFAULT 'cn_stock',
+  `freq` varchar(8) DEFAULT '1d',
   `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   UNIQUE KEY `hash` (`hash`(32)) USING BTREE

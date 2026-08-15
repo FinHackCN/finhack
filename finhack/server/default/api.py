@@ -308,6 +308,12 @@ def _rich(perf, daily_history, trades):
         return {'error': str(e)}
 
 
+def _sanitize_qs_html(html):
+    """quantstats 模板带 <body onload="save()">，但 save() 只在其"可下载版"模板里定义，
+    普通输出里没有 → 浏览器 onload 即抛 ReferenceError: save is not defined。剥掉该属性。"""
+    return html.replace('<body onload="save()">', '<body>').replace("onload='save()'", '').replace('onload="save()"', '')
+
+
 @api_bp.route('/backtest/<instance_id>/quantstats')
 def backtest_quantstats(instance_id):
     """生成 quantstats HTML 报告（月度收益/回撤/分布等），缓存到 pickle 同目录 .qs.html。"""
@@ -321,7 +327,8 @@ def backtest_quantstats(instance_id):
     if os.path.exists(cache):
         try:
             import flask
-            return flask.Response(open(cache, encoding='utf-8').read(), mimetype='text/html')
+            return flask.Response(_sanitize_qs_html(open(cache, encoding='utf-8').read()),
+                                  mimetype='text/html')
         except Exception:
             pass
     import pandas as pd
@@ -335,7 +342,8 @@ def backtest_quantstats(instance_id):
         idx = pd.date_range(end=pd.Timestamp.today().normalize(), periods=len(ret), freq='D')
         qs.reports.html(pd.Series(ret, index=idx), benchmark=None, title='finhack 回测报告', output=cache)
         import flask
-        return flask.Response(open(cache, encoding='utf-8').read(), mimetype='text/html')
+        return flask.Response(_sanitize_qs_html(open(cache, encoding='utf-8').read()),
+                              mimetype='text/html')
     except Exception as e:
         # quantstats 与 numpy2/pandas2 可能不兼容 → 降级到自渲染指标 HTML
         html = _fallback_report(r, str(e))
@@ -1343,6 +1351,9 @@ def strategy_restore():
 
 # ===================== 数据覆盖统计 =====================
 
+_DATA_COVERAGE_CACHE = {'ts': 0.0, 'data': None}  # 页面每次加载都调，TTL 5min（因子/代码数至多每日一变）
+_DATA_COVERAGE_TTL = 300
+
 @api_bp.route('/data_coverage')
 def data_coverage():
     """每市场数据覆盖：代码数 / 各频率因子数 / 日期范围（从 year 目录推断）"""
@@ -1351,6 +1362,9 @@ def data_coverage():
     from finhack.factor.default.factorManager import factorManager
     from finhack.library.data import get_data_interface
     from runtime.constant import KLINE_DIR
+    now = time.time()
+    if _DATA_COVERAGE_CACHE['data'] is not None and now - _DATA_COVERAGE_CACHE['ts'] < _DATA_COVERAGE_TTL:
+        return jsonify(_DATA_COVERAGE_CACHE['data'])
     di = get_data_interface()
     out = []
     for mk in m.list_markets():
@@ -1377,6 +1391,8 @@ def data_coverage():
                           if os.path.isdir(p) and os.path.basename(p).isdigit()]
         row['date_range'] = [min(years), max(years)] if years else None
         out.append(row)
+    _DATA_COVERAGE_CACHE['ts'] = now
+    _DATA_COVERAGE_CACHE['data'] = out
     return jsonify(out)
 
 

@@ -517,17 +517,69 @@ class factorManager:
         return return_fileds
 
     @staticmethod
+    def _names_fingerprint(base):
+        """因子树目录指纹：stat 到 code 目录层（跳过文件层）。year/code 目录增删、
+        code 目录内新建 pkl（更新该 code 目录 mtime）都会改变指纹。
+        cn_stock/1d 6.5万目录 ~0.3s，远快于全量 os.walk 文件枚举（~11s）。
+        ⚠️ 必须用 md5 等稳定摘要——hash() 对 str 有进程级随机盐，
+        缓存指纹跨进程（server 重启）对比会必然失配。"""
+        import hashlib
+        h = hashlib.md5()
+        try:
+            with os.scandir(base) as it:
+                for ye in it:
+                    if not ye.is_dir():
+                        continue
+                    st = ye.stat()
+                    h.update(f"{ye.name}|{st.st_mtime_ns}|".encode())
+                    with os.scandir(ye.path) as cit:
+                        for ce in cit:
+                            if not ce.is_dir():
+                                continue
+                            cst = ce.stat()
+                            h.update(f"{ye.name}|{ce.name}|{cst.st_mtime_ns}|".encode())
+        except OSError:
+            return None
+        return h.hexdigest()
+
+    @staticmethod
     def list_factors(market='cn_stock', freq='1d', factor_type='matrix'):
         """列出已入库的因子名（扫 factors/{factor_type}/{market}/{freq}/ 目录）。
-        替代旧版依赖 MySQL factors_list 表的 getFactorsList，纯目录扫描、市场参数化。"""
+        替代旧版依赖 MySQL factors_list 表的 getFactorsList，纯目录扫描、市场参数化。
+        性能：cn_stock/1d 9.7M 个 pkl 全量 walk ~11s（dashboard data_coverage 每次页面
+        加载都调，曾把首屏拖到 12s+）。先用目录 mtime 指纹校验持久化名单缓存
+        （data/cache/factor_names_*.json），指纹不变直接返回，变化才重扫。"""
+        import json
         base = os.path.join(DATA_DIR, 'factors', factor_type, market, freq)
+        if not os.path.exists(base):
+            return []
+        cache_dir = os.path.join(DATA_DIR, 'cache')
+        cfile = os.path.join(cache_dir, f'factor_names_{factor_type}_{market}_{freq}.json')
+        fp = factorManager._names_fingerprint(base)
+        if fp is not None and os.path.isfile(cfile):
+            try:
+                with open(cfile, 'r', encoding='utf-8') as f:
+                    cached = json.load(f)
+                if cached.get('fingerprint') == fp:
+                    return cached['names']
+            except Exception:
+                pass
         factors = set()
-        if os.path.exists(base):
-            for root, dirs, files in os.walk(base):
-                for f in files:
-                    if f.endswith('.pkl') and not f.endswith('index.pkl'):
-                        factors.add(f[:-4])
-        return sorted(factors)
+        for root, dirs, files in os.walk(base):
+            for f in files:
+                if f.endswith('.pkl') and not f.endswith('index.pkl'):
+                    factors.add(f[:-4])
+        names = sorted(factors)
+        if fp is not None:
+            try:
+                os.makedirs(cache_dir, exist_ok=True)
+                tmp = cfile + '.tmp'
+                with open(tmp, 'w', encoding='utf-8') as f:
+                    json.dump({'fingerprint': fp, 'names': names}, f)
+                os.replace(tmp, cfile)
+            except Exception:
+                pass
+        return names
 
     # ============ 因子库管理（dashboard 因子管理用，纯 inode 操作不加载 pkl） ============
 
