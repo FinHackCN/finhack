@@ -13,6 +13,11 @@ from datetime import datetime
 class Trainer:
     """训练器基类：提供训练/预测数据准备。market-aware，索引 (time, code)。"""
 
+    def __init__(self, args=None):
+        # BaseLoader 以 klass(args) 实例化（base_loader.py:58），随后又会覆盖 self.args，
+        # 这里接收并保存，保证 CLI/Loader 两条路径都能实例化
+        self.args = args
+
     @staticmethod
     def getPredData(market, freq, model_id, start_date, end_date, norm=False):
         """按 model_id 从 auto_train 表取特征列表，loadFactors 加载预测数据。"""
