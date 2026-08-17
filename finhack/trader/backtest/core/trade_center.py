@@ -2,8 +2,9 @@
 交易中心实现
 """
 
+import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 
@@ -129,6 +130,19 @@ class TradeCenter:
 
         # 资金冻结记录：{order_id: frozen_amount}
         self._frozen_cash: Dict[str, float] = {}
+
+        # ===== 规则时代实验（regulatory anachronism bias study）=====
+        # rule_mode:
+        #   'anachronistic' —— 现状/基线：以"当前规则"回溯全历史（等价主流引擎静态规则行为），默认值
+        #   'versioned'     —— 按回测日期查询版本化交易规则（还原历史真实规则）
+        # 来源优先级：context.settings['rule_mode'] > 环境变量 FINHACK_RULE_MODE > 默认 anachronistic
+        self._prev_close_cache: Dict[tuple, float] = {}   # {(symbol, date): prev_close}
+        self._rule_stats = {
+            'checks': 0, 'reject_buy_limitup': 0,
+            'reject_sell_limitdown': 0, 'reject_price_band': 0,
+            'ratio_usage': {},   # {limit_ratio_str: count} 记录各时期实际使用的涨跌停比例
+        }
+        self._rule_stats_day = None
     
     def initialize(self, context):
         """
@@ -156,6 +170,156 @@ class TradeCenter:
     def _get_backtest_time(self) -> datetime:
         """获取回测当前时间，如果回测上下文不存在则返回系统时间"""
         return self._context.current_dt if self._context and hasattr(self._context, 'current_dt') else datetime.now()
+
+    # ===== 规则时代实验：版本化规则支持 =====
+
+    def _get_rule_mode(self) -> str:
+        """规则模式。
+
+        - 'versioned'：按回测日期查询版本化交易规则（历史真实规则）
+        - 'anachronistic'（默认）：以当前规则回溯全历史，保持既有基线行为不变
+        """
+        mode = None
+        try:
+            if self._context is not None:
+                settings = None
+                if hasattr(self._context, 'get'):
+                    settings = self._context.get('settings')
+                if not settings and hasattr(self._context, 'settings'):
+                    settings = self._context.settings
+                if isinstance(settings, dict):
+                    mode = settings.get('rule_mode')
+        except Exception:
+            pass
+        if not mode:
+            mode = os.environ.get('FINHACK_RULE_MODE', '')
+        return mode if mode in ('versioned', 'anachronistic') else 'anachronistic'
+
+    def _get_prev_close(self, symbol: str, query_date) -> Optional[float]:
+        """获取 query_date 的前收盘价（上一交易日收盘价），带缓存。
+
+        版本化涨跌停校验的基准价：交易所口径涨跌停价 = 前收盘价 × (1 ± 比例)。
+        """
+        key = (symbol, query_date)
+        if key in self._prev_close_cache:
+            return self._prev_close_cache[key]
+        prev_close = None
+        try:
+            dc = getattr(self._context, 'data_center', None) if self._context else None
+            if dc is not None:
+                start = (datetime(query_date.year, query_date.month, query_date.day)
+                         - timedelta(days=20)).strftime('%Y-%m-%d')
+                end = datetime(query_date.year, query_date.month, query_date.day).strftime('%Y-%m-%d')
+                df = dc.get_klines(codes=[symbol], freq='1d',
+                                   start_time=start, end_time=end)
+                if df is not None and not df.empty:
+                    sub = df
+                    names = getattr(df.index, 'names', None) or []
+                    if len(names) > 1 and 'code' in names:
+                        try:
+                            sub = df.xs(symbol, level='code')
+                        except Exception:
+                            sub = df
+                    sub = sub.sort_index()
+                    close_col = sub['close'] if 'close' in sub.columns else None
+                    if close_col is not None and len(close_col) > 0:
+                        prev_close = float(close_col.iloc[-1])
+        except Exception as e:
+            if self._context and hasattr(self._context, 'logger') and self._context.logger:
+                self._context.logger.debug(f"[RULE_VER] 获取前收盘价失败: {symbol} {query_date} {e}")
+        self._prev_close_cache[key] = prev_close
+        return prev_close
+
+    def _log_rule_stats(self, day) -> None:
+        """每日输出一次版本化规则的累计统计（供实验跑批解析）"""
+        if self._rule_stats_day == day:
+            return
+        self._rule_stats_day = day
+        s = self._rule_stats
+        if self._context and hasattr(self._context, 'logger') and self._context.logger:
+            self._context.logger.info(
+                f"[RULE_VER] stats day={day} checks={s['checks']} "
+                f"reject_buy_limitup={s['reject_buy_limitup']} "
+                f"reject_sell_limitdown={s['reject_sell_limitdown']} "
+                f"reject_price_band={s['reject_price_band']} "
+                f"ratio_usage={s['ratio_usage']}")
+
+    def _check_price_limit_versioned(self, order, current_price: float) -> bool:
+        """版本化涨跌停校验：按回测日期取当时真实规则（前收盘价基准）。
+
+        与 anachronistic 路径的差异：
+        1. 涨跌停比例来自 RuleVersion 版本表（如创业板 2020-08-24 前 10%、之后 20%），
+           而非硬编码当前值；
+        2. 基准价用前收盘价（交易所口径），而非当前价；
+        3. 市价单语义修正：涨停锁板拒买、跌停锁板拒卖（现状路径该分支数学上永不触发）。
+
+        Returns:
+            bool: True=已完成校验（含拒绝）；False=无法评估（前收盘缺失等），调用方退回现状逻辑
+        """
+        try:
+            from finhack.trader.backtest.markets.cn_stock.cn_stock_calculator import (
+                StockPriceCalculator,
+            )
+        except Exception:
+            return False
+
+        d = self._get_backtest_time().date()
+        prev_close = self._get_prev_close(order.symbol, d)
+        if not prev_close or prev_close <= 0:
+            return False
+
+        try:
+            limits = StockPriceCalculator.calculate_limit_prices(order.symbol, prev_close, d)
+        except Exception as e:
+            if self._context and hasattr(self._context, 'logger') and self._context.logger:
+                self._context.logger.warning(f"[RULE_VER] 涨跌停价计算失败: {order.symbol} {d} {e}")
+            return False
+
+        upper = limits.get('upper_limit')
+        lower = limits.get('lower_limit')
+        ratio = limits.get('limit_ratio')
+        if upper is None or lower is None or ratio is None:
+            return False   # 新股无限制窗口等情形，退回现状逻辑
+
+        s = self._rule_stats
+        s['checks'] += 1
+        rkey = str(ratio)
+        s['ratio_usage'][rkey] = s['ratio_usage'].get(rkey, 0) + 1
+        self._log_rule_stats(d)
+
+        eps = 1e-9
+        logger = getattr(self._context, 'logger', None) if self._context else None
+
+        if order.order_type == OrderType.LIMIT and order.price:
+            # 限价单：委托价必须落在当日涨跌停带宽内
+            if order.price > upper + eps or order.price < lower - eps:
+                order.status = OrderStatus.REJECTED
+                s['reject_price_band'] += 1
+                if logger:
+                    logger.warning(
+                        f"[RULE_VER] 限价单超出当日带宽拒单: {order.symbol} {d} "
+                        f"委托{order.price:.2f} 区间[{lower:.2f},{upper:.2f}] 比例{ratio}")
+                return True
+        else:
+            # 市价单：涨停锁板不可买、跌停锁板不可卖（容差0.1%应对取整误差）
+            tol = 0.001
+            if order.side == OrderSide.BUY and current_price >= upper * (1 - tol):
+                order.status = OrderStatus.REJECTED
+                s['reject_buy_limitup'] += 1
+                if logger:
+                    logger.warning(
+                        f"[RULE_VER] 涨停锁板拒买: {order.symbol} {d} "
+                        f"现价{current_price:.2f}>=涨停{upper:.2f} 比例{ratio}")
+                return True
+            if order.side == OrderSide.SELL and current_price <= lower * (1 + tol):
+                order.status = OrderStatus.REJECTED
+                s['reject_sell_limitdown'] += 1
+                if logger:
+                    logger.warning(
+                        f"[RULE_VER] 跌停锁板拒卖: {order.symbol} {d} "
+                        f"现价{current_price:.2f}<=跌停{lower:.2f} 比例{ratio}")
+                return True
+        return True
 
     def _load_trading_rules(self):
         """加载交易规则"""
@@ -817,6 +981,11 @@ class TradeCenter:
         else:
             commission_rate = self.trading_rules["commission_rate"]["close"]
             tax_rate = self.trading_rules["tax_rate"]["close"]
+            # 规则时代实验：versioned 模式下 A股卖出印花税按历史真实税率
+            # （2023-08-28 起由 0.1% 减半至 0.05%；此前为 0.1%）
+            if self._get_rule_mode() == 'versioned' and self.market.lower() == 'cn_stock':
+                t = self._get_backtest_time()
+                tax_rate = 0.001 if t < datetime(2023, 8, 28) else 0.0005
         
         # 计算手续费
         commission = trade_value * commission_rate
@@ -867,7 +1036,19 @@ class TradeCenter:
 
             # 检查涨跌停限制
             if self.trading_rules.get("limit_up_down", False):
-                if order.order_type == OrderType.LIMIT:
+                # 规则时代实验：versioned 模式优先走版本化校验（历史真实规则）
+                if self._get_rule_mode() == 'versioned':
+                    handled = self._check_price_limit_versioned(order, current_price)
+                    if handled:
+                        if order.status == OrderStatus.REJECTED:
+                            return
+                    elif order.order_type == OrderType.LIMIT:
+                        if not self._check_price_limit(order.symbol, current_price, order.price):
+                            order.status = OrderStatus.REJECTED
+                            if self._context:
+                                self._context.logger.warning(f"限价单价格超出涨跌停限制: {order.symbol} 限价{order.price}")
+                            return
+                elif order.order_type == OrderType.LIMIT:
                     # 限价单：检查订单价格是否在涨跌停范围内
                     if not self._check_price_limit(order.symbol, current_price, order.price):
                         order.status = OrderStatus.REJECTED

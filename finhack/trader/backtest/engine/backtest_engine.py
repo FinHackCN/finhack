@@ -1271,6 +1271,120 @@ class TradeCenter:
         """
         return self._get_last_price(symbol)
 
+    # ===== RAB 实验：版本化涨跌停校验（regulatory anachronism bias）=====
+    # rule_mode: 'anachronistic'=现状（撮合无涨跌停约束，保持既有基线行为）
+    #            'versioned'=按回测日期取历史真实规则（如创业板2020-08-24前10%）
+    # 来源优先级：settings['rule_mode'] > 环境变量 FINHACK_RULE_MODE > 默认 anachronistic
+
+    def _rab_rule_mode(self) -> str:
+        mode = (self.context.get('settings', {}) or {}).get('rule_mode') \
+            if isinstance(self.context, dict) else None
+        if not mode:
+            import os as _os
+            mode = _os.environ.get('FINHACK_RULE_MODE', '')
+        return mode if mode in ('versioned', 'anachronistic') else 'anachronistic'
+
+    def _rab_prev_close(self, symbol: str, query_date) -> Optional[float]:
+        """query_date 的前收盘价（上一交易日收盘），带引擎级缓存"""
+        cache = getattr(self, '_rab_prev_close_cache', None)
+        if cache is None:
+            cache = self._rab_prev_close_cache = {}
+        key = (symbol, query_date)
+        if key in cache:
+            return cache[key]
+        prev_close = None
+        try:
+            dc = getattr(self, 'data_center', None) or \
+                (self.event_center.data_center if self.event_center and hasattr(self.event_center, 'data_center') else None)
+            if dc is not None:
+                from datetime import timedelta as _td
+                start = (datetime(query_date.year, query_date.month, query_date.day)
+                         - _td(days=20)).strftime('%Y-%m-%d')
+                end = datetime(query_date.year, query_date.month, query_date.day).strftime('%Y-%m-%d')
+                df = dc.get_klines(codes=[symbol], freq='1d', start_time=start, end_time=end)
+                if df is not None and not df.empty:
+                    sub = df
+                    names = getattr(df.index, 'names', None) or []
+                    if len(names) > 1 and 'code' in names:
+                        try:
+                            sub = df.xs(symbol, level='code')
+                        except Exception:
+                            sub = df
+                    sub = sub.sort_index()
+                    if 'close' in sub.columns and len(sub['close']) > 0:
+                        prev_close = float(sub['close'].iloc[-1])
+        except Exception as e:
+            Log.logger.debug(f"[RULE_VER] 获取前收盘价失败: {symbol} {query_date} {e}")
+        cache[key] = prev_close
+        return prev_close
+
+    def _rab_check_limit(self, order, current_price: float, current_time) -> bool:
+        """版本化涨跌停校验：True=允许撮合，False=拒单（并记录日志/统计）
+
+        语义（日线回测，current_price 为当日收盘价）：
+        - 买入：当日收盘已达涨停（锁板）→ 拒买
+        - 卖出：当日收盘已达跌停（锁板）→ 拒卖
+        - 限价买单：委托价高于涨停价 → 废单（超出当日带宽）
+        - 限价卖单：委托价低于跌停价 → 废单
+        """
+        try:
+            from finhack.trader.backtest.markets.cn_stock.cn_stock_calculator import (
+                StockPriceCalculator,
+            )
+        except Exception:
+            return True   # 计算器不可用时不干预（退回现状行为）
+
+        d = current_time.date() if current_time else None
+        if d is None:
+            return True
+        prev_close = self._rab_prev_close(order.symbol, d)
+        if not prev_close or prev_close <= 0:
+            return True   # 前收盘缺失（如新股/数据缺失），不干预
+
+        try:
+            limits = StockPriceCalculator.calculate_limit_prices(order.symbol, prev_close, d)
+        except Exception as e:
+            Log.logger.debug(f"[RULE_VER] 涨跌停价计算失败: {order.symbol} {d} {e}")
+            return True
+        upper, lower = limits.get('upper_limit'), limits.get('lower_limit')
+        ratio = limits.get('limit_ratio')
+        if upper is None or lower is None or ratio is None:
+            return True   # 新股无涨跌幅窗口等，不干预
+
+        # 统计
+        st = getattr(self, '_rab_stats', None)
+        if st is None:
+            st = self._rab_stats = {'checks': 0, 'rejects': 0, 'ratio_usage': {}, '_day': None}
+        st['checks'] += 1
+        st['ratio_usage'][str(ratio)] = st['ratio_usage'].get(str(ratio), 0) + 1
+        if st['_day'] != d:
+            st['_day'] = d
+            Log.logger.info(f"[RULE_VER] stats day={d} checks={st['checks']} "
+                            f"rejects={st['rejects']} ratio_usage={st['ratio_usage']}")
+
+        tol = 0.001   # 0.1% 容差（应对取整误差）
+        side = order.side
+        otype = order.order_type
+        time_str = current_time.strftime('%Y-%m-%d') if current_time else str(d)
+        rejected = False
+        reason = ''
+        # 涨停锁板拒买 / 超带宽废单
+        if side in (Side.BUY,) and current_price >= upper * (1 - tol):
+            rejected, reason = True, f"涨停锁板拒买 现价{current_price:.2f}>=涨停{upper:.2f}"
+        elif side in (Side.SELL,) and current_price <= lower * (1 + tol):
+            rejected, reason = True, f"跌停锁板拒卖 现价{current_price:.2f}<=跌停{lower:.2f}"
+        elif otype == OrderType.LIMIT and order.price and side in (Side.BUY,) and order.price > upper:
+            rejected, reason = True, f"限价超带宽废单 委托{order.price:.2f}>涨停{upper:.2f}"
+        elif otype == OrderType.LIMIT and order.price and side in (Side.SELL,) and order.price < lower:
+            rejected, reason = True, f"限价低于跌停废单 委托{order.price:.2f}<跌停{lower:.2f}"
+
+        if rejected:
+            st['rejects'] += 1
+            kind = {'涨停锁板拒买': '涨停锁板拒买', '跌停锁板拒卖': '跌停锁板拒卖'}.get(reason.split()[0], '限价超带宽拒单')
+            Log.logger.warning(f"[RULE_VER] {kind}: {order.symbol} {time_str} "
+                               f"{reason} 比例{ratio} ({side.value}/{otype.value})")
+        return not rejected
+
     def try_match_orders_sync(self, market_data: Dict[str, Dict]):
         """撮合订单 - 同步版本，支持部分成交"""
         matched_orders = []
@@ -1323,6 +1437,15 @@ class TradeCenter:
 
             if current_price <= 0:
                 Log.logger.debug(f"[{time_str}] 跳过订单 {order_id}: 价格无效 {current_price}")
+                continue
+
+            # ===== RAB 实验：版本化涨跌停校验（仅 rule_mode=versioned 时生效）=====
+            if self._rab_rule_mode() == 'versioned' and \
+                    not self._rab_check_limit(order, current_price, current_time):
+                order.status = OrderStatus.REJECTED
+                order.rejected_reason = "RULE_VER 涨跌停"
+                if order_id in self.active_orders:
+                    del self.active_orders[order_id]
                 continue
 
             # 【修复】基于市场成交量的成交限制配置 - 通过adapter获取市场规则

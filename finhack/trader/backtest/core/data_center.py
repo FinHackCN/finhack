@@ -2205,6 +2205,15 @@ class DataCenter:
 
                 with self._kline_cache_lock:
                     if cache_key in self.kline_cache:
+                        # 窄字段保护（同下方新建分支）：fields=['close'] 之类窄查询的回写
+                        # 只有部分列，concat 后新 (time,code) 行的 open/high/low/volume 全为
+                        # NaN，combine_first 只能回填旧缓存已有的行、救不了新行 → volume=NaN
+                        # 入缓存 → 撮合"数据异常"跳单。窄数据不参与合并（每次走 data_interface）。
+                        base_cols = {'open', 'high', 'low', 'close', 'volume'}
+                        if not base_cols.issubset(set(month_data.columns)):
+                            logger.debug(f"[缓存回写] 跳过窄字段合并: {cache_key}, "
+                                       f"cols={list(month_data.columns)}")
+                            continue
                         # 合并到已有缓存（去重+排序，保持searchsorted正确性）
                         existing = self.kline_cache[cache_key]
                         combined = pd.concat([existing, month_data])

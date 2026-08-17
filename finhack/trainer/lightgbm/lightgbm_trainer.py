@@ -15,6 +15,14 @@ from finhack.trainer.trainer import Trainer
 
 class LightgbmTrainer(Trainer):
 
+    # LINEX 非对称损失默认参数：L(Δ)=b·(e^{aΔ}−aΔ−1), Δ=ŷ−y
+    # a 控制不对称强度（高估方向指数惩罚），b 为整体刻度（不改变最优解，影响有效学习率）
+    DEFAULT_DS_A = 1.0
+    DEFAULT_DS_B = 100.0
+    # 类属性兜底：train() 前访问 self.ds_a/ds_b 也不报错
+    ds_a = DEFAULT_DS_A
+    ds_b = DEFAULT_DS_B
+
     def auto(self):
         args = global_var.args
         max_processes = int(args.process)
@@ -132,13 +140,17 @@ class LightgbmTrainer(Trainer):
 
     def custom_obj(self, y_pred, dataset):
         y_true = dataset.get_label()
-        grad = 100 * e ** (y_pred - y_true) - 100
-        hess = 100 * e ** (y_pred - y_true)
+        a, b = self.ds_a, self.ds_b
+        d = y_pred - y_true
+        grad = b * a * (e ** (a * d) - 1)
+        hess = b * a * a * e ** (a * d)
         return grad, hess
 
     def custom_eval(self, y_pred, dataset):
         y_true = dataset.get_label()
-        loss = 100 * e ** (-(y_true - y_pred)) + 100 * (y_true - y_pred) - 100
+        a, b = self.ds_a, self.ds_b
+        d = y_pred - y_true
+        loss = b * (e ** (a * d) - a * d - 1)
         return "ds", np.mean(loss), False
 
     def train(self, data_train, data_valid, data_path=DATA_DIR, md5='test', loss="ds", param={}):
@@ -155,6 +167,9 @@ class LightgbmTrainer(Trainer):
         num_boost_round = int(params.pop('n_estimators', 100))
         early_stopping_rounds = int(params.pop('early_stopping', 30))
         loss_alpha = params.pop('loss_alpha', 0.9)   # quantile 分位数 / huber delta
+        # LINEX(DS) 损失形状参数：a=不对称强度, b=刻度。仅 loss=ds 时生效
+        self.ds_a = float(params.pop('ds_a', self.DEFAULT_DS_A))
+        self.ds_b = float(params.pop('ds_b', self.DEFAULT_DS_B))
         callbacks = [lgb.early_stopping(early_stopping_rounds, verbose=0), lgb.log_evaluation(period=0)]
         # 损失函数可选：mse(默认L2)/mae(L1)/huber/quantile/ds(非对称，金融收益预测经典)
         if loss == "ds":
