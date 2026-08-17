@@ -2112,6 +2112,21 @@ class DataCenter:
             query_start = max(month_start_dt, start_time)
             query_end = min(month_end_dt, end_time)
 
+            # 【可见性自愈】月度缓存可能定格在建立时刻的快照（首查回写只含当时
+            # 可见的数据），若请求窗口尾部日期超出缓存快照的最后日期，说明该月
+            # 后续数据从未补入——视为 stale 整体 miss，走 data_interface 重载并
+            # 合并回写。按"日期粒度"比较（不含时刻），每天首个查询触发一次重载
+            # （数据未变时仅性能损耗），换取数据可见性正确。
+            # （曾致策略长期读到滞后数个交易日的数据 → 委托价基于陈旧参考价）
+            try:
+                _tmax = cached_df.index.get_level_values('time').max()
+                if pd.Timestamp(query_end).date() > pd.Timestamp(_tmax).date():
+                    logger.info(f"[缓存自愈] {cache_key} 快照滞后(tmax={_tmax} < "
+                                f"query_end~{query_end})，触发重载合并")
+                    return None
+            except Exception:
+                pass
+
             try:
                 if hasattr(cached_df.index, 'get_level_values') and 'time' in cached_df.index.names:
                     time_level = cached_df.index.get_level_values('time')
@@ -2271,6 +2286,18 @@ class DataCenter:
 
         # 获取回测当前时间作为硬性上限
         backtest_time = self._get_backtest_time()
+
+        # 【end语义修复】纯日期的 end_time（如 '2020-05-14'）解析为当日 00:00，
+        # 早于日线 bar 时间戳（09:30/15:00），会把"当日"bar 永久排除——策略
+        # 查"截至昨日"时实际拿到的是截至前日（T-1 信号变 T-2）。补到当日末尾，
+        # 防未来由下方 backtest_time 截断保证。
+        try:
+            if end_time is not None:
+                _end_pd = pd.Timestamp(end_time)
+                if _end_pd == _end_pd.normalize():
+                    end_time = _end_pd + pd.Timedelta(hours=23, minutes=59, seconds=59)
+        except Exception:
+            pass
 
         # 限制 end_time 不超过回测当前时间（加缓冲避免双重截断丢K线）
         if backtest_time and end_time:
