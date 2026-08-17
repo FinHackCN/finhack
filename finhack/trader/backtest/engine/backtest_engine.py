@@ -1219,6 +1219,12 @@ class TradeCenter:
             tax_rate = self.context['settings'].get('open_tax', 0.0)
         else:
             tax_rate = self.context['settings'].get('close_tax', 0.001)
+            # RAB 实验：versioned 模式下 A股卖出印花税按历史真实税率
+            # （2023-08-28 起由 0.1% 减半至 0.05%，此前 0.1%）
+            if self._rab_rule_mode() == 'versioned' and \
+                    (self.context.get('settings', {}) or {}).get('market', '') == 'cn_stock':
+                t = self.context.get('current_dt')
+                tax_rate = 0.001 if (t is None or t < datetime(2023, 8, 28)) else 0.0005
 
         return amount * tax_rate
 
@@ -1321,27 +1327,33 @@ class TradeCenter:
     def _rab_check_limit(self, order, current_price: float, current_time) -> bool:
         """版本化涨跌停校验：True=允许撮合，False=拒单（并记录日志/统计）
 
+        ⚠️ 实验卫生设计：prev_close 的 DataCenter 查询**两种模式都执行**（对称），
+        仅"涨跌停判断与拒单"受 rule_mode 控制。原因：get_klines 会预热 DataCenter
+        缓存、影响后续数据可见性（跨日缓存回填），若只在 versioned 模式查询，
+        会引入与规则无关的路径分岔（数据可见性不对称 → 假阳性分化）。
+
         语义（日线回测，current_price 为当日收盘价）：
         - 买入：当日收盘已达涨停（锁板）→ 拒买
         - 卖出：当日收盘已达跌停（锁板）→ 拒卖
         - 限价买单：委托价高于涨停价 → 废单（超出当日带宽）
         - 限价卖单：委托价低于跌停价 → 废单
         """
-        try:
-            from finhack.trader.backtest.markets.cn_stock.cn_stock_calculator import (
-                StockPriceCalculator,
-            )
-        except Exception:
-            return True   # 计算器不可用时不干预（退回现状行为）
-
         d = current_time.date() if current_time else None
         if d is None:
             return True
+        # 对称查询：两模式均执行（保证 DataCenter 状态同构）
         prev_close = self._rab_prev_close(order.symbol, d)
+
+        if self._rab_rule_mode() != 'versioned':
+            return True   # anachronistic：只查询不判断（维持基线行为）
+
         if not prev_close or prev_close <= 0:
             return True   # 前收盘缺失（如新股/数据缺失），不干预
 
         try:
+            from finhack.trader.backtest.markets.cn_stock.cn_stock_calculator import (
+                StockPriceCalculator,
+            )
             limits = StockPriceCalculator.calculate_limit_prices(order.symbol, prev_close, d)
         except Exception as e:
             Log.logger.debug(f"[RULE_VER] 涨跌停价计算失败: {order.symbol} {d} {e}")
@@ -1439,9 +1451,8 @@ class TradeCenter:
                 Log.logger.debug(f"[{time_str}] 跳过订单 {order_id}: 价格无效 {current_price}")
                 continue
 
-            # ===== RAB 实验：版本化涨跌停校验（仅 rule_mode=versioned 时生效）=====
-            if self._rab_rule_mode() == 'versioned' and \
-                    not self._rab_check_limit(order, current_price, current_time):
+            # ===== RAB 实验：涨跌停校验（查询两模式对称执行，判断仅 versioned 生效）=====
+            if not self._rab_check_limit(order, current_price, current_time):
                 order.status = OrderStatus.REJECTED
                 order.rejected_reason = "RULE_VER 涨跌停"
                 if order_id in self.active_orders:
