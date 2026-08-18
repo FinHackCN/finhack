@@ -494,8 +494,13 @@ class indicatorEngine():
                 Log.logger.info(f"调整计算窗口 - 原始: {range_start}, 调整后: {adjusted_start_date}")
 
                 Log.logger.info(f"开始加载依赖数据 - 字段: {referenced_fields}")
+                # mix 模块（如 mix_myfactors.basic）依赖字段常为空——它们从 DB 取数，
+                # 但函数内部需要以行情 (time,code) 帧为对齐基准（alignStockFactors）。
+                # 空依赖时加载 OHLCV 作为基准帧，而不是喂空帧（否则对齐结果恒空、静默无产出）。
+                load_fields = referenced_fields if referenced_fields else (
+                    ['open', 'high', 'low', 'close', 'volume', 'amount'] if module_type == 'mix' else [])
                 for df_ref in factorManager.loadFactorsAuto(
-                        matrix_list=referenced_fields,
+                        matrix_list=load_fields,
                         vector_list=[],
                         code_list=code_list,
                         market=market,
