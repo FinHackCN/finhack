@@ -267,7 +267,9 @@ class BacktestTrader:
                 'initial_capital': initial_cash,
                 'order_volume_ratio': getattr(self.args, 'order_volume_ratio', 1.0),
                 'slip_type': getattr(self.args, 'sliptype', 'pricerelated'),
-                'slip_value': float(getattr(self.args, 'slip', 0.001)),
+                # CLI 键名为 slip（也可传 slip_value）；None 表示未指定，交给市场默认
+                'slip_value': float(getattr(self.args, 'slip',
+                                            getattr(self.args, 'slip_value', 0.001))),
                 'open_tax': float(getattr(self.args, 'open_tax', 0.0)),
                 'close_tax': float(getattr(self.args, 'close_tax', 0.001)),
                 'open_commission': float(getattr(self.args, 'open_commission', 0.0003)),
@@ -362,6 +364,10 @@ class BacktestTrader:
         fees = cfg.get('fees', {})
         for fee_key in ['open_tax', 'close_tax', 'open_commission', 'close_commission',
                         'min_commission', 'slip_value']:
+            # 滑点特例：CLI 键名是 slip（settings 键是 slip_value），用户显式传了
+            # slip 就不能再被市场默认覆盖（否则 slip=0 等设置静默失效）
+            if fee_key == 'slip_value' and getattr(self.args, 'slip', None) is not None:
+                continue
             if fee_key not in args_dict or getattr(self.args, fee_key, None) is None:
                 if fee_key in fees:
                     settings[fee_key] = fees[fee_key]
