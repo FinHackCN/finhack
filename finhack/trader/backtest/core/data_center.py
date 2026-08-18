@@ -2115,15 +2115,26 @@ class DataCenter:
             # 【可见性自愈】月度缓存可能定格在建立时刻的快照（首查回写只含当时
             # 可见的数据），若请求窗口尾部日期超出缓存快照的最后日期，说明该月
             # 后续数据从未补入——视为 stale 整体 miss，走 data_interface 重载并
-            # 合并回写。按"日期粒度"比较（不含时刻），每天首个查询触发一次重载
-            # （数据未变时仅性能损耗），换取数据可见性正确。
+            # 合并回写。按"日期粒度"比较（不含时刻）。
+            # 【去抖】每 cache_key 每回测日最多自愈一次：自愈后缓存已含"当前可见"
+            # 的全部bar，同日后续查询（如撮合层规则查询 end=当日）即使 date 判定
+            # 仍超 tmax 也不再重载——否则每笔订单都触发整月 concat+combine_first，
+            # 回测慢一个数量级。
             # （曾致策略长期读到滞后数个交易日的数据 → 委托价基于陈旧参考价）
             try:
                 _tmax = cached_df.index.get_level_values('time').max()
                 if pd.Timestamp(query_end).date() > pd.Timestamp(_tmax).date():
-                    logger.info(f"[缓存自愈] {cache_key} 快照滞后(tmax={_tmax} < "
-                                f"query_end~{query_end})，触发重载合并")
-                    return None
+                    _bt = self._get_backtest_time()
+                    _today = _bt.date() if _bt is not None else None
+                    if not hasattr(self, '_cache_heal_log'):
+                        self._cache_heal_log = {}
+                    if self._cache_heal_log.get(cache_key) == _today:
+                        pass   # 今日已自愈，缓存已是当前可见最新，直接命中
+                    else:
+                        self._cache_heal_log[cache_key] = _today
+                        logger.info(f"[缓存自愈] {cache_key} 快照滞后(tmax={_tmax} < "
+                                    f"query_end~{query_end})，触发重载合并")
+                        return None
             except Exception:
                 pass
 
