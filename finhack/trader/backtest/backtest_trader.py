@@ -1247,7 +1247,9 @@ class PriceRelatedSlippage:
         settings = self.context.get('settings', {})
         market = settings.get('market', 'unknown')
         strategy = settings.get('strategy_name') or settings.get('strategy') or 'unknown'
-        instance_id = f"{_dt.now().strftime('%Y%m%d_%H%M%S')}_{market}_{strategy}"
+        # 文件名加 PID：并行批量回测时多个引擎进程可能在同一秒保存，
+        # 仅用秒级时间戳会互相覆盖/错拿结果（跨标签污染）。PID 保证唯一。
+        instance_id = f"{_dt.now().strftime('%Y%m%d_%H%M%S')}_{os.getpid()}_{market}_{strategy}"
         result = {
             'instance_id': instance_id,
             'market': market,
