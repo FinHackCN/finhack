@@ -329,6 +329,20 @@ class HKStockMarketAdapter(BaseMarket):
                 event_description="下午开盘"
             ))
 
+            # 【修复】收盘前撮合事件：1d 频率下策略多在盘中（如 09:35 定时任务）下单，
+            # 此前仅有 09:30 一条 TRY_MATCH（早于下单），订单当日永远等不到撮合、
+            # 收盘被全部取消——港股回测因此零成交。对齐 cn_stock 的收盘撮合
+            # （15:00），港股收盘 16:00，撮合放在 15:59（收盘价撮合语义）。
+            if frequency == '1d':
+                events.append(MarketEvent(
+                    event_type=EventTypeEnum.TRY_MATCH,
+                    event_time=datetime.combine(trade_date, time(15, 59)),
+                    market=self.market_name,
+                    frequency=frequency,
+                    priority=EventPriorityEnum.HIGH,
+                    event_description="收盘前撮合（1d）"
+                ))
+
             events.append(MarketEvent(
                 event_type=EventTypeEnum.MARKET_END,
                 event_time=datetime.combine(trade_date, time(16, 0)),

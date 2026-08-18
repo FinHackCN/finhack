@@ -1219,12 +1219,16 @@ class TradeCenter:
             tax_rate = self.context['settings'].get('open_tax', 0.0)
         else:
             tax_rate = self.context['settings'].get('close_tax', 0.001)
-            # RAB 实验：versioned 模式下 A股卖出印花税按历史真实税率
-            # （2023-08-28 起由 0.1% 减半至 0.05%，此前 0.1%）
-            if self._rab_rule_mode() == 'versioned' and \
-                    (self.context.get('settings', {}) or {}).get('market', '') == 'cn_stock':
+            # RAB 实验：versioned 模式下卖出印花税按历史真实税率
+            # - A股：2023-08-28 起 0.1% → 0.05%
+            # - 港股：2021-08-01 起 0.13% → 0.10%
+            if self._rab_rule_mode() == 'versioned':
+                _mkt = (self.context.get('settings', {}) or {}).get('market', '')
                 t = self.context.get('current_dt')
-                tax_rate = 0.001 if (t is None or t < datetime(2023, 8, 28)) else 0.0005
+                if _mkt == 'cn_stock':
+                    tax_rate = 0.001 if (t is None or t < datetime(2023, 8, 28)) else 0.0005
+                elif _mkt == 'hk_stock':
+                    tax_rate = 0.0013 if (t is None or t < datetime(2021, 8, 1)) else 0.0010
 
         return amount * tax_rate
 
@@ -1340,6 +1344,11 @@ class TradeCenter:
         """
         d = current_time.date() if current_time else None
         if d is None:
+            return True
+        # 市场守卫：涨跌停规则校验仅适用 cn_stock（其他市场如港股无涨跌停，
+        # 误用A股计算器会对港股套10%带宽造成错误拒单）
+        _mkt = (self.context.get('settings', {}) or {}).get('market', '') if isinstance(self.context, dict) else ''
+        if _mkt != 'cn_stock':
             return True
         # 对称查询：两模式均执行（保证 DataCenter 状态同构）
         prev_close = self._rab_prev_close(order.symbol, d)
