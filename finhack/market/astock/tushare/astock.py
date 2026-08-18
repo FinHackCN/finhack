@@ -445,14 +445,19 @@ def alignStockFactors(df, table, date, filed, conv=0, max_workers=10,db=None):
         return df  # 如果无法加载CSV数据，返回原始DataFrame
     
     # 定义处理单个股票的函数
+    # 【性能修复】原实现每股执行 csv_data[csv_data['code']==code]，对 17M 行 CSV
+    # 逐股全表扫描（O(行数×股票数)，2014-2017 回填时单年需数小时）。
+    # 预先按 code 分组一次，单股取数 O(1)。
+    csv_groups = {code: g for code, g in csv_data.groupby('code', sort=False)}
+    df_groups = {code: g for code, g in df.groupby('code', sort=False)}
     def process_single_stock(code):
         try:
             # 筛选当前股票的数据
-            df_single = df[df['code'] == code].copy()
+            df_single = df_groups[code].copy()
             df_single.drop_duplicates('trade_date', inplace=True)
-            
+
             # 从CSV数据中筛选
-            df_factor = csv_data[csv_data['code'] == code].copy()
+            df_factor = (csv_groups[code] if code in csv_groups else csv_data.iloc[0:0]).copy()
             
             # 如果用户指定了特定字段
             if filed != '*':
@@ -579,8 +584,11 @@ def alignStockFactors(df, table, date, filed, conv=0, max_workers=10,db=None):
             index_names = original_index.names
             if 'time' in df.columns:
                 final_df = final_df.sort_values(['code', 'time'])
-                # 设置多级索引
-                final_df = final_df.set_index(['code', 'time'])
+                # 设置多级索引——层级顺序必须与 original_index.names 声明的一致。
+                # 原实现 set_index(['code','time']) 后仅改名 ['time','code']，
+                # 层级实际为 (code,time) 而名字声称 (time,code)：调用方按索引对齐
+                # 赋值（df[col]=out[col]）时全部落 NaN（2014-2015 估值因子全空根因）。
+                final_df = final_df.set_index(['time', 'code'])
             else:
                 # 如果没有time列，尝试用trade_date代替
                 final_df = final_df.sort_values(['code', 'trade_date'])
