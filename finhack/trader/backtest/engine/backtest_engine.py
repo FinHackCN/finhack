@@ -1292,7 +1292,7 @@ class TradeCenter:
         if not mode:
             import os as _os
             mode = _os.environ.get('FINHACK_RULE_MODE', '')
-        return mode if mode in ('versioned', 'anachronistic') else 'anachronistic'
+        return mode if mode in ('versioned', 'anachronistic', 'static10') else 'anachronistic'
 
     def _rab_prev_close(self, symbol: str, query_date) -> Optional[float]:
         """query_date 的前收盘价（上一交易日收盘），带引擎级缓存"""
@@ -1353,7 +1353,8 @@ class TradeCenter:
         # 对称查询：两模式均执行（保证 DataCenter 状态同构）
         prev_close = self._rab_prev_close(order.symbol, d)
 
-        if self._rab_rule_mode() != 'versioned':
+        _mode = self._rab_rule_mode()
+        if _mode == 'anachronistic':
             return True   # anachronistic：只查询不判断（维持基线行为）
 
         if not prev_close or prev_close <= 0:
@@ -1364,6 +1365,14 @@ class TradeCenter:
                 StockPriceCalculator,
             )
             limits = StockPriceCalculator.calculate_limit_prices(order.symbol, prev_close, d)
+            if _mode == 'static10':
+                # 基线谱系第三形态：全程按 10% 带宽（保守写死参数的主流引擎）。
+                # 重算带宽为 floor/ceil(prev_close×(1±0.10))，模拟 backtrader 式静态配置。
+                import math as _math
+                limits = dict(limits)
+                limits['upper_limit'] = _math.floor(prev_close * 1.10 * 100) / 100
+                limits['lower_limit'] = _math.ceil(prev_close * 0.90 * 100) / 100
+                limits['limit_ratio'] = 0.10
         except Exception as e:
             Log.logger.debug(f"[RULE_VER] 涨跌停价计算失败: {order.symbol} {d} {e}")
             return True
