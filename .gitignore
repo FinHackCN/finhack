@@ -1,9 +1,135 @@
-examples/demo-project/data/*
-*.log
-*.pyc
+# =====================================================================
+# finhack 仓库 .gitignore
+# 技术栈：Python (setuptools 打包 / console_scripts 入口 / TA-Lib C 依赖)
+#         + Docker (python:3.9) + pytest + gRPC(protoc 生成物已作为模板源码保留)
+# 维护说明：
+#   - 已被 git 跟踪的文件不受 ignore 规则影响，无需担心模板占位文件
+#     (如 widgets/templates/empty_project/data/**/__init__.py) 被误伤
+#   - 敏感信息规范见文末"本地密钥配置"一节
+# =====================================================================
+
+# ---------- Python 字节码与缓存 ----------
 __pycache__/
-finhack.egg-info/
-dist/
+*.py[cod]
+*$py.class
+*.so
+
+# ---------- 打包 / 构建产物 ----------
 build/
-*.out
+dist/
+*.egg
+*.egg-info/
+.eggs/
+wheels/
+sdist/
+develop-eggs/
+pip-wheel-metadata/
+pip-log.txt
+pip-delete-this-directory.txt
+# script/package.sh: cp requirements.txt finhack/ → 中间副本
+finhack/requirements.txt
+# script/requirements.sh: pipreqs 中间产物
+new_requirements.txt
+
+# ---------- 虚拟环境 ----------
+venv/
+.venv/
+env/
+ENV/
+.conda/
+conda-meta/
+
+# ---------- 测试 / 类型检查 / Lint 缓存 ----------
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.noseids/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.hypothesis/
+
+# ---------- IDE / 编辑器 ----------
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.spyderproject
+.spyproject
+.sublime-project
+.sublime-workspace
+
+# ---------- 操作系统生成文件 ----------
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# ---------- 日志与临时文件 ----------
+# 注：不使用目录级 logs/ 规则——模板中 data/logs/ 下有已跟踪的 __init__.py 占位文件
+*.log
+*.log.*
+nohup.out
+*.tmp
+*.temp
+*.out
+*.bak
+
+# ---------- Jupyter ----------
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# ---------- finhack 框架运行时数据 / 模型产物 ----------
+# 回测上下文与结果（backtest_trader._save_backtest_context / _save_backtest_result）
+*.pkl
+*.pickle
+# 行情与因子数据格式（data/market、data/factors、data/cache 等）
+*.parquet
+*.feather
+*.arrow
+*.h5
+*.hdf5
+# 例外：模板中以 parquet 命名的因子存储目录（内含 __init__.py 占位，属有意提交）
+!finhack/widgets/templates/empty_project/data/factors/single_factors_parquet/all_factors.parquet/
+# 本地数据库文件（DuckDB/SQLite/MySQL dump）
+*.duckdb
+*.duckdb.wal
+*.sqlite
+*.sqlite3
+*.db
+data/market/
+data/db/
+# 训练产物
+data/models/
+data/preds/
+# 示例工程运行时数据（保留原有规则）
+examples/demo-project/data/*
+# mysqldump 即席导出（script/package.sh 的结构导出为有意提交，不在此列）
+database/*.dump
+
+# ---------- gRPC / 编译生成（例外：模板中的 *_pb2*.py 为有意打包，勿忽略） ----------
+# 如未来在其他目录引入 protoc 生成流程，可按需添加：
+# finhack/**/*_pb2.py
+# finhack/**/*_pb2_grpc.py
+
+# ---------- 本地密钥配置（防止真实 token/口令误提交） ----------
+# 注意：data/config/{db,ts,ai,alert}.conf 为已跟踪的空值模板，发行前由
+# script/package.sh 清空，不要往其中填真实密钥；本地真实密钥请放以下文件：
+.env
+.env.*
+*.local.conf
+*.local.py
+secrets/
+credentials*.json
+*.pem
+*.key
